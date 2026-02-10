@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -131,8 +132,8 @@ class YTMPlayerApp(App):
         self._key_buffer: list[str] = []
         self._count_buffer: str = ""
 
-        # Current active page name.
-        self._current_page: str = "library"
+        # Current active page name (empty until first navigate_to).
+        self._current_page: str = ""
 
         # Navigation stack for back navigation.
         self._nav_stack: list[tuple[str, dict]] = []
@@ -209,8 +210,8 @@ class YTMPlayerApp(App):
             self.set_timer(2.0, self.exit)
             return
 
-        # Set initial volume.
-        await self.player.set_volume(self.settings.playback.default_volume)
+        # Restore session state (volume, shuffle, repeat) from last session.
+        await self._restore_session_state()
 
         # Start MPRIS if enabled.
         if self.settings.mpris.enabled:
@@ -235,6 +236,7 @@ class YTMPlayerApp(App):
 
     async def on_unmount(self) -> None:
         """Clean up services and remove PID file."""
+        self._save_session_state()
         remove_pid()
 
         # Stop the position poll timer.
@@ -259,6 +261,63 @@ class YTMPlayerApp(App):
 
         if self.cache:
             await self.cache.close()
+
+    # ── Session state persistence ────────────────────────────────────
+
+    async def _restore_session_state(self) -> None:
+        """Restore volume, shuffle, and repeat from the last session."""
+        from ytm_player.config.paths import SESSION_STATE_FILE
+
+        state: dict = {}
+        try:
+            if SESSION_STATE_FILE.exists():
+                state = json.loads(SESSION_STATE_FILE.read_text())
+        except Exception:
+            logger.debug("Could not read session state", exc_info=True)
+
+        volume = state.get("volume", self.settings.playback.default_volume)
+        await self.player.set_volume(volume)
+
+        repeat = state.get("repeat", "off")
+        try:
+            mode = RepeatMode(repeat)
+        except ValueError:
+            mode = RepeatMode.OFF
+        self.queue.set_repeat(mode)
+
+        if state.get("shuffle", False):
+            self.queue.toggle_shuffle()
+
+        # Update the playback bar to reflect restored state.
+        try:
+            bar = self.query_one("#playback-bar", PlaybackBar)
+            bar.update_volume(volume)
+            bar.update_repeat(mode)
+            bar.update_shuffle(self.queue.shuffle_enabled)
+        except Exception:
+            pass
+
+    def _save_session_state(self) -> None:
+        """Persist volume, shuffle, and repeat to disk."""
+        from ytm_player.config.paths import SESSION_STATE_FILE
+
+        volume = 80
+        if self.player:
+            try:
+                volume = self.player.volume
+            except Exception:
+                pass
+
+        state = {
+            "volume": volume,
+            "repeat": self.queue.repeat_mode.value,
+            "shuffle": self.queue.shuffle_enabled,
+        }
+        try:
+            SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            SESSION_STATE_FILE.write_text(json.dumps(state))
+        except Exception:
+            logger.debug("Could not save session state", exc_info=True)
 
     # ── Key handling ─────────────────────────────────────────────────
 

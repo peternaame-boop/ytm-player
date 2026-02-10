@@ -22,6 +22,7 @@ PID_FILE = CONFIG_DIR / "ytm.pid"
 KEYMAP_FILE = CONFIG_DIR / "keymap.toml"
 THEME_FILE = CONFIG_DIR / "theme.toml"
 RECENT_PLAYLISTS_FILE = CONFIG_DIR / "recent_playlists.json"
+SESSION_STATE_FILE = CONFIG_DIR / "session.json"
 
 CACHE_DIR = Path(_xdg_cache) / "ytm-player" / "audio" if _xdg_cache else Path.home() / ".cache" / "ytm-player" / "audio"
 CACHE_DB = Path(_xdg_cache) / "ytm-player" / "cache.db" if _xdg_cache else Path.home() / ".cache" / "ytm-player" / "cache.db"
