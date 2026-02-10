@@ -84,6 +84,11 @@ class YTMPlayerApp(App):
         color: #ffffff;
     }
 
+    ToastRack {
+        dock: top;
+        align-horizontal: right;
+    }
+
     #main-content {
         width: 1fr;
         height: 1fr;
