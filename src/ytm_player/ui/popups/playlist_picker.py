@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from textual.app import ComposeResult
@@ -14,9 +13,9 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListView, ListItem, Static
 from textual.worker import Worker, WorkerState
 
-logger = logging.getLogger(__name__)
+from ytm_player.config.paths import RECENT_PLAYLISTS_FILE
 
-RECENT_PLAYLISTS_FILE = Path.home() / ".config" / "ytm-player" / "recent_playlists.json"
+logger = logging.getLogger(__name__)
 MAX_RECENT = 20
 
 

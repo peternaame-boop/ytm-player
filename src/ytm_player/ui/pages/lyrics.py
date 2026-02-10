@@ -113,6 +113,7 @@ class LyricsPage(Widget):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._synced_lines: list[tuple[float, str]] = []
+        self._synced_timestamps: list[float] = []
         self._unsynced_lines: list[str] = []
         self._is_synced: bool = False
         self._lyric_widgets: list[_LyricLine] = []
@@ -170,8 +171,7 @@ class LyricsPage(Widget):
             return
 
         # Determine which line should be current using binary search.
-        timestamps = [ts for ts, _text in self._synced_lines]
-        idx = bisect.bisect_right(timestamps, position)
+        idx = bisect.bisect_right(self._synced_timestamps, position)
         new_index = idx - 1
 
         if new_index != self.current_line_index:
@@ -243,11 +243,13 @@ class LyricsPage(Widget):
         if synced:
             self._is_synced = True
             self._synced_lines = synced
+            self._synced_timestamps = [ts for ts, _text in synced]
             self._unsynced_lines = []
             self._build_synced_view()
         else:
             self._is_synced = False
             self._synced_lines = []
+            self._synced_timestamps = []
             self._unsynced_lines = lyrics_text.splitlines()
             self._build_unsynced_view()
 
@@ -304,14 +306,33 @@ class LyricsPage(Widget):
         if not self._is_synced or not self._lyric_widgets:
             return
 
-        for i, widget in enumerate(self._lyric_widgets):
-            widget.remove_class("lyrics-played", "lyrics-current", "lyrics-upcoming")
+        old_index = getattr(self, "_prev_line_index", -1)
+        self._prev_line_index = new_index
+
+        if old_index == new_index:
+            return
+
+        # Only update the widgets that actually changed.
+        changed = set()
+        if 0 <= old_index < len(self._lyric_widgets):
+            changed.add(old_index)
+        if 0 <= new_index < len(self._lyric_widgets):
+            changed.add(new_index)
+        # The line between old and new also needs updating (played→current transition).
+        if old_index >= 0 and new_index >= 0:
+            for i in range(min(old_index, new_index), max(old_index, new_index) + 1):
+                if 0 <= i < len(self._lyric_widgets):
+                    changed.add(i)
+
+        for i in changed:
+            w = self._lyric_widgets[i]
+            w.remove_class("lyrics-played", "lyrics-current", "lyrics-upcoming")
             if i < new_index:
-                widget.add_class("lyrics-played")
+                w.add_class("lyrics-played")
             elif i == new_index:
-                widget.add_class("lyrics-current")
+                w.add_class("lyrics-current")
             else:
-                widget.add_class("lyrics-upcoming")
+                w.add_class("lyrics-upcoming")
 
         # Auto-scroll to the current line if enabled.
         now = time.monotonic()

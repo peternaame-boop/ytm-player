@@ -9,12 +9,11 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import DataTable, Label, Static
+from textual.widgets import DataTable, Label
 from textual.worker import Worker, WorkerState
 
 from ytm_player.config.keymap import Action
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import format_count, format_duration
 
 logger = logging.getLogger(__name__)
 

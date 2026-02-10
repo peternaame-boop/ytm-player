@@ -520,7 +520,7 @@ class LibraryPage(Widget):
             elif action_id == "add_to_queue":
                 self.app.notify("Added to queue", timeout=2)
             elif action_id == "delete":
-                asyncio.ensure_future(self._delete_playlist(item))
+                self.app.run_worker(self._delete_playlist(item))
             elif action_id == "copy_link":
                 self._copy_item_link(item, panel_id)
             elif action_id == "play_top_songs":
@@ -542,7 +542,7 @@ class LibraryPage(Widget):
                     artist = artists[0]
                     artist_id = artist.get("id") or artist.get("browseId", "")
                     if artist_id:
-                        asyncio.ensure_future(self.app.navigate_to(
+                        self.app.run_worker(self.app.navigate_to(
                             "context", context_type="artist", context_id=artist_id
                         ))
 
@@ -563,7 +563,7 @@ class LibraryPage(Widget):
 
         def _on_name(name: str | None) -> None:
             if name and name.strip():
-                asyncio.ensure_future(self._create_playlist(name.strip()))
+                self.app.run_worker(self._create_playlist(name.strip()))
 
         self.app.push_screen(
             InputPopup("New Playlist", placeholder="Playlist name..."), _on_name
@@ -746,7 +746,7 @@ class LibraryPage(Widget):
 
         def _on_confirm(confirmed: bool) -> None:
             if confirmed:
-                asyncio.ensure_future(self._execute_delete(item, panel_id))
+                self.app.run_worker(self._execute_delete(item, panel_id))
 
         self.app.push_screen(ConfirmPopup(msg), _on_confirm)
 

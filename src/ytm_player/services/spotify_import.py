@@ -10,7 +10,7 @@ from enum import Enum
 
 import click
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskID
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from thefuzz import fuzz
 from ytmusicapi import YTMusic
 

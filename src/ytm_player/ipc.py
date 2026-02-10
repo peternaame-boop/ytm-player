@@ -8,9 +8,8 @@ TUI process. The TUI app should call ``write_pid()`` on start and
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
-PID_FILE = Path("~/.config/ytm-player/ytm.pid").expanduser()
+from ytm_player.config.paths import PID_FILE
 
 
 def is_tui_running() -> bool:

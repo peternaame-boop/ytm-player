@@ -114,8 +114,6 @@ class _VolumeDisplay(Widget):
         if hasattr(app, "player") and app.player:
             await app.player.change_volume(-5)
 
-    def watch_volume(self) -> None:
-        self.refresh()
 
 
 class _RepeatButton(Widget):
@@ -154,8 +152,6 @@ class _RepeatButton(Widget):
             except Exception:
                 pass
 
-    def watch_repeat_mode(self) -> None:
-        self.refresh()
 
 
 class _ShuffleButton(Widget):
@@ -194,8 +190,6 @@ class _ShuffleButton(Widget):
             except Exception:
                 pass
 
-    def watch_shuffle_on(self) -> None:
-        self.refresh()
 
 
 # ── Main playback bar ─────────────────────────────────────────────

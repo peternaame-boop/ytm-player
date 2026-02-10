@@ -7,7 +7,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Self
 
-THEME_FILE = Path.home() / ".config" / "ytm-player" / "theme.toml"
+from ytm_player.config.paths import THEME_FILE
 
 
 @dataclass

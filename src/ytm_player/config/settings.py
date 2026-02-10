@@ -123,7 +123,8 @@ class Settings:
     def cache_dir(self) -> Path:
         if self.cache.location:
             return Path(self.cache.location)
-        return Path.home() / ".cache" / "ytm-player" / "audio"
+        from ytm_player.config.paths import CACHE_DIR
+        return CACHE_DIR
 
 
 def _format_toml_value(value: object) -> str:

@@ -56,6 +56,7 @@ ACTION_DESCRIPTIONS: dict[Action, str] = {
     Action.QUEUE: "Show playback queue",
     Action.HELP: "Show this help page",
     # Actions
+    Action.DELETE_ITEM: "Delete / remove item",
     Action.TRACK_ACTIONS: "Show track actions menu",
     Action.CONTEXT_ACTIONS: "Show context actions menu",
     Action.SELECTED_ACTIONS: "Actions for selected items",
@@ -114,6 +115,7 @@ ACTION_CATEGORIES: dict[str, list[Action]] = {
         Action.HELP,
     ],
     "Actions": [
+        Action.DELETE_ITEM,
         Action.TRACK_ACTIONS,
         Action.CONTEXT_ACTIONS,
         Action.SELECTED_ACTIONS,

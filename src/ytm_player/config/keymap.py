@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Self
 
-KEYMAP_FILE = Path.home() / ".config" / "ytm-player" / "keymap.toml"
+from ytm_player.config.paths import KEYMAP_FILE
 
 
 class Action(str, Enum):
