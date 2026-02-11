@@ -111,9 +111,8 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
             if isinstance(album_info, dict)
             else t.get("album_id")
         )
-        duration = t.get("duration_seconds")
-        if duration is None:
-            duration = t.get("duration")
+        raw_dur = t.get("duration_seconds") if t.get("duration_seconds") is not None else t.get("duration")
+        duration = extract_duration(t) if raw_dur is not None else None
         thumbnail = None
         thumbs = t.get("thumbnails")
         if isinstance(thumbs, list) and thumbs:

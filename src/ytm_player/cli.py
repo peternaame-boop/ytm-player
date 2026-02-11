@@ -19,13 +19,13 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import click
 
 from ytm_player import __version__
-from ytm_player.config.paths import CONFIG_DIR, CONFIG_FILE, AUTH_FILE, HISTORY_DB, CACHE_DIR, CACHE_DB
-from ytm_player.ipc import is_tui_running
+from ytm_player.config.paths import CONFIG_DIR, CONFIG_FILE, AUTH_FILE, HISTORY_DB, CACHE_DIR, CACHE_DB, ensure_dirs
+from ytm_player.ipc import ipc_request, is_tui_running
 from ytm_player.services.auth import AuthManager
 
 
@@ -40,7 +40,7 @@ def _json_output(data: Any, *, compact: bool = False) -> None:
     click.echo(json.dumps(data, indent=indent, default=str))
 
 
-def _error(msg: str) -> None:
+def _error(msg: str) -> NoReturn:
     """Print an error message to stderr and exit with code 1."""
     click.echo(f"Error: {msg}", err=True)
     sys.exit(1)
@@ -50,6 +50,14 @@ def _require_tui() -> None:
     """Exit with an error if the TUI is not currently running."""
     if not is_tui_running():
         _error("ytm-player is not running. Launch with `ytm` first.")
+
+
+def _ipc(command: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Send an IPC command; exit with a friendly message on failure."""
+    try:
+        return ipc_request(command, args)
+    except (ConnectionRefusedError, FileNotFoundError, OSError):
+        _error("TUI is not responding. Is ytm-player running?")
 
 
 def _require_auth() -> Path:
@@ -82,6 +90,7 @@ def main(ctx: click.Context, compact_json: bool) -> None:
         level=logging.WARNING,
         format="%(levelname)s: %(message)s",
     )
+    ensure_dirs()
     ctx.ensure_object(dict)
     ctx.obj["compact"] = compact_json
 
@@ -133,32 +142,44 @@ def setup() -> None:
 def play() -> None:
     """Resume playback."""
     _require_tui()
-    # TODO: send play command via IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("play")
+    if resp.get("ok"):
+        click.echo("Resumed.")
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 @main.command()
 def pause() -> None:
     """Pause playback."""
     _require_tui()
-    # TODO: send pause command via IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("pause")
+    if resp.get("ok"):
+        click.echo("Paused.")
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 @main.command("next")
 def next_track() -> None:
     """Skip to the next track."""
     _require_tui()
-    # TODO: send next command via IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("next")
+    if resp.get("ok"):
+        click.echo("Skipped to next.")
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 @main.command("prev")
 def prev_track() -> None:
     """Go back to the previous track."""
     _require_tui()
-    # TODO: send prev command via IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("prev")
+    if resp.get("ok"):
+        click.echo("Went to previous.")
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 @main.command()
@@ -169,8 +190,11 @@ def seek(offset: str) -> None:
     OFFSET can be relative ("+10", "-10" for seconds) or absolute ("1:30").
     """
     _require_tui()
-    # TODO: send seek command via IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("seek", {"offset": offset})
+    if resp.get("ok"):
+        click.echo(f"Seeked to {offset}.")
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +207,12 @@ def seek(offset: str) -> None:
 def now(ctx: click.Context) -> None:
     """Show current track info (JSON)."""
     _require_tui()
-    # TODO: fetch from IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("now")
+    if resp.get("ok"):
+        compact = ctx.obj.get("compact", False)
+        _json_output(resp.get("data"), compact=compact)
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 @main.command()
@@ -192,8 +220,12 @@ def now(ctx: click.Context) -> None:
 def status(ctx: click.Context) -> None:
     """Show player status (JSON)."""
     _require_tui()
-    # TODO: fetch status from IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("status")
+    if resp.get("ok"):
+        compact = ctx.obj.get("compact", False)
+        _json_output(resp.get("data"), compact=compact)
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +271,12 @@ def queue(ctx: click.Context) -> None:
     """Show or manage the play queue."""
     if ctx.invoked_subcommand is None:
         _require_tui()
-        # TODO: fetch queue from IPC socket
-        click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+        resp = _ipc("queue")
+        if resp.get("ok"):
+            compact = ctx.obj.get("compact", False)
+            _json_output(resp.get("data"), compact=compact)
+        else:
+            _error(resp.get("error", "unknown error"))
 
 
 @queue.command("add")
@@ -248,16 +284,22 @@ def queue(ctx: click.Context) -> None:
 def queue_add(video_id: str) -> None:
     """Add a track to the queue by VIDEO_ID."""
     _require_tui()
-    # TODO: send queue add command via IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("queue_add", {"video_id": video_id})
+    if resp.get("ok"):
+        click.echo(f"Added {video_id} to queue.")
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 @queue.command("clear")
 def queue_clear() -> None:
     """Clear the play queue."""
     _require_tui()
-    # TODO: send queue clear command via IPC socket
-    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
+    resp = _ipc("queue_clear")
+    if resp.get("ok"):
+        click.echo("Queue cleared.")
+    else:
+        _error(resp.get("error", "unknown error"))
 
 
 # ---------------------------------------------------------------------------
