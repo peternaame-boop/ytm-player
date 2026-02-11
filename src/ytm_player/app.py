@@ -109,7 +109,7 @@ class YTMPlayerApp(App):
     _PlaceholderPage #placeholder-text {
         width: 1fr;
         height: auto;
-        color: $muted-text;
+        color: $text-muted;
         text-align: center;
         padding: 2 4;
     }
@@ -157,6 +157,33 @@ class YTMPlayerApp(App):
 
         # IPC server for CLI command channel.
         self._ipc_server: IPCServer | None = None
+
+    def get_css_variables(self) -> dict[str, str]:
+        """Inject theme colors as Textual CSS variables ($var-name)."""
+        variables = super().get_css_variables()
+        tc = getattr(self, "theme_colors", None) or get_theme()
+        variables.update({
+            "background": tc.background,
+            "foreground": tc.foreground,
+            "primary": tc.primary,
+            "secondary": tc.secondary,
+            "accent": tc.accent,
+            "success": tc.success,
+            "warning": tc.warning,
+            "error": tc.error,
+            "playback-bar-bg": tc.playback_bar_bg,
+            "active-tab": tc.active_tab,
+            "inactive-tab": tc.inactive_tab,
+            "selected-item": tc.selected_item,
+            "progress-filled": tc.progress_filled,
+            "progress-empty": tc.progress_empty,
+            "lyrics-played": tc.lyrics_played,
+            "lyrics-current": tc.lyrics_current,
+            "lyrics-upcoming": tc.lyrics_upcoming,
+            "border": tc.border,
+            "text-muted": tc.muted_text,
+        })
+        return variables
 
     @property
     def current_page_name(self) -> str:
