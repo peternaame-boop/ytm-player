@@ -13,6 +13,7 @@ import os
 os.environ["LC_NUMERIC"] = "C"
 
 import json
+import logging
 import shutil
 import sqlite3
 import subprocess
@@ -77,6 +78,10 @@ def main(ctx: click.Context, compact_json: bool) -> None:
     Launch without arguments to start the interactive TUI.
     Use subcommands for headless / scripting control.
     """
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(levelname)s: %(message)s",
+    )
     ctx.ensure_object(dict)
     ctx.obj["compact"] = compact_json
 
@@ -129,28 +134,31 @@ def play() -> None:
     """Resume playback."""
     _require_tui()
     # TODO: send play command via IPC socket
-    click.echo("Sent: play")
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 @main.command()
 def pause() -> None:
     """Pause playback."""
     _require_tui()
-    click.echo("Sent: pause")
+    # TODO: send pause command via IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 @main.command("next")
 def next_track() -> None:
     """Skip to the next track."""
     _require_tui()
-    click.echo("Sent: next")
+    # TODO: send next command via IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 @main.command("prev")
 def prev_track() -> None:
     """Go back to the previous track."""
     _require_tui()
-    click.echo("Sent: prev")
+    # TODO: send prev command via IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 @main.command()
@@ -161,7 +169,8 @@ def seek(offset: str) -> None:
     OFFSET can be relative ("+10", "-10" for seconds) or absolute ("1:30").
     """
     _require_tui()
-    click.echo(f"Sent: seek {offset}")
+    # TODO: send seek command via IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 # ---------------------------------------------------------------------------
@@ -174,9 +183,8 @@ def seek(offset: str) -> None:
 def now(ctx: click.Context) -> None:
     """Show current track info (JSON)."""
     _require_tui()
-    # TODO: fetch from IPC
-    data: dict[str, Any] = {"message": "Not yet implemented -- requires IPC socket."}
-    _json_output(data, compact=ctx.obj.get("compact", False))
+    # TODO: fetch from IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 @main.command()
@@ -184,8 +192,8 @@ def now(ctx: click.Context) -> None:
 def status(ctx: click.Context) -> None:
     """Show player status (JSON)."""
     _require_tui()
-    data: dict[str, Any] = {"message": "Not yet implemented -- requires IPC socket."}
-    _json_output(data, compact=ctx.obj.get("compact", False))
+    # TODO: fetch status from IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 # ---------------------------------------------------------------------------
@@ -231,8 +239,8 @@ def queue(ctx: click.Context) -> None:
     """Show or manage the play queue."""
     if ctx.invoked_subcommand is None:
         _require_tui()
-        data: dict[str, Any] = {"message": "Not yet implemented -- requires IPC socket."}
-        _json_output(data, compact=ctx.obj.get("compact", False))
+        # TODO: fetch queue from IPC socket
+        click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 @queue.command("add")
@@ -240,14 +248,16 @@ def queue(ctx: click.Context) -> None:
 def queue_add(video_id: str) -> None:
     """Add a track to the queue by VIDEO_ID."""
     _require_tui()
-    click.echo(f"Sent: queue add {video_id}")
+    # TODO: send queue add command via IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 @queue.command("clear")
 def queue_clear() -> None:
     """Clear the play queue."""
     _require_tui()
-    click.echo("Sent: queue clear")
+    # TODO: send queue clear command via IPC socket
+    click.echo("Not yet implemented. Use the TUI instead: ytm tui")
 
 
 # ---------------------------------------------------------------------------
@@ -269,15 +279,15 @@ def history(ctx: click.Context, limit: int, compact_json: bool) -> None:
         _json_output([], compact=compact_json)
         return
 
+    data: list[dict] = []
     try:
-        conn = sqlite3.connect(str(HISTORY_DB))
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM play_history ORDER BY played_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        conn.close()
-        data = [dict(row) for row in rows]
+        with sqlite3.connect(str(HISTORY_DB)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM play_history ORDER BY played_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            data = [dict(row) for row in rows]
     except sqlite3.Error as exc:
         _error(f"Failed to read history database: {exc}")
 
@@ -294,15 +304,15 @@ def history_search(limit: int, compact_json: bool) -> None:
         _json_output([], compact=compact_json)
         return
 
+    data: list[dict] = []
     try:
-        conn = sqlite3.connect(str(HISTORY_DB))
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT * FROM search_history ORDER BY last_searched DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        conn.close()
-        data = [dict(row) for row in rows]
+        with sqlite3.connect(str(HISTORY_DB)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM search_history ORDER BY last_searched DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            data = [dict(row) for row in rows]
     except sqlite3.Error as exc:
         _error(f"Failed to read search history database: {exc}")
 
@@ -323,31 +333,32 @@ def stats(compact_json: bool) -> None:
                       compact=compact_json)
         return
 
+    data: dict[str, Any] = {
+        "total_plays": 0, "total_seconds": 0, "unique_tracks": 0, "top_tracks": [],
+    }
     try:
-        conn = sqlite3.connect(str(HISTORY_DB))
-        total_plays = conn.execute("SELECT COUNT(*) FROM play_history").fetchone()[0]
-        total_seconds = (
-            conn.execute("SELECT COALESCE(SUM(listened_seconds), 0) FROM play_history").fetchone()[0]
-        )
-        unique_tracks = (
-            conn.execute("SELECT COUNT(DISTINCT video_id) FROM play_history").fetchone()[0]
-        )
-        # Top tracks
-        top_tracks = conn.execute(
-            "SELECT video_id, title, artist, COUNT(*) as play_count "
-            "FROM play_history GROUP BY video_id ORDER BY play_count DESC LIMIT 10"
-        ).fetchall()
-        conn.close()
+        with sqlite3.connect(str(HISTORY_DB)) as conn:
+            total_plays = conn.execute("SELECT COUNT(*) FROM play_history").fetchone()[0]
+            total_seconds = (
+                conn.execute("SELECT COALESCE(SUM(listened_seconds), 0) FROM play_history").fetchone()[0]
+            )
+            unique_tracks = (
+                conn.execute("SELECT COUNT(DISTINCT video_id) FROM play_history").fetchone()[0]
+            )
+            top_tracks = conn.execute(
+                "SELECT video_id, title, artist, COUNT(*) as play_count "
+                "FROM play_history GROUP BY video_id ORDER BY play_count DESC LIMIT 10"
+            ).fetchall()
 
-        data: dict[str, Any] = {
-            "total_plays": total_plays,
-            "total_seconds": total_seconds,
-            "unique_tracks": unique_tracks,
-            "top_tracks": [
-                {"video_id": r[0], "title": r[1], "artist": r[2], "play_count": r[3]}
-                for r in top_tracks
-            ],
-        }
+            data = {
+                "total_plays": total_plays,
+                "total_seconds": total_seconds,
+                "unique_tracks": unique_tracks,
+                "top_tracks": [
+                    {"video_id": r[0], "title": r[1], "artist": r[2], "play_count": r[3]}
+                    for r in top_tracks
+                ],
+            }
     except sqlite3.Error as exc:
         _error(f"Failed to read history database: {exc}")
 

@@ -45,7 +45,7 @@ class QueueManager:
         self._shuffle_order: list[int] = []
         self._shuffle_position: int = -1
 
-    # ── Properties ──────────────────────────────────────────────────
+    # -- Properties -------------------------------------------------------
 
     @property
     def current_index(self) -> int:
@@ -59,11 +59,11 @@ class QueueManager:
         return self.current()
 
     @property
-    def tracks(self) -> list[dict]:
+    def tracks(self) -> tuple[dict, ...]:
         """Tracks in the current playback order."""
         if self._shuffle:
-            return [self._tracks[i] for i in self._shuffle_order]
-        return list(self._tracks)
+            return tuple(self._tracks[i] for i in self._shuffle_order)
+        return tuple(self._tracks)
 
     @property
     def is_empty(self) -> bool:
@@ -81,7 +81,7 @@ class QueueManager:
     def shuffle_enabled(self) -> bool:
         return self._shuffle
 
-    # ── Helpers ─────────────────────────────────────────────────────
+    # -- Helpers ----------------------------------------------------------
 
     def _real_index(self) -> int:
         """Current index into _tracks (resolving shuffle indirection)."""
@@ -104,7 +104,7 @@ class QueueManager:
             self._shuffle_order = indices
             self._shuffle_position = -1
 
-    # ── Queue manipulation ──────────────────────────────────────────
+    # -- Queue manipulation -----------------------------------------------
 
     def add(self, track: dict, position: int | None = None) -> None:
         """Add a track to the queue. None = append to end."""
@@ -226,7 +226,7 @@ class QueueManager:
             elif to_idx <= self._current_index < from_idx:
                 self._current_index += 1
 
-    # ── Playback navigation ─────────────────────────────────────────
+    # -- Playback navigation ----------------------------------------------
 
     def current(self) -> dict | None:
         """Return the currently selected track, or None."""
@@ -302,7 +302,7 @@ class QueueManager:
 
         return self.current()
 
-    # ── Repeat / Shuffle ────────────────────────────────────────────
+    # -- Repeat / Shuffle -------------------------------------------------
 
     def set_repeat(self, mode: RepeatMode) -> None:
         self._repeat = mode
@@ -329,7 +329,7 @@ class QueueManager:
             self._shuffle_order.clear()
             self._shuffle_position = -1
 
-    # ── Random / Radio ──────────────────────────────────────────────
+    # -- Random / Radio ---------------------------------------------------
 
     def play_random(self) -> dict | None:
         """Pick and jump to a random track from the queue."""
@@ -357,7 +357,7 @@ class QueueManager:
             logger.debug("Adding %d radio tracks to queue", len(new_tracks))
             self.add_multiple(new_tracks)
 
-    # ── Utility ─────────────────────────────────────────────────────
+    # -- Utility ----------------------------------------------------------
 
     def jump_to(self, index: int) -> dict | None:
         """Jump to a specific index in the visible order and return the track."""

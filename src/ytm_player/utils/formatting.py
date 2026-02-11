@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+
+# Shared regex for validating YouTube video IDs.
+VALID_VIDEO_ID = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 def format_duration(seconds: int) -> str:
@@ -48,6 +52,11 @@ def format_size(bytes_val: int) -> str:
     return f"{size:.1f} PB"
 
 
+def get_video_id(track: dict) -> str:
+    """Extract video ID from a track dict, checking both key conventions."""
+    return track.get("videoId", "") or track.get("video_id", "")
+
+
 def extract_artist(track: dict) -> str:
     """Extract display-friendly artist string from a track dict."""
     artist = track.get("artist")
@@ -78,6 +87,52 @@ def extract_duration(track: dict) -> int:
         except ValueError:
             pass
     return 0
+
+
+def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
+    """Ensure tracks have the fields TrackTable expects.
+
+    ytmusicapi returns slightly different shapes for album tracks,
+    playlist tracks, and search results.  This normalizes them.
+    """
+    normalized: list[dict] = []
+    for t in raw_tracks:
+        video_id = t.get("videoId") or t.get("video_id", "")
+        title = t.get("title", "Unknown")
+        artist = extract_artist(t)
+        album_info = t.get("album")
+        album = (
+            album_info.get("name", "")
+            if isinstance(album_info, dict)
+            else (album_info or "")
+        )
+        album_id = (
+            album_info.get("id")
+            if isinstance(album_info, dict)
+            else t.get("album_id")
+        )
+        duration = t.get("duration_seconds")
+        if duration is None:
+            duration = t.get("duration")
+        thumbnail = None
+        thumbs = t.get("thumbnails")
+        if isinstance(thumbs, list) and thumbs:
+            thumbnail = thumbs[-1].get("url") if isinstance(thumbs[-1], dict) else None
+
+        normalized.append(
+            {
+                "video_id": video_id,
+                "title": title,
+                "artist": artist,
+                "artists": t.get("artists", []),
+                "album": album,
+                "album_id": album_id,
+                "duration": duration,
+                "thumbnail_url": thumbnail,
+                "is_video": t.get("isVideo", t.get("is_video", False)),
+            }
+        )
+    return normalized
 
 
 def format_ago(timestamp: datetime) -> str:
@@ -111,3 +166,23 @@ def format_ago(timestamp: datetime) -> str:
 
     years = days // 365
     return f"{years} year{'s' if years != 1 else ''} ago"
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Copy text to system clipboard. Returns True on success."""
+    import shutil
+    import subprocess
+
+    for cmd in ("xclip", "xsel", "wl-copy"):
+        if shutil.which(cmd):
+            try:
+                args = [cmd]
+                if cmd == "xclip":
+                    args += ["-selection", "clipboard"]
+                elif cmd == "xsel":
+                    args += ["--clipboard", "--input"]
+                subprocess.run(args, input=text.encode(), check=True)
+                return True
+            except Exception:
+                continue
+    return False

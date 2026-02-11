@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
+from textual.events import Click
 from textual.message import Message
 from textual.widgets import DataTable
 from textual.widgets.data_table import RowKey
@@ -38,12 +38,20 @@ class TrackTable(DataTable):
         width: 1fr;
     }
     TrackTable > .datatable--cursor {
-        background: #2a2a2a;
+        background: $selected-item;
     }
     """
 
     class TrackSelected(Message):
         """Emitted when a track row is activated (Enter key)."""
+
+        def __init__(self, track: dict, index: int) -> None:
+            super().__init__()
+            self.track = track
+            self.index = index
+
+    class TrackRightClicked(Message):
+        """Emitted when a track row is right-clicked."""
 
         def __init__(self, track: dict, index: int) -> None:
             super().__init__()
@@ -80,6 +88,7 @@ class TrackTable(DataTable):
         self._tracks: list[dict] = []
         self._row_keys: list[RowKey] = []
         self._playing_video_id: str | None = None
+        self._playing_index: int | None = None
 
     @property
     def tracks(self) -> list[dict]:
@@ -96,7 +105,7 @@ class TrackTable(DataTable):
             return self._tracks[self.cursor_row]
         return None
 
-    # ── Setup ────────────────────────────────────────────────────────
+    # -- Setup ------------------------------------------------------------
 
     def on_mount(self) -> None:
         self._setup_columns()
@@ -111,13 +120,14 @@ class TrackTable(DataTable):
             self.add_column("Album", width=None, key="album")
         self.add_column("Duration", width=8, key="duration")
 
-    # ── Data loading ─────────────────────────────────────────────────
+    # -- Data loading -----------------------------------------------------
 
     def load_tracks(self, tracks: list[dict]) -> None:
         """Replace the table contents with a new list of tracks."""
         self.clear()
         self._tracks = list(tracks)
         self._row_keys = []
+        self._playing_index = None
 
         for i, track in enumerate(self._tracks):
             row_key = self._add_track_row(i, track)
@@ -153,7 +163,7 @@ class TrackTable(DataTable):
         return self.add_row(*cells, key=f"{video_id}_{index}")
 
 
-    # ── Playing state ────────────────────────────────────────────────
+    # -- Playing state ----------------------------------------------------
 
     def set_playing(self, video_id: str | None) -> None:
         """Mark a track as currently playing (updates visual indicator)."""
@@ -161,20 +171,45 @@ class TrackTable(DataTable):
         self._highlight_playing()
 
     def _highlight_playing(self) -> None:
-        """Update the index column to show the playing indicator."""
+        """Update the index column to show the playing indicator.
+
+        Only touches the previously-playing and newly-playing rows
+        instead of iterating every row.
+        """
         if not self._show_index:
             return
-        for i, track in enumerate(self._tracks):
-            vid = track.get("video_id", f"row_{i}")
-            if i < len(self._row_keys):
-                is_playing = (self._playing_video_id is not None and vid == self._playing_video_id)
-                indicator = "\u25b6" if is_playing else str(i + 1)  # Triangle or number
-                try:
-                    self.update_cell(self._row_keys[i], "index", indicator)
-                except Exception:
-                    pass  # Row may have been removed
 
-    # ── Event handlers ───────────────────────────────────────────────
+        # Find the new playing index by matching video_id.
+        new_index: int | None = None
+        if self._playing_video_id is not None:
+            for i, track in enumerate(self._tracks):
+                if track.get("video_id") == self._playing_video_id:
+                    new_index = i
+                    break
+
+        old_index = self._playing_index
+
+        # Nothing changed -- skip the update.
+        if old_index == new_index:
+            return
+
+        # Restore the old row's number indicator.
+        if old_index is not None and old_index < len(self._row_keys):
+            try:
+                self.update_cell(self._row_keys[old_index], "index", str(old_index + 1))
+            except Exception:
+                logger.debug("Failed to restore row number for index %d", old_index, exc_info=True)
+
+        # Set the play indicator on the new row.
+        if new_index is not None and new_index < len(self._row_keys):
+            try:
+                self.update_cell(self._row_keys[new_index], "index", "\u25b6")
+            except Exception:
+                logger.debug("Failed to set playing indicator for index %d", new_index, exc_info=True)
+
+        self._playing_index = new_index
+
+    # -- Event handlers ---------------------------------------------------
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Forward track selection as a TrackSelected message."""
@@ -188,7 +223,19 @@ class TrackTable(DataTable):
         track = self._tracks[row_idx] if 0 <= row_idx < len(self._tracks) else None
         self.post_message(self.TrackHighlighted(track, row_idx))
 
-    # ── Vim-style navigation ─────────────────────────────────────────
+    def on_click(self, event: Click) -> None:
+        """Handle right-click to emit TrackRightClicked."""
+        if event.button == 3:
+            event.stop()
+            # The cursor row is updated by Textual before on_click fires,
+            # so we can use the current cursor position.
+            row_idx = self.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self._tracks):
+                self.post_message(
+                    self.TrackRightClicked(self._tracks[row_idx], row_idx)
+                )
+
+    # -- Vim-style navigation ---------------------------------------------
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
         """Process navigation actions dispatched from the app."""

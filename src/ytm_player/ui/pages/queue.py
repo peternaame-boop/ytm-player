@@ -52,7 +52,7 @@ class QueuePage(Widget):
         width: 1fr;
     }
     .queue-table > .datatable--cursor {
-        background: #2a2a2a;
+        background: $selected-item;
     }
     .queue-footer {
         height: 1;
@@ -112,14 +112,49 @@ class QueuePage(Widget):
             if self._track_change_callback:
                 player.off(PlayerEvent.TRACK_CHANGE, self._track_change_callback)
         except Exception:
-            pass
+            logger.debug("Failed to unregister player events in queue page", exc_info=True)
 
     def _on_track_change(self, _track_info: dict) -> None:
-        """Refresh the queue display when the track changes."""
+        """Update the queue display when the track changes.
+
+        Does a lightweight update (header + play indicator) instead of
+        rebuilding the entire DataTable.
+        """
         try:
-            self.call_from_thread(self._refresh_queue)
+            self.call_from_thread(self._update_current_track)
         except Exception:
             logger.debug("call_from_thread failed in queue page", exc_info=True)
+
+    def _update_current_track(self) -> None:
+        """Lightweight update: refresh header and play indicator without rebuilding the table."""
+        queue = self.app.queue  # type: ignore[attr-defined]
+        current_index = queue.current_index
+        current_track = queue.current_track
+
+        # Update the "Now Playing" header.
+        header = self.query_one("#queue-header", Vertical)
+        header.remove_children()
+        if current_track:
+            title = current_track.get("title", "Unknown")
+            artist = current_track.get("artist", "Unknown")
+            header.mount(
+                Label(f"Now Playing: {title}", classes="queue-now-playing-title")
+            )
+            header.mount(Label(artist, classes="queue-now-playing-artist"))
+            header.display = True
+        else:
+            header.display = False
+
+        # Update the play indicator column without clearing/rebuilding rows.
+        table = self.query_one("#queue-table", DataTable)
+        for i, row_key in enumerate(self._row_keys):
+            indicator = "\u25b6" if i == current_index else str(i + 1)
+            try:
+                table.update_cell(row_key, "index", indicator)
+            except Exception:
+                # Row may have been removed; fall back to full refresh.
+                self._refresh_queue()
+                return
 
     # ── Queue rendering ───────────────────────────────────────────────
 
@@ -197,7 +232,7 @@ class QueuePage(Widget):
             footer = self.query_one("#queue-footer", Static)
             footer.update(footer_text)
         except Exception:
-            pass
+            logger.debug("Failed to update queue footer", exc_info=True)
 
     # ── DataTable events ──────────────────────────────────────────────
 
@@ -219,9 +254,6 @@ class QueuePage(Widget):
         queue = self.app.queue  # type: ignore[attr-defined]
 
         match action:
-            case Action.GO_BACK:
-                await self.app.navigate_to("back")  # type: ignore[attr-defined]
-
             case Action.MOVE_DOWN:
                 for _ in range(count):
                     table.action_cursor_down()

@@ -1,5 +1,7 @@
 """Configuration management for ytm-player."""
 
+from __future__ import annotations
+
 from ytm_player.config.settings import Settings, get_settings
 from ytm_player.config.keymap import KeyMap, Action, MatchResult, get_keymap
 

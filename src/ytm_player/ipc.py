@@ -1,7 +1,6 @@
-"""IPC utilities for detecting whether the TUI is running.
+"""IPC utilities for single-instance enforcement via PID file (XDG_CONFIG_HOME/ytm-player/ytm.pid).
 
-Uses a PID file at ~/.config/ytm-player/ytm.pid to track the running
-TUI process. The TUI app should call ``write_pid()`` on start and
+The TUI app should call ``write_pid()`` on start and
 ``remove_pid()`` on exit.
 """
 

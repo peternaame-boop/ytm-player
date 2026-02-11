@@ -159,7 +159,7 @@ class LyricsPage(Widget):
             if self._track_change_callback:
                 player.off(PlayerEvent.TRACK_CHANGE, self._track_change_callback)
         except Exception:
-            pass
+            logger.debug("Failed to unregister player events in lyrics page", exc_info=True)
 
     def _on_track_change(self, track_info: dict) -> None:
         """Called when the player switches to a new track."""
@@ -202,7 +202,7 @@ class LyricsPage(Widget):
             subtitle_label.update(artist)
             subtitle_label.display = True
         except Exception:
-            pass
+            logger.debug("Failed to update lyrics header labels", exc_info=True)
 
         self.loading = True
         self._show_status("Loading lyrics...")
@@ -289,7 +289,7 @@ class LyricsPage(Widget):
             status.display = True
             self.query_one("#lyrics-scroll").display = False
         except Exception:
-            pass
+            logger.debug("Failed to update lyrics status display", exc_info=True)
 
     def _show_scroll(self) -> None:
         """Show the scroll area and hide the status label."""
@@ -297,7 +297,7 @@ class LyricsPage(Widget):
             self.query_one("#lyrics-status").display = False
             self.query_one("#lyrics-scroll").display = True
         except Exception:
-            pass
+            logger.debug("Failed to toggle lyrics scroll visibility", exc_info=True)
 
     # ── Reactive watchers ─────────────────────────────────────────────
 
@@ -346,7 +346,7 @@ class LyricsPage(Widget):
                 scroll = self.query_one("#lyrics-scroll", VerticalScroll)
                 scroll.scroll_visible(widget, animate=True)
             except Exception:
-                pass
+                logger.debug("Failed to auto-scroll lyrics to current line", exc_info=True)
 
     # ── Action handling ───────────────────────────────────────────────
 
@@ -381,7 +381,7 @@ class LyricsPage(Widget):
                 for _ in range(abs(lines)):
                     scroll.action_scroll_up()
         except Exception:
-            pass
+            logger.debug("Failed to manually scroll lyrics", exc_info=True)
 
     def _scroll_to_top(self) -> None:
         self._auto_scroll = False
@@ -390,7 +390,7 @@ class LyricsPage(Widget):
             scroll = self.query_one("#lyrics-scroll", VerticalScroll)
             scroll.scroll_home(animate=False)
         except Exception:
-            pass
+            logger.debug("Failed to scroll lyrics to top", exc_info=True)
 
     def _scroll_to_bottom(self) -> None:
         self._auto_scroll = False
@@ -399,4 +399,4 @@ class LyricsPage(Widget):
             scroll = self.query_one("#lyrics-scroll", VerticalScroll)
             scroll.scroll_end(animate=False)
         except Exception:
-            pass
+            logger.debug("Failed to scroll lyrics to bottom", exc_info=True)

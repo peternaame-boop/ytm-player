@@ -25,7 +25,7 @@ class ThemeColors:
     inactive_tab: str = "#999999"
     selected_item: str = "#2a2a2a"
     progress_filled: str = "#ff0000"
-    progress_empty: str = "#404040"
+    progress_empty: str = "#555555"
     lyrics_played: str = "#999999"
     lyrics_current: str = "#ffffff"
     lyrics_upcoming: str = "#aaaaaa"

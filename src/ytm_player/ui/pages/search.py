@@ -8,6 +8,7 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
 from textual.timer import Timer
@@ -17,7 +18,7 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 from ytm_player.config.keymap import Action
 from ytm_player.config.settings import get_settings
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import extract_artist, truncate
+from ytm_player.utils.formatting import copy_to_clipboard, extract_artist, get_video_id, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,14 @@ class SearchResultPanel(Widget):
 
     class ItemSelected(Message):
         """Emitted when an item in this panel is activated."""
+
+        def __init__(self, item_data: dict[str, Any], panel_id: str) -> None:
+            super().__init__()
+            self.item_data = item_data
+            self.panel_id = panel_id
+
+    class ItemRightClicked(Message):
+        """Emitted when an item in this panel is right-clicked."""
 
         def __init__(self, item_data: dict[str, Any], panel_id: str) -> None:
             super().__init__()
@@ -144,6 +153,31 @@ class SearchResultPanel(Widget):
         if idx is not None and 0 <= idx < len(self._items):
             panel_id = self.id or ""
             self.post_message(self.ItemSelected(self._items[idx], panel_id))
+
+    def _find_clicked_item_index(self, event: Click) -> int | None:
+        """Walk up from the click target to find the ListItem index, or None."""
+        node = event.widget
+        while node is not None and not isinstance(node, ListItem):
+            if node is self:
+                break
+            node = node.parent
+        if not isinstance(node, ListItem):
+            return None
+        list_view = self.query_one(ListView)
+        try:
+            return list(list_view.children).index(node)
+        except ValueError:
+            return None
+
+    def on_click(self, event: Click) -> None:
+        """Handle right-click to emit ItemRightClicked."""
+        if event.button == 3:
+            event.stop()
+            idx = self._find_clicked_item_index(event)
+            if idx is not None and 0 <= idx < len(self._items):
+                self.post_message(
+                    self.ItemRightClicked(self._items[idx], self.id or "")
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +327,22 @@ class SearchPage(Widget):
         color: $text-muted;
         padding: 0 0 1 0;
     }
+
+    #songs-panel:focus-within {
+        border: solid $accent;
+    }
+
+    #albums-panel:focus-within {
+        border: solid $accent;
+    }
+
+    #artists-panel:focus-within {
+        border: solid $accent;
+    }
+
+    #playlists-panel:focus-within {
+        border: solid $accent;
+    }
     """
 
     search_mode: reactive[str] = reactive("music")
@@ -426,7 +476,7 @@ class SearchPage(Widget):
             overlay = self.query_one("#suggestion-overlay", SuggestionList)
             overlay.hide()
         except Exception:
-            pass
+            logger.debug("Failed to hide search suggestions", exc_info=True)
 
     def _show_recent_searches(self) -> None:
         """Display recent search history when input is empty."""
@@ -495,9 +545,11 @@ class SearchPage(Widget):
         except Exception:
             logger.exception("Search failed for query=%r", query)
             self._update_loading("Search failed. Try again.")
+            return
         finally:
             self.is_loading = False
-            self._update_loading("")
+
+        self._update_loading("")
 
     async def _search_music(self, query: str) -> dict[str, list[dict[str, Any]]]:
         """Execute filtered searches for each category (music-only mode)."""
@@ -575,7 +627,7 @@ class SearchPage(Widget):
             label = self.query_one("#loading-msg", Static)
             label.update(text)
         except Exception:
-            pass
+            logger.debug("Failed to update search loading indicator", exc_info=True)
 
     # ------------------------------------------------------------------
     # Mode toggle
@@ -608,7 +660,7 @@ class SearchPage(Widget):
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected song."""
         track = event.track
-        video_id = track.get("videoId") or track.get("video_id")
+        video_id = get_video_id(track)
         if video_id:
             await self.app.play_track(track)
 
@@ -637,6 +689,83 @@ class SearchPage(Widget):
                     "context", context_type="playlist", context_id=browse_id
                 )
 
+    def on_search_result_panel_item_right_clicked(
+        self, event: SearchResultPanel.ItemRightClicked
+    ) -> None:
+        """Open context menu for right-clicked album/artist/playlist."""
+        from ytm_player.ui.popups.actions import ActionsPopup
+
+        item = event.item_data
+        panel_id = event.panel_id
+
+        # Map panel ID to item type for ActionsPopup.
+        type_map = {
+            "albums-panel": "album",
+            "artists-panel": "artist",
+            "playlists-panel": "playlist",
+        }
+        item_type = type_map.get(panel_id, "track")
+
+        def _handle_action(action_id: str | None) -> None:
+            if action_id is None:
+                return
+
+            if action_id in ("play_all", "shuffle_play"):
+                browse_id = (
+                    item.get("browseId")
+                    or item.get("album_id")
+                    or item.get("playlistId")
+                    or ""
+                )
+                ctx_type = item_type if item_type in ("album", "playlist") else None
+                if browse_id and ctx_type:
+                    self.app.run_worker(
+                        self.app.navigate_to(
+                            "context", context_type=ctx_type, context_id=browse_id
+                        )
+                    )
+
+            elif action_id == "go_to_artist":
+                artists = item.get("artists") or []
+                if isinstance(artists, list) and artists:
+                    artist_id = artists[0].get("id") or artists[0].get("browseId", "")
+                elif item_type == "artist":
+                    artist_id = item.get("browseId") or item.get("artist_id") or ""
+                else:
+                    artist_id = ""
+                if artist_id:
+                    self.app.run_worker(
+                        self.app.navigate_to(
+                            "context", context_type="artist", context_id=artist_id
+                        )
+                    )
+
+            elif action_id in ("play_top_songs", "start_radio", "view_albums", "view_similar"):
+                browse_id = item.get("browseId") or item.get("artist_id") or ""
+                if browse_id:
+                    self.app.run_worker(
+                        self.app.navigate_to(
+                            "context", context_type="artist", context_id=browse_id
+                        )
+                    )
+
+            elif action_id == "copy_link":
+                browse_id = (
+                    item.get("browseId")
+                    or item.get("album_id")
+                    or item.get("playlistId")
+                    or item.get("artist_id")
+                    or ""
+                )
+                if browse_id:
+                    link = f"https://music.youtube.com/browse/{browse_id}"
+                    if copy_to_clipboard(link):
+                        self.app.notify("Link copied", timeout=2)
+                    else:
+                        self.app.notify(link, timeout=5)
+
+        self.app.push_screen(ActionsPopup(item, item_type=item_type), _handle_action)
+
     # ------------------------------------------------------------------
     # Vim-style action handler
     # ------------------------------------------------------------------
@@ -654,7 +783,7 @@ class SearchPage(Widget):
                         try:
                             track_table = focused.query_one(TrackTable)
                         except Exception:
-                            pass
+                            logger.debug("Failed to find TrackTable for focused widget", exc_info=True)
                     if track_table is not None:
                         await track_table.handle_action(action, count)
                         return

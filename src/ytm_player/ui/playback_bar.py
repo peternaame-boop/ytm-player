@@ -12,6 +12,7 @@ from textual.widget import Widget
 from rich.text import Text
 
 from ytm_player.services.queue import RepeatMode
+from ytm_player.ui.theme import get_theme
 from ytm_player.ui.widgets.album_art import AlbumArt
 from ytm_player.ui.widgets.progress_bar import PlaybackProgress
 from ytm_player.utils.formatting import extract_artist, format_duration, truncate
@@ -53,15 +54,16 @@ class _TrackInfo(Widget):
     is_paused: reactive[bool] = reactive(False)
 
     def render(self) -> Text:
+        theme = get_theme()
         result = Text()
 
         # State icon
         if self.is_playing and not self.is_paused:
-            result.append(f" {_ICON_PLAYING} ", style="bold #ff0000")
+            result.append(f" {_ICON_PLAYING} ", style=f"bold {theme.primary}")
         elif self.is_paused:
-            result.append(f" {_ICON_PAUSED} ", style="bold #f39c12")
+            result.append(f" {_ICON_PAUSED} ", style=f"bold {theme.warning}")
         else:
-            result.append(f" {_ICON_STOPPED} ", style="#999999")
+            result.append(f" {_ICON_STOPPED} ", style=theme.muted_text)
 
         if self.title:
             max_w = max(10, self.size.width - 30)
@@ -69,15 +71,15 @@ class _TrackInfo(Widget):
             artist_w = min(len(self.artist), max_w // 3)
             album_w = max_w - title_w - artist_w - 8
 
-            result.append(truncate(self.title, title_w), style="bold white")
+            result.append(truncate(self.title, title_w), style=f"bold {theme.foreground}")
             if self.artist:
-                result.append(" \u2014 ", style="#999999")
-                result.append(truncate(self.artist, artist_w), style="#aaaaaa")
+                result.append(" \u2014 ", style=theme.muted_text)
+                result.append(truncate(self.artist, artist_w), style=theme.secondary)
             if self.album:
-                result.append(" \u2014 ", style="#999999")
-                result.append(truncate(self.album, max(0, album_w)), style="#999999")
+                result.append(" \u2014 ", style=theme.muted_text)
+                result.append(truncate(self.album, max(0, album_w)), style=theme.muted_text)
         else:
-            result.append("No track playing", style="#999999")
+            result.append("No track playing", style=theme.muted_text)
 
         return result
 
@@ -100,7 +102,7 @@ class _VolumeDisplay(Widget):
     volume: reactive[int] = reactive(80)
 
     def render(self) -> Text:
-        return Text(f" {_ICON_VOLUME} {self.volume:>3}%", style="#aaaaaa")
+        return Text(f" {_ICON_VOLUME} {self.volume:>3}%", style=get_theme().secondary)
 
     async def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
         event.stop()
@@ -127,18 +129,19 @@ class _RepeatButton(Widget):
         padding: 0 1;
     }
     _RepeatButton:hover {
-        background: #333333;
+        background: $border;
     }
     """
 
     repeat_mode: reactive[str] = reactive("off")
 
     def render(self) -> Text:
+        theme = get_theme()
         if self.repeat_mode == "all":
-            return Text(f"{_ICON_REPEAT_ALL} all", style="bold #2ecc71")
+            return Text(f"{_ICON_REPEAT_ALL} all", style=f"bold {theme.success}")
         elif self.repeat_mode == "one":
-            return Text(f"{_ICON_REPEAT_ONE} one", style="bold #f39c12")
-        return Text(f"{_ICON_REPEAT_OFF} off", style="#999999")
+            return Text(f"{_ICON_REPEAT_ONE} one", style=f"bold {theme.warning}")
+        return Text(f"{_ICON_REPEAT_OFF} off", style=theme.muted_text)
 
     async def on_click(self, event: Click) -> None:
         event.stop()
@@ -150,7 +153,7 @@ class _RepeatButton(Widget):
                 bar.update_repeat(mode)
                 app.notify(f"Repeat: {mode.value}", timeout=2)
             except Exception:
-                pass
+                logger.debug("Failed to update repeat mode display on click", exc_info=True)
 
 
 
@@ -165,16 +168,17 @@ class _ShuffleButton(Widget):
         padding: 0 1;
     }
     _ShuffleButton:hover {
-        background: #333333;
+        background: $border;
     }
     """
 
     shuffle_on: reactive[bool] = reactive(False)
 
     def render(self) -> Text:
+        theme = get_theme()
         if self.shuffle_on:
-            return Text(f"{_ICON_SHUFFLE_ON} on ", style="bold #2ecc71")
-        return Text(f"{_ICON_SHUFFLE_OFF} off", style="#999999")
+            return Text(f"{_ICON_SHUFFLE_ON} on ", style=f"bold {theme.success}")
+        return Text(f"{_ICON_SHUFFLE_OFF} off", style=theme.muted_text)
 
     async def on_click(self, event: Click) -> None:
         event.stop()
@@ -188,7 +192,7 @@ class _ShuffleButton(Widget):
                 state = "on" if enabled else "off"
                 app.notify(f"Shuffle: {state}", timeout=2)
             except Exception:
-                pass
+                logger.debug("Failed to update shuffle state display on click", exc_info=True)
 
 
 
@@ -207,8 +211,8 @@ class PlaybackBar(Widget):
     PlaybackBar {
         dock: bottom;
         height: 4;
-        background: #1a1a1a;
-        border-top: solid #333333;
+        background: $playback-bar-bg;
+        border-top: solid $border;
     }
     PlaybackBar #pb-outer {
         height: 100%;
@@ -249,11 +253,12 @@ class PlaybackBar(Widget):
                     yield _RepeatButton(id="pb-repeat")
                     yield _ShuffleButton(id="pb-shuffle")
                 with Horizontal(id="pb-bottom-row"):
+                    _t = get_theme()
                     yield PlaybackProgress(
                         bar_style="block",
-                        filled_color="#ff0000",
-                        empty_color="#404040",
-                        time_color="#aaaaaa",
+                        filled_color=_t.progress_filled,
+                        empty_color=_t.progress_empty,
+                        time_color=_t.secondary,
                         id="pb-progress",
                     )
 
@@ -319,7 +324,7 @@ class _FooterButton(Widget):
         padding: 0 2;
     }
     _FooterButton:hover {
-        background: #333333;
+        background: $border;
     }
     """
 
@@ -331,9 +336,10 @@ class _FooterButton(Widget):
         self._action = action
 
     def render(self) -> Text:
+        theme = get_theme()
         if self.is_active:
-            return Text(self._label, style="bold #ff0000")
-        return Text(self._label, style="#999999")
+            return Text(self._label, style=f"bold {theme.primary}")
+        return Text(self._label, style=theme.muted_text)
 
     async def on_click(self, event: Click) -> None:
         event.stop()
@@ -366,7 +372,7 @@ class FooterBar(Widget):
     FooterBar {
         dock: bottom;
         height: 1;
-        background: #0f0f0f;
+        background: $background;
     }
     FooterBar #footer-inner {
         height: 1;
@@ -395,4 +401,4 @@ class FooterBar(Widget):
                 btn = self.query_one(f"#footer-{action}", _FooterButton)
                 btn.is_active = (action == page_name)
             except Exception:
-                pass
+                logger.debug("Failed to update footer button for action '%s'", action, exc_info=True)

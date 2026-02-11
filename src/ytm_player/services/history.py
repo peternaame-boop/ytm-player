@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import aiosqlite
 
-from ytm_player.config.paths import HISTORY_DB
+from ytm_player.config.paths import HISTORY_DB, SECURE_FILE_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,9 @@ _MIN_LISTEN_SECONDS = 5
 class HistoryManager:
     """Manages play and search history in a local SQLite database."""
 
-    def __init__(self, db_path: Path = HISTORY_DB) -> None:
+    def __init__(self, db_path: Path = HISTORY_DB, max_history: int = 10000) -> None:
         self._db_path = db_path
+        self._max_history = max_history
         self._db: aiosqlite.Connection | None = None
 
     # ------------------------------------------------------------------
@@ -65,10 +67,20 @@ class HistoryManager:
         """Open the database and create tables if they don't exist."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self._db_path)
+        os.chmod(self._db_path, SECURE_FILE_MODE)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
+
+        # Prune old entries beyond retention limit.
+        await self._db.execute(
+            "DELETE FROM play_history WHERE rowid NOT IN "
+            "(SELECT rowid FROM play_history ORDER BY played_at DESC LIMIT ?)",
+            (self._max_history,),
+        )
+        await self._db.commit()
+
         logger.info("History database initialised at %s", self._db_path)
 
     async def close(self) -> None:

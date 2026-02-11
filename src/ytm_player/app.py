@@ -28,12 +28,19 @@ from ytm_player.ui.playback_bar import FooterBar, PlaybackBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.popups.playlist_picker import PlaylistPicker
 from ytm_player.ui.theme import ThemeColors, get_theme
+from ytm_player.utils.formatting import copy_to_clipboard, get_video_id
 from ytm_player.ui.widgets.track_table import TrackTable
 
 logger = logging.getLogger(__name__)
 
 # Valid page names.
 PAGE_NAMES = ("library", "search", "context", "browse", "lyrics", "queue", "help")
+
+# Extracted constants (avoid magic numbers).
+_MAX_NAV_STACK = 20
+_MAX_KEY_COUNT = 1000
+_MAX_CONSECUTIVE_FAILURES = 5
+_POSITION_POLL_INTERVAL = 0.5
 
 
 # ── Placeholder page widget ─────────────────────────────────────────
@@ -81,8 +88,8 @@ class YTMPlayerApp(App):
 
     CSS = """
     Screen {
-        background: #0f0f0f;
-        color: #ffffff;
+        background: $background;
+        color: $foreground;
     }
 
     ToastRack {
@@ -102,7 +109,7 @@ class YTMPlayerApp(App):
     _PlaceholderPage #placeholder-text {
         width: 1fr;
         height: auto;
-        color: #999999;
+        color: $muted-text;
         text-align: center;
         padding: 2 4;
     }
@@ -134,6 +141,7 @@ class YTMPlayerApp(App):
 
         # Current active page name (empty until first navigate_to).
         self._current_page: str = ""
+        self._current_page_kwargs: dict[str, Any] = {}
 
         # Navigation stack for back navigation.
         self._nav_stack: list[tuple[str, dict]] = []
@@ -226,7 +234,7 @@ class YTMPlayerApp(App):
         self.player.on(PlayerEvent.PAUSE_CHANGE, self._on_pause_change)
 
         # Poll playback position on a timer (avoids cross-thread issues).
-        self._poll_timer = self.set_interval(0.5, self._poll_position)
+        self._poll_timer = self.set_interval(_POSITION_POLL_INTERVAL, self._poll_position)
 
         # Navigate to startup page.
         startup = self.settings.general.startup_page
@@ -295,7 +303,7 @@ class YTMPlayerApp(App):
             bar.update_repeat(mode)
             bar.update_shuffle(self.queue.shuffle_enabled)
         except Exception:
-            pass
+            logger.debug("Failed to update playback bar after restoring session state", exc_info=True)
 
     def _save_session_state(self) -> None:
         """Persist volume, shuffle, and repeat to disk."""
@@ -306,7 +314,7 @@ class YTMPlayerApp(App):
             try:
                 volume = self.player.volume
             except Exception:
-                pass
+                logger.debug("Failed to read player volume for session save", exc_info=True)
 
         state = {
             "volume": volume,
@@ -354,7 +362,7 @@ class YTMPlayerApp(App):
 
         if result == MatchResult.EXACT:
             count = int(self._count_buffer) if self._count_buffer else 1
-            count = min(count, 1000)  # Safety cap.
+            count = min(count, _MAX_KEY_COUNT)  # Safety cap.
             self._key_buffer.clear()
             self._count_buffer = ""
             event.prevent_default()
@@ -568,10 +576,10 @@ class YTMPlayerApp(App):
 
         # Push current page onto the nav stack before switching.
         if self._current_page and self._current_page != page_name:
-            self._nav_stack.append((self._current_page, {}))
+            self._nav_stack.append((self._current_page, self._current_page_kwargs))
             # Cap stack size.
-            if len(self._nav_stack) > 20:
-                self._nav_stack = self._nav_stack[-20:]
+            if len(self._nav_stack) > _MAX_NAV_STACK:
+                self._nav_stack = self._nav_stack[-_MAX_NAV_STACK:]
 
         container = self.query_one("#main-content", Container)
 
@@ -580,13 +588,14 @@ class YTMPlayerApp(App):
         page_widget = self._create_page(page_name, **kwargs)
         await container.mount(page_widget)
         self._current_page = page_name
+        self._current_page_kwargs = dict(kwargs)
 
         # Update footer active page indicator.
         try:
             footer = self.query_one("#app-footer", FooterBar)
             footer.set_active_page(page_name)
         except Exception:
-            pass
+            logger.debug("Failed to update footer active page indicator", exc_info=True)
 
         logger.debug("Navigated to page: %s", page_name)
 
@@ -621,6 +630,7 @@ class YTMPlayerApp(App):
             children = list(container.children)
             return children[0] if children else None
         except Exception:
+            logger.debug("Failed to get current page", exc_info=True)
             return None
 
     # ── Playback coordination ────────────────────────────────────────
@@ -662,7 +672,7 @@ class YTMPlayerApp(App):
                 severity="error",
             )
             # Auto-advance to the next track unless we've failed too many times.
-            if self._consecutive_failures < 5:
+            if self._consecutive_failures < _MAX_CONSECUTIVE_FAILURES:
                 next_track = self.queue.next_track()
                 if next_track:
                     self.call_later(lambda: self.run_worker(self.play_track(next_track)))
@@ -750,13 +760,13 @@ class YTMPlayerApp(App):
             bar = self.query_one("#playback-bar", PlaybackBar)
             bar.update_position(pos, dur)
         except Exception:
-            pass
+            logger.debug("Failed to poll playback position", exc_info=True)
 
         if self.mpris and self.player.is_playing:
             try:
                 self.mpris.update_position(int(self.player.position * 1_000_000))
             except Exception:
-                pass
+                logger.debug("Failed to update MPRIS position", exc_info=True)
 
     def _on_track_change(self, track: dict) -> None:
         """Handle track change event from the player.
@@ -778,7 +788,7 @@ class YTMPlayerApp(App):
                 for table in page.query(TrackTable):
                     table.set_playing(video_id)
         except Exception:
-            pass
+            logger.debug("Failed to update playing indicator on track table", exc_info=True)
 
     def _on_volume_change(self, volume: int) -> None:
         """Handle volume change events."""
@@ -913,7 +923,7 @@ class YTMPlayerApp(App):
             self.notify("No track is playing.", severity="warning", timeout=2)
             return
 
-        video_id = track.get("video_id", "") or track.get("videoId", "")
+        video_id = get_video_id(track)
         if not video_id:
             self.notify("Track has no video ID.", severity="warning", timeout=2)
             return
@@ -931,13 +941,18 @@ class YTMPlayerApp(App):
                 self.notify("No track selected.", severity="warning", timeout=2)
                 return
 
+        self._open_actions_for_track(track)
+
+    def _open_actions_for_track(self, track: dict) -> None:
+        """Push ActionsPopup for a specific track dict."""
+
         def _handle_action_result(action_id: str | None) -> None:
             """Callback when the user picks an action from the popup."""
             if action_id is None:
                 return
 
             if action_id == "add_to_playlist":
-                video_id = track.get("video_id", "") or track.get("videoId", "")
+                video_id = get_video_id(track)
                 if video_id:
                     self.push_screen(PlaylistPicker(video_ids=[video_id]))
                 return
@@ -973,48 +988,57 @@ class YTMPlayerApp(App):
                         "context", context_type="album", context_id=album_id
                     ))
             elif action_id == "toggle_like":
-                video_id = track.get("video_id", "") or track.get("videoId", "")
+                video_id = get_video_id(track)
                 if video_id and self.ytmusic:
                     is_liked = (
                         track.get("likeStatus") == "LIKE"
                         or track.get("liked", False)
                     )
                     rating = "INDIFFERENT" if is_liked else "LIKE"
-                    self.run_worker(self.ytmusic.rate_song(video_id, rating))
                     label = "Unliked" if is_liked else "Liked"
-                    self.notify(label, timeout=2)
+
+                    async def _rate(vid: str, r: str, lbl: str) -> None:
+                        try:
+                            await self.ytmusic.rate_song(vid, r)
+                            self.notify(lbl, timeout=2)
+                        except Exception:
+                            self.notify(f"Failed to {lbl.lower()} track", severity="error", timeout=3)
+
+                    self.run_worker(_rate(video_id, rating, label))
             elif action_id == "copy_link":
-                video_id = track.get("video_id", "") or track.get("videoId", "")
+                video_id = get_video_id(track)
                 if video_id:
                     link = f"https://music.youtube.com/watch?v={video_id}"
-                    try:
-                        import subprocess
-                        subprocess.run(
-                            ["xclip", "-selection", "clipboard"],
-                            input=link.encode(),
-                            check=True,
-                        )
+                    if copy_to_clipboard(link):
                         self.notify("Link copied", timeout=2)
-                    except Exception:
+                    else:
                         self.notify(link, timeout=5)
 
         self.push_screen(ActionsPopup(track, item_type="track"), _handle_action_result)
 
+    def on_track_table_track_right_clicked(
+        self, message: TrackTable.TrackRightClicked
+    ) -> None:
+        """Handle right-click on any TrackTable — open actions popup."""
+        self._open_actions_for_track(message.track)
+
     async def _start_radio_for(self, track: dict) -> None:
         """Start radio from a specific track."""
-        video_id = track.get("video_id", "") or track.get("videoId", "")
+        video_id = get_video_id(track)
         if not video_id or not self.ytmusic:
             return
 
         self.notify("Starting radio...", timeout=3)
         try:
             radio_tracks = await self.ytmusic.get_radio(video_id)
-            if radio_tracks:
-                self.queue.clear()
-                self.queue.set_radio_tracks(radio_tracks)
-                first = self.queue.next_track()
-                if first:
-                    await self.play_track(first)
         except Exception:
             logger.exception("Failed to start radio")
             self.notify("Failed to start radio", severity="error")
+            return
+
+        if radio_tracks:
+            self.queue.clear()
+            self.queue.set_radio_tracks(radio_tracks)
+            first = self.queue.next_track()
+            if first:
+                await self.play_track(first)

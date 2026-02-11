@@ -1,5 +1,7 @@
 """Utility modules."""
 
+from __future__ import annotations
+
 from ytm_player.utils.formatting import (
     format_duration,
     truncate,

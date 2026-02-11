@@ -14,6 +14,7 @@ from textual.worker import Worker, WorkerState
 
 from ytm_player.config.keymap import Action
 from ytm_player.ui.widgets.track_table import TrackTable
+from ytm_player.utils.formatting import extract_artist, normalize_tracks
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,12 @@ class ContextPage(Widget):
         padding: 0 2;
         color: $text-muted;
     }
+    .artist-left:focus-within {
+        border: solid $accent;
+    }
+    .artist-right:focus-within {
+        border: solid $accent;
+    }
     """
 
     loading: reactive[bool] = reactive(True)
@@ -181,7 +188,7 @@ class ContextPage(Widget):
         try:
             self.query_one("#context-loading").display = loading
         except Exception:
-            pass
+            logger.debug("Failed to toggle loading display in context page", exc_info=True)
 
     def watch_error_message(self, msg: str) -> None:
         try:
@@ -189,7 +196,7 @@ class ContextPage(Widget):
             error_label.display = bool(msg)
             error_label.update(msg)
         except Exception:
-            pass
+            logger.debug("Failed to update error message in context page", exc_info=True)
 
     # ── Content builders ──────────────────────────────────────────────
 
@@ -207,15 +214,12 @@ class ContextPage(Widget):
             case "playlist":
                 self._build_playlist(content)
 
+        self.set_timer(0.1, lambda: self._focus_track_table())
+
     def _build_album(self, container: Vertical) -> None:
         data = self._data
         title = data.get("title", "Unknown Album")
-        artists_raw = data.get("artists", [])
-        artist_name = (
-            ", ".join(a.get("name", "") for a in artists_raw if isinstance(a, dict))
-            if isinstance(artists_raw, list) and artists_raw
-            else data.get("artist", "Unknown Artist")
-        )
+        artist_name = extract_artist(data)
         year = data.get("year", "")
         tracks = data.get("tracks", [])
         track_count = len(tracks)
@@ -235,7 +239,7 @@ class ContextPage(Widget):
 
         table = TrackTable(show_album=False, id="context-tracks")
         container.mount(table)
-        table.load_tracks(self._normalize_tracks(tracks))
+        table.load_tracks(normalize_tracks(tracks))
 
     def _build_playlist(self, container: Vertical) -> None:
         data = self._data
@@ -255,7 +259,7 @@ class ContextPage(Widget):
 
         table = TrackTable(show_album=True, id="context-tracks")
         container.mount(table)
-        table.load_tracks(self._normalize_tracks(tracks))
+        table.load_tracks(normalize_tracks(tracks))
 
     def _build_artist(self, container: Vertical) -> None:
         data = self._data
@@ -288,7 +292,7 @@ class ContextPage(Widget):
             show_album=False, id="context-tracks"
         )
         left.mount(top_tracks_table)
-        top_tracks_table.load_tracks(self._normalize_tracks(top_songs))
+        top_tracks_table.load_tracks(normalize_tracks(top_songs))
 
         right = Vertical(classes="artist-right")
         columns.mount(right)
@@ -327,59 +331,13 @@ class ContextPage(Widget):
             similar_text = "Similar Artists: " + " \u00b7 ".join(n for n in names if n)
             container.mount(Label(similar_text, classes="similar-artists-bar"))
 
-    # ── Track normalization ───────────────────────────────────────────
-
-    @staticmethod
-    def _normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
-        """Ensure tracks have the fields TrackTable expects.
-
-        ytmusicapi returns slightly different shapes for album tracks,
-        playlist tracks, and search results. This normalizes them.
-        """
-        normalized: list[dict] = []
-        for t in raw_tracks:
-            video_id = t.get("videoId") or t.get("video_id", "")
-            title = t.get("title", "Unknown")
-            artists = t.get("artists", [])
-            artist = (
-                ", ".join(
-                    a.get("name", "") if isinstance(a, dict) else str(a)
-                    for a in artists
-                )
-                if isinstance(artists, list) and artists
-                else t.get("artist", "Unknown")
-            )
-            album_info = t.get("album")
-            album = (
-                album_info.get("name", "")
-                if isinstance(album_info, dict)
-                else (album_info or "")
-            )
-            album_id = (
-                album_info.get("id")
-                if isinstance(album_info, dict)
-                else t.get("album_id")
-            )
-            duration = t.get("duration_seconds") or t.get("duration")
-            thumbnail = None
-            thumbs = t.get("thumbnails")
-            if isinstance(thumbs, list) and thumbs:
-                thumbnail = thumbs[-1].get("url") if isinstance(thumbs[-1], dict) else None
-
-            normalized.append(
-                {
-                    "video_id": video_id,
-                    "title": title,
-                    "artist": artist,
-                    "artists": artists,
-                    "album": album,
-                    "album_id": album_id,
-                    "duration": duration,
-                    "thumbnail_url": thumbnail,
-                    "is_video": t.get("isVideo", t.get("is_video", False)),
-                }
-            )
-        return normalized
+    def _focus_track_table(self) -> None:
+        """Focus the track table after content loads."""
+        try:
+            table = self.query_one("#context-tracks", TrackTable)
+            table.focus()
+        except Exception:
+            pass
 
     # ── Events ────────────────────────────────────────────────────────
 
@@ -456,14 +414,14 @@ class ContextPage(Widget):
                             )
                 return
             except Exception:
-                pass
+                logger.debug("Failed to handle artist album action in context page", exc_info=True)
 
         # Default: delegate to the track table.
         try:
             table = self.query_one("#context-tracks", TrackTable)
             await table.handle_action(action, count)
         except Exception:
-            pass
+            logger.debug("Failed to delegate action to context track table", exc_info=True)
 
     def _cycle_focus(self, forward: bool) -> None:
         """Cycle focus between track table and album list (artist view only)."""

@@ -1,14 +1,13 @@
-"""Library page — browse the user's playlists, albums, and subscribed artists."""
+"""Library page — Spotify-style sidebar + inline track view."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
@@ -17,13 +16,14 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from ytm_player.config.keymap import Action
 from ytm_player.config.settings import get_settings
-from ytm_player.utils.formatting import truncate
+from ytm_player.ui.widgets.track_table import TrackTable
+from ytm_player.utils.formatting import copy_to_clipboard, normalize_tracks, truncate
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Individual library panel
+# Individual library panel (sidebar)
 # ---------------------------------------------------------------------------
 
 
@@ -31,6 +31,8 @@ class LibraryPanel(Widget):
     """A single panel in the library view showing a list of items.
 
     Supports in-panel filtering (``/``), loading state, and item activation.
+    When ``instant_select`` is True, single-click and Enter both fire
+    ``ItemSelected`` immediately (no double-click gate).
     """
 
     DEFAULT_CSS = """
@@ -99,15 +101,17 @@ class LibraryPanel(Widget):
         self,
         title: str,
         *,
+        instant_select: bool = False,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         self._title = title
+        self._instant_select = instant_select
         self._items: list[dict[str, Any]] = []
         self._filtered_items: list[dict[str, Any]] = []
-        # Double-click tracking: single click highlights, double-click navigates.
+        # Double-click tracking (only used when instant_select is False).
         self._last_click_time: float = 0.0
         self._last_click_index: int | None = None
         self._click_activated: bool = False
@@ -135,7 +139,7 @@ class LibraryPanel(Widget):
             loading.display = visible
             list_view.display = not visible
         except Exception:
-            pass
+            logger.debug("Failed to toggle loading visibility in library panel", exc_info=True)
 
     def load_items(self, items: list[dict[str, Any]]) -> None:
         """Replace panel contents with *items* and hide loading indicator."""
@@ -166,30 +170,10 @@ class LibraryPanel(Widget):
         """Build a display label for a library item."""
         title = item.get("title", item.get("name", "Unknown"))
 
-        # For albums: show artist.
-        artists = item.get("artists")
-        if isinstance(artists, list) and artists:
-            artist_names = [
-                a.get("name", "") if isinstance(a, dict) else str(a)
-                for a in artists
-            ]
-            artist_str = ", ".join(n for n in artist_names if n)
-            if artist_str:
-                return truncate(f"{title} - {artist_str}", 60)
-
-        artist = item.get("artist", "")
-        if artist:
-            return truncate(f"{title} - {artist}", 60)
-
         # For playlists: show track count.
         count = item.get("count")
         if count is not None:
             return truncate(f"{title} ({count} tracks)", 60)
-
-        # For artists: show subscriber count.
-        subs = item.get("subscribers", "")
-        if subs:
-            return truncate(f"{title}  [{subs}]", 60)
 
         return truncate(title, 60)
 
@@ -206,7 +190,7 @@ class LibraryPanel(Widget):
             filter_input.focus()
             self.filter_visible = True
         except Exception:
-            pass
+            logger.debug("Failed to show filter input in library panel", exc_info=True)
 
     def hide_filter(self) -> None:
         """Hide the filter input and restore all items."""
@@ -217,7 +201,7 @@ class LibraryPanel(Widget):
             self._filtered_items = list(self._items)
             self._rebuild_list(self._filtered_items)
         except Exception:
-            pass
+            logger.debug("Failed to hide filter input in library panel", exc_info=True)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Apply filter as user types."""
@@ -249,18 +233,21 @@ class LibraryPanel(Widget):
     # ------------------------------------------------------------------
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        """Emit ItemSelected only on keyboard activation (Enter), not single click.
+        """Handle keyboard Enter / list activation."""
+        if self._instant_select:
+            # Instant mode: always fire, whether keyboard or click.
+            idx = event.list_view.index
+            if idx is not None and 0 <= idx < len(self._filtered_items):
+                self.post_message(
+                    self.ItemSelected(self._filtered_items[idx], self.id or "")
+                )
+            return
 
-        Single mouse clicks set ``_click_activated`` which suppresses
-        navigation here.  Double-click posts ItemSelected directly from
-        ``on_click``.
-        """
+        # Legacy double-click mode.
         if self._click_activated:
-            # Came from a mouse click — suppress navigation.
             self._click_activated = False
             return
 
-        # Keyboard activation (Enter / vim select) — navigate.
         idx = event.list_view.index
         if idx is not None and 0 <= idx < len(self._filtered_items):
             self.post_message(
@@ -285,7 +272,7 @@ class LibraryPanel(Widget):
             return None
 
     def on_click(self, event: Click) -> None:
-        """Handle left-click (single=highlight, double=navigate) and right-click."""
+        """Handle left-click and right-click."""
         if event.button == 3:
             # ── Right-click: context menu ──
             event.stop()
@@ -303,7 +290,12 @@ class LibraryPanel(Widget):
         if event.button != 1:
             return
 
-        # ── Left-click: single=highlight only, double=navigate ──
+        if self._instant_select:
+            # Instant mode: single click fires selection via ListView.Selected.
+            # No need for double-click tracking — just let it through.
+            return
+
+        # ── Legacy double-click mode ──
         idx = self._find_clicked_item_index(event)
         if idx is None:
             return
@@ -314,17 +306,15 @@ class LibraryPanel(Widget):
             self._last_click_index == idx
             and (now - self._last_click_time) < 0.4
         ):
-            # Double-click on same item → navigate.
             self._last_click_time = 0.0
             self._last_click_index = None
-            self._click_activated = True  # Suppress the upcoming Selected event.
+            self._click_activated = True
             if 0 <= idx < len(self._filtered_items):
                 self.post_message(
                     self.ItemSelected(self._filtered_items[idx], self.id or "")
                 )
             return
 
-        # Single click → just highlight; suppress the Selected that ListView fires.
         self._last_click_time = now
         self._last_click_index = idx
         self._click_activated = True
@@ -336,10 +326,7 @@ class LibraryPanel(Widget):
 
 
 class LibraryPage(Widget):
-    """Three-panel library browser: Playlists, Albums, Artists.
-
-    Loads data from the YouTube Music API on mount and populates each panel.
-    """
+    """Spotify-style library: playlist sidebar on left, tracks on right."""
 
     DEFAULT_CSS = """
     LibraryPage {
@@ -353,15 +340,44 @@ class LibraryPage(Widget):
     }
 
     #playlists {
-        width: 40%;
+        width: 30;
     }
 
-    #albums {
-        width: 40%;
+    #content-area {
+        height: 1fr;
+        width: 1fr;
     }
 
-    #artists {
-        width: 20%;
+    #content-header {
+        height: auto;
+        max-height: 5;
+        padding: 1 2;
+    }
+
+    .content-title {
+        text-style: bold;
+    }
+
+    .content-subtitle {
+        color: $text-muted;
+    }
+
+    #empty-state {
+        width: 1fr;
+        height: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+    }
+
+    #loading-state {
+        width: 1fr;
+        height: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+    }
+
+    #library-tracks {
+        height: 1fr;
     }
     """
 
@@ -375,27 +391,30 @@ class LibraryPage(Widget):
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
+        self._active_playlist_id: str | None = None
+        self._active_focus: str = "sidebar"  # "sidebar" or "tracks"
 
     def compose(self) -> ComposeResult:
-        # Apply panel widths from config.
-        settings = get_settings()
-        widths = settings.ui.library_panels  # [40, 40, 20]
-
         with Horizontal():
-            yield LibraryPanel("Playlists", id="playlists")
-            yield LibraryPanel("Albums", id="albums")
-            yield LibraryPanel("Artists", id="artists")
+            yield LibraryPanel("Playlists", id="playlists", instant_select=True)
+            with Vertical(id="content-area"):
+                yield Vertical(id="content-header")
+                yield Static("Select a playlist", id="empty-state")
+                yield Static("Loading...", id="loading-state")
+                yield TrackTable(show_album=True, id="library-tracks")
 
     def on_mount(self) -> None:
-        # Apply configured panel widths via CSS.
         settings = get_settings()
-        widths = settings.ui.library_panels
+        sidebar_width = settings.ui.sidebar_width
         try:
-            self.query_one("#playlists").styles.width = f"{widths[0]}%"
-            self.query_one("#albums").styles.width = f"{widths[1]}%"
-            self.query_one("#artists").styles.width = f"{widths[2]}%"
-        except (IndexError, Exception):
-            pass
+            self.query_one("#playlists").styles.width = sidebar_width
+        except Exception:
+            logger.debug("Failed to set sidebar width from settings", exc_info=True)
+
+        # Initially hide loading and tracks, show empty state.
+        self.query_one("#loading-state").display = False
+        self.query_one("#library-tracks").display = False
+        self.query_one("#content-header").display = False
 
         self.run_worker(self._load_library(), name="load-library", exclusive=True)
 
@@ -404,20 +423,12 @@ class LibraryPage(Widget):
     # ------------------------------------------------------------------
 
     async def _load_library(self) -> None:
-        """Fetch playlists, albums, and artists concurrently."""
+        """Fetch playlists and populate the sidebar."""
         self.is_loading = True
 
         try:
-            playlists_task = self.app.ytmusic.get_library_playlists(limit=50)
-            albums_task = self.app.ytmusic.get_library_albums(limit=50)
-            artists_task = self.app.ytmusic.get_library_artists(limit=50)
+            playlists = await self.app.ytmusic.get_library_playlists(limit=50)
 
-            playlists, albums, artists = await asyncio.gather(
-                playlists_task, albums_task, artists_task,
-                return_exceptions=True,
-            )
-
-            # Populate each panel, handling exceptions per-category.
             playlists_panel = self.query_one("#playlists", LibraryPanel)
             if isinstance(playlists, list):
                 playlists_panel.load_items(playlists)
@@ -425,137 +436,126 @@ class LibraryPage(Widget):
                 logger.error("Failed to load playlists: %s", playlists)
                 playlists_panel.load_items([])
 
-            albums_panel = self.query_one("#albums", LibraryPanel)
-            if isinstance(albums, list):
-                albums_panel.load_items(albums)
-            else:
-                logger.error("Failed to load albums: %s", albums)
-                albums_panel.load_items([])
-
-            artists_panel = self.query_one("#artists", LibraryPanel)
-            if isinstance(artists, list):
-                artists_panel.load_items(artists)
-            else:
-                logger.error("Failed to load artists: %s", artists)
-                artists_panel.load_items([])
-
         except Exception:
             logger.exception("Failed to load library data")
         finally:
             self.is_loading = False
 
     async def refresh_library(self) -> None:
-        """Public method to reload all library data."""
+        """Public method to reload playlists."""
         await self._load_library()
 
     # ------------------------------------------------------------------
-    # Item selection → navigation
+    # Playlist selection → load tracks inline
     # ------------------------------------------------------------------
 
     async def on_library_panel_item_selected(
         self, event: LibraryPanel.ItemSelected
     ) -> None:
-        """Navigate to the context page for the selected item."""
+        """Fetch and display selected playlist's tracks inline."""
         item = event.item_data
-        panel_id = event.panel_id
+        playlist_id = item.get("playlistId") or item.get("browseId")
+        if not playlist_id:
+            return
 
-        if panel_id == "playlists":
-            playlist_id = item.get("playlistId") or item.get("browseId")
-            if playlist_id:
-                await self.app.navigate_to(
-                    "context", context_type="playlist", context_id=playlist_id
-                )
+        self._active_playlist_id = playlist_id
 
-        elif panel_id == "albums":
-            album_id = item.get("browseId") or item.get("album_id")
-            if album_id:
-                await self.app.navigate_to(
-                    "context", context_type="album", context_id=album_id
-                )
+        # Show loading state.
+        self.query_one("#empty-state").display = False
+        self.query_one("#library-tracks").display = False
+        self.query_one("#content-header").display = False
+        loading = self.query_one("#loading-state")
+        loading.display = True
 
-        elif panel_id == "artists":
-            artist_id = item.get("browseId") or item.get("artist_id")
-            if artist_id:
-                await self.app.navigate_to(
-                    "context", context_type="artist", context_id=artist_id
-                )
+        try:
+            data = await self.app.ytmusic.get_playlist(playlist_id)
+
+            # If user selected a different playlist while we were loading, discard.
+            if self._active_playlist_id != playlist_id:
+                return
+
+            title = data.get("title", "Unknown Playlist")
+            author = data.get("author", {})
+            owner = author.get("name", "Unknown") if isinstance(author, dict) else str(author)
+            tracks = data.get("tracks", [])
+            track_count = data.get("trackCount", len(tracks))
+
+            # Update header.
+            header = self.query_one("#content-header", Vertical)
+            await header.remove_children()
+            header.display = True
+            await header.mount(Label(title, classes="content-title"))
+            subtitle = f"{owner} \u00b7 {track_count} track{'s' if track_count != 1 else ''}"
+            await header.mount(Label(subtitle, classes="content-subtitle"))
+
+            # Load tracks into the table.
+            loading.display = False
+            table = self.query_one("#library-tracks", TrackTable)
+            table.display = True
+            table.load_tracks(normalize_tracks(tracks))
+
+        except Exception:
+            logger.exception("Failed to load playlist %s", playlist_id)
+            loading.display = False
+            self.query_one("#empty-state").display = True
+            empty = self.query_one("#empty-state", Static)
+            empty.update("Failed to load playlist")
+
+    # ------------------------------------------------------------------
+    # Track selection → play
+    # ------------------------------------------------------------------
+
+    async def on_track_table_track_selected(
+        self, event: TrackTable.TrackSelected
+    ) -> None:
+        """Queue all tracks and start playback from the selected one."""
+        event.stop()
+        table = self.query_one("#library-tracks", TrackTable)
+        tracks = table.tracks
+        idx = event.index
+
+        self.app.queue.clear()
+        self.app.queue.add_multiple(tracks)
+        self.app.queue.jump_to(idx)
+        await self.app.play_track(event.track)
 
     # ------------------------------------------------------------------
     # Right-click → context menu
     # ------------------------------------------------------------------
-
-    _PANEL_TO_ITEM_TYPE: dict[str, str] = {
-        "playlists": "playlist",
-        "albums": "album",
-        "artists": "artist",
-    }
 
     def on_library_panel_item_right_clicked(
         self, event: LibraryPanel.ItemRightClicked
     ) -> None:
         """Open context menu or create-new flow on right-click."""
         item = event.item_data
-        panel_id = event.panel_id
 
         if item is not None:
-            self._open_item_context_menu(item, panel_id)
+            self._open_item_context_menu(item)
         else:
-            self._handle_empty_space_click(panel_id)
+            self._prompt_create_playlist()
 
-    def _open_item_context_menu(self, item: dict[str, Any], panel_id: str) -> None:
-        """Push ActionsPopup for the right-clicked item."""
+    def _open_item_context_menu(self, item: dict[str, Any]) -> None:
+        """Push ActionsPopup for the right-clicked playlist."""
         from ytm_player.ui.popups.actions import ActionsPopup
-
-        item_type = self._PANEL_TO_ITEM_TYPE.get(panel_id, "track")
 
         def _handle_action(action_id: str | None) -> None:
             if action_id is None:
                 return
 
             if action_id in ("play_all", "shuffle_play"):
-                # Navigate into the item — the context page handles playback.
-                self.on_library_panel_item_selected(
-                    LibraryPanel.ItemSelected(item, panel_id)
+                self.app.run_worker(
+                    self.on_library_panel_item_selected(
+                        LibraryPanel.ItemSelected(item, "playlists")
+                    )
                 )
             elif action_id == "add_to_queue":
                 self.app.notify("Added to queue", timeout=2)
             elif action_id == "delete":
                 self.app.run_worker(self._delete_playlist(item))
             elif action_id == "copy_link":
-                self._copy_item_link(item, panel_id)
-            elif action_id == "play_top_songs":
-                # For artists — navigate into the artist page.
-                self.on_library_panel_item_selected(
-                    LibraryPanel.ItemSelected(item, panel_id)
-                )
-            elif action_id == "start_radio":
-                self.app.notify("Starting radio...", timeout=2)
-            elif action_id in ("toggle_subscribe", "add_to_library"):
-                self.app.notify("Action triggered", timeout=2)
-            elif action_id in ("view_albums", "view_similar"):
-                self.on_library_panel_item_selected(
-                    LibraryPanel.ItemSelected(item, panel_id)
-                )
-            elif action_id == "go_to_artist":
-                artists = item.get("artists") or []
-                if isinstance(artists, list) and artists:
-                    artist = artists[0]
-                    artist_id = artist.get("id") or artist.get("browseId", "")
-                    if artist_id:
-                        self.app.run_worker(self.app.navigate_to(
-                            "context", context_type="artist", context_id=artist_id
-                        ))
+                self._copy_item_link(item)
 
-        self.app.push_screen(ActionsPopup(item, item_type=item_type), _handle_action)
-
-    def _handle_empty_space_click(self, panel_id: str) -> None:
-        """Handle right-click on empty area of a panel."""
-        if panel_id == "playlists":
-            self._prompt_create_playlist()
-        else:
-            self.app.notify(
-                "Use Search to find and add albums/artists", timeout=3
-            )
+        self.app.push_screen(ActionsPopup(item, item_type="playlist"), _handle_action)
 
     def _prompt_create_playlist(self) -> None:
         """Show an input screen to create a new playlist."""
@@ -570,12 +570,12 @@ class LibraryPage(Widget):
         )
 
     async def _create_playlist(self, name: str) -> None:
-        """Create a new playlist and refresh the library."""
+        """Create a new playlist and refresh the sidebar."""
         try:
             playlist_id = await self.app.ytmusic.create_playlist(name)
             if playlist_id:
                 self.app.notify(f"Created '{name}'", timeout=2)
-                await self._reload_panel("playlists")
+                await self._reload_playlists()
             else:
                 self.app.notify("Failed to create playlist", severity="error", timeout=3)
         except Exception:
@@ -583,7 +583,7 @@ class LibraryPage(Widget):
             self.app.notify("Failed to create playlist", severity="error", timeout=3)
 
     async def _delete_playlist(self, item: dict[str, Any]) -> None:
-        """Delete a playlist and refresh the panel."""
+        """Delete a playlist and refresh the sidebar."""
         playlist_id = item.get("playlistId") or item.get("browseId", "")
         title = item.get("title", "playlist")
         if not playlist_id:
@@ -594,58 +594,41 @@ class LibraryPage(Widget):
             success = await self.app.ytmusic.delete_playlist(playlist_id)
             if success:
                 self.app.notify(f"Deleted '{title}'", timeout=2)
-                await self._reload_panel("playlists")
+                # If the deleted playlist was the active one, clear content.
+                if self._active_playlist_id == playlist_id:
+                    self._active_playlist_id = None
+                    self.query_one("#content-header").display = False
+                    self.query_one("#library-tracks").display = False
+                    empty = self.query_one("#empty-state", Static)
+                    empty.update("Select a playlist")
+                    empty.display = True
+                await self._reload_playlists()
             else:
                 self.app.notify("Failed to delete playlist", severity="error", timeout=3)
         except Exception:
             logger.exception("Failed to delete playlist %r", playlist_id)
             self.app.notify("Failed to delete playlist", severity="error", timeout=3)
 
-    async def _reload_panel(self, panel_id: str) -> None:
-        """Reload a single panel's data."""
-        panel = self.query_one(f"#{panel_id}", LibraryPanel)
+    async def _reload_playlists(self) -> None:
+        """Reload the playlists sidebar."""
+        panel = self.query_one("#playlists", LibraryPanel)
         try:
-            if panel_id == "playlists":
-                items = await self.app.ytmusic.get_library_playlists(limit=50)
-            elif panel_id == "albums":
-                items = await self.app.ytmusic.get_library_albums(limit=50)
-            elif panel_id == "artists":
-                items = await self.app.ytmusic.get_library_artists(limit=50)
-            else:
-                return
+            items = await self.app.ytmusic.get_library_playlists(limit=50)
             panel.load_items(items if isinstance(items, list) else [])
         except Exception:
-            logger.exception("Failed to reload panel %r", panel_id)
+            logger.exception("Failed to reload playlists")
 
-    def _copy_item_link(self, item: dict[str, Any], panel_id: str) -> None:
-        """Copy a YouTube Music link for the item to clipboard."""
-        link = ""
-        if panel_id == "playlists":
-            pid = item.get("playlistId") or item.get("browseId", "")
-            if pid:
-                link = f"https://music.youtube.com/playlist?list={pid}"
-        elif panel_id == "albums":
-            bid = item.get("browseId") or item.get("album_id", "")
-            if bid:
-                link = f"https://music.youtube.com/browse/{bid}"
-        elif panel_id == "artists":
-            bid = item.get("browseId") or item.get("artist_id", "")
-            if bid:
-                link = f"https://music.youtube.com/channel/{bid}"
-
-        if not link:
+    def _copy_item_link(self, item: dict[str, Any]) -> None:
+        """Copy a YouTube Music playlist link to clipboard."""
+        pid = item.get("playlistId") or item.get("browseId", "")
+        if not pid:
             self.app.notify("No link available", severity="warning", timeout=2)
             return
 
-        try:
-            import subprocess
-            subprocess.run(
-                ["xclip", "-selection", "clipboard"],
-                input=link.encode(),
-                check=True,
-            )
+        link = f"https://music.youtube.com/playlist?list={pid}"
+        if copy_to_clipboard(link):
             self.app.notify("Link copied", timeout=2)
-        except Exception:
+        else:
             self.app.notify(link, timeout=5)
 
     # ------------------------------------------------------------------
@@ -655,155 +638,111 @@ class LibraryPage(Widget):
     async def handle_action(self, action: Action, count: int = 1) -> None:
         """Process vim-style navigation actions dispatched from the app."""
         match action:
-            case Action.MOVE_DOWN:
-                focused = self.app.focused
-                if isinstance(focused, ListView):
-                    for _ in range(count):
-                        focused.action_cursor_down()
-
-            case Action.MOVE_UP:
-                focused = self.app.focused
-                if isinstance(focused, ListView):
-                    for _ in range(count):
-                        focused.action_cursor_up()
-
-            case Action.PAGE_DOWN:
-                focused = self.app.focused
-                if isinstance(focused, ListView):
-                    focused.action_scroll_down()
-
-            case Action.PAGE_UP:
-                focused = self.app.focused
-                if isinstance(focused, ListView):
-                    focused.action_scroll_up()
-
-            case Action.GO_TOP:
-                focused = self.app.focused
-                if isinstance(focused, ListView):
-                    focused.action_first()
-
-            case Action.GO_BOTTOM:
-                focused = self.app.focused
-                if isinstance(focused, ListView):
-                    focused.action_last()
-
-            case Action.SELECT:
-                focused = self.app.focused
-                if isinstance(focused, ListView):
-                    focused.action_select_cursor()
-
-            case Action.FOCUS_NEXT:
-                self.app.action_focus_next()
-
-            case Action.FOCUS_PREV:
-                self.app.action_focus_previous()
+            case Action.FOCUS_NEXT | Action.FOCUS_PREV:
+                self._toggle_focus()
+                return
 
             case Action.FILTER:
-                # Show in-panel filter for the focused panel.
-                focused = self.app.focused
-                panel = self._find_parent_panel(focused)
-                if panel is not None:
+                # Show filter only when sidebar is focused.
+                if self._active_focus == "sidebar":
+                    panel = self.query_one("#playlists", LibraryPanel)
                     panel.show_filter()
+                return
 
             case Action.DELETE_ITEM:
                 self._confirm_delete_highlighted()
+                return
+
+        # Delegate to the focused panel.
+        if self._active_focus == "sidebar":
+            await self._handle_sidebar_action(action, count)
+        else:
+            await self._handle_tracks_action(action, count)
+
+    def _toggle_focus(self) -> None:
+        """Toggle focus between sidebar and track table."""
+        if self._active_focus == "sidebar":
+            # Only switch if tracks are visible.
+            try:
+                table = self.query_one("#library-tracks", TrackTable)
+                if table.display:
+                    self._active_focus = "tracks"
+                    table.focus()
+                    return
+            except Exception:
+                logger.debug("Failed to focus track table in library", exc_info=True)
+        self._active_focus = "sidebar"
+        try:
+            list_view = self.query_one("#playlists-list", ListView)
+            list_view.focus()
+        except Exception:
+            logger.debug("Failed to focus playlists list in library", exc_info=True)
+
+    async def _handle_sidebar_action(self, action: Action, count: int) -> None:
+        """Dispatch action to the sidebar ListView."""
+        try:
+            list_view = self.query_one("#playlists-list", ListView)
+        except Exception:
+            logger.debug("Failed to query playlists list for sidebar action", exc_info=True)
+            return
+
+        match action:
+            case Action.MOVE_DOWN:
+                for _ in range(count):
+                    list_view.action_cursor_down()
+            case Action.MOVE_UP:
+                for _ in range(count):
+                    list_view.action_cursor_up()
+            case Action.PAGE_DOWN:
+                list_view.action_scroll_down()
+            case Action.PAGE_UP:
+                list_view.action_scroll_up()
+            case Action.GO_TOP:
+                list_view.action_first()
+            case Action.GO_BOTTOM:
+                list_view.action_last()
+            case Action.SELECT:
+                list_view.action_select_cursor()
+
+    async def _handle_tracks_action(self, action: Action, count: int) -> None:
+        """Dispatch action to the track table."""
+        try:
+            table = self.query_one("#library-tracks", TrackTable)
+            if table.display:
+                await table.handle_action(action, count)
+        except Exception:
+            logger.debug("Failed to dispatch action to library track table", exc_info=True)
 
     # ------------------------------------------------------------------
     # Delete with confirmation
     # ------------------------------------------------------------------
 
-    def _get_highlighted_item(self) -> tuple[dict[str, Any] | None, str]:
-        """Return (item_data, panel_id) for the currently highlighted item."""
-        focused = self.app.focused
-        panel = self._find_parent_panel(focused)
-        if panel is None:
-            return None, ""
-        list_view = panel.query_one(ListView)
-        idx = list_view.index
-        if idx is not None and 0 <= idx < len(panel._filtered_items):
-            return panel._filtered_items[idx], panel.id or ""
-        return None, panel.id or ""
+    def _get_highlighted_item(self) -> dict[str, Any] | None:
+        """Return the highlighted playlist item, or None."""
+        try:
+            panel = self.query_one("#playlists", LibraryPanel)
+            list_view = panel.query_one(ListView)
+            idx = list_view.index
+            if idx is not None and 0 <= idx < len(panel._filtered_items):
+                return panel._filtered_items[idx]
+        except Exception:
+            logger.debug("Failed to get highlighted item from playlists panel", exc_info=True)
+        return None
 
     def _confirm_delete_highlighted(self) -> None:
-        """Show a confirmation popup for the highlighted item, then delete."""
+        """Show a confirmation popup for the highlighted playlist, then delete."""
         from ytm_player.ui.popups.confirm_popup import ConfirmPopup
 
-        item, panel_id = self._get_highlighted_item()
+        item = self._get_highlighted_item()
         if item is None:
             self.app.notify("No item selected", severity="warning", timeout=2)
             return
 
         title = item.get("title", item.get("name", "this item"))
-
-        if panel_id == "playlists":
-            msg = f"Delete playlist '{title}'?"
-        elif panel_id == "albums":
-            msg = f"Remove album '{title}' from library?"
-        elif panel_id == "artists":
-            msg = f"Unsubscribe from '{title}'?"
-        else:
-            return
+        msg = f"Delete playlist '{title}'?"
 
         def _on_confirm(confirmed: bool) -> None:
             if confirmed:
-                self.app.run_worker(self._execute_delete(item, panel_id))
+                self.app.run_worker(self._delete_playlist(item))
 
         self.app.push_screen(ConfirmPopup(msg), _on_confirm)
-
-    async def _execute_delete(self, item: dict[str, Any], panel_id: str) -> None:
-        """Perform the actual deletion based on panel type."""
-        title = item.get("title", item.get("name", "item"))
-
-        try:
-            if panel_id == "playlists":
-                playlist_id = item.get("playlistId") or item.get("browseId", "")
-                if not playlist_id:
-                    self.app.notify("Cannot determine playlist ID", severity="error", timeout=3)
-                    return
-                success = await self.app.ytmusic.delete_playlist(playlist_id)
-                label = "Deleted"
-
-            elif panel_id == "albums":
-                # rate_playlist(INDIFFERENT) removes from library.
-                browse_id = item.get("browseId") or item.get("album_id", "")
-                # The playlistId for an album is needed, not the browseId.
-                playlist_id = item.get("playlistId") or browse_id
-                if not playlist_id:
-                    self.app.notify("Cannot determine album ID", severity="error", timeout=3)
-                    return
-                success = await self.app.ytmusic.remove_album_from_library(playlist_id)
-                label = "Removed"
-
-            elif panel_id == "artists":
-                channel_id = item.get("browseId") or item.get("artist_id", "")
-                if not channel_id:
-                    self.app.notify("Cannot determine artist ID", severity="error", timeout=3)
-                    return
-                success = await self.app.ytmusic.unsubscribe_artist(channel_id)
-                label = "Unsubscribed from"
-
-            else:
-                return
-
-            if success:
-                self.app.notify(f"{label} '{title}'", timeout=2)
-                await self._reload_panel(panel_id)
-            else:
-                self.app.notify(f"Failed to remove '{title}'", severity="error", timeout=3)
-
-        except Exception:
-            logger.exception("Failed to delete item from panel %r", panel_id)
-            self.app.notify(f"Failed to remove '{title}'", severity="error", timeout=3)
-
-    def _find_parent_panel(self, widget: Widget | None) -> LibraryPanel | None:
-        """Walk up the widget tree to find the enclosing LibraryPanel."""
-        current = widget
-        while current is not None:
-            if isinstance(current, LibraryPanel):
-                return current
-            current = current.parent
-        # Fall back to the first panel.
-        try:
-            return self.query_one("#playlists", LibraryPanel)
-        except Exception:
-            return None

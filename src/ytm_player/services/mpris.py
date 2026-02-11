@@ -4,9 +4,11 @@ Exposes ytm-player on the session bus so desktop environments and media key
 daemons can control playback.
 """
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable, Coroutine
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -249,9 +251,9 @@ class MPRISService:
     """Manages the MPRIS D-Bus presence for ytm-player."""
 
     def __init__(self) -> None:
-        self._bus: Optional["MessageBus"] = None
-        self._root_iface: Optional["_MediaPlayer2Interface"] = None
-        self._player_iface: Optional["_PlayerInterface"] = None
+        self._bus: MessageBus | None = None
+        self._root_iface: _MediaPlayer2Interface | None = None
+        self._player_iface: _PlayerInterface | None = None
         self._running = False
 
     # ------------------------------------------------------------------

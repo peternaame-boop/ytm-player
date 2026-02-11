@@ -12,7 +12,10 @@ from pathlib import Path
 _xdg_config = os.environ.get("XDG_CONFIG_HOME")
 _xdg_cache = os.environ.get("XDG_CACHE_HOME")
 
-CONFIG_DIR = Path(_xdg_config) / "ytm-player" if _xdg_config else Path.home() / ".config" / "ytm-player"
+SECURE_FILE_MODE = 0o600
+SECURE_DIR_MODE = 0o700
+
+CONFIG_DIR = (Path(_xdg_config) / "ytm-player") if _xdg_config else (Path.home() / ".config" / "ytm-player")
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 AUTH_FILE = CONFIG_DIR / "auth.json"
 OAUTH_FILE = CONFIG_DIR / "oauth.json"
@@ -24,6 +27,17 @@ THEME_FILE = CONFIG_DIR / "theme.toml"
 RECENT_PLAYLISTS_FILE = CONFIG_DIR / "recent_playlists.json"
 SESSION_STATE_FILE = CONFIG_DIR / "session.json"
 
-CACHE_DIR = Path(_xdg_cache) / "ytm-player" / "audio" if _xdg_cache else Path.home() / ".cache" / "ytm-player" / "audio"
-CACHE_DB = Path(_xdg_cache) / "ytm-player" / "cache.db" if _xdg_cache else Path.home() / ".cache" / "ytm-player" / "cache.db"
+CACHE_DIR = (Path(_xdg_cache) / "ytm-player" / "audio") if _xdg_cache else (Path.home() / ".cache" / "ytm-player" / "audio")
+CACHE_DB = (Path(_xdg_cache) / "ytm-player" / "cache.db") if _xdg_cache else (Path.home() / ".cache" / "ytm-player" / "cache.db")
 HISTORY_DB = CONFIG_DIR / "history.db"
+
+def ensure_dirs() -> None:
+    """Create config and cache directories with secure permissions.
+
+    Called automatically at import time. Also available for explicit use in tests.
+    """
+    for _dir in (CONFIG_DIR, CACHE_DIR):
+        _dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(_dir, SECURE_DIR_MODE)
+
+ensure_dirs()

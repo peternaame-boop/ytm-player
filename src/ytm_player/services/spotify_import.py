@@ -9,14 +9,26 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 import click
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-from thefuzz import fuzz
 from ytmusicapi import YTMusic
 
-from ytm_player.config.paths import CONFIG_DIR, SPOTIFY_CREDS_FILE
+try:
+    from rich.console import Console
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+    from thefuzz import fuzz
+    _HAS_SPOTIFY_DEPS = True
+except ImportError:
+    _HAS_SPOTIFY_DEPS = False
+
+from pathlib import Path
+
+from ytm_player.config.paths import CONFIG_DIR, SPOTIFY_CREDS_FILE, SECURE_FILE_MODE
+from ytm_player.utils.formatting import VALID_VIDEO_ID, extract_artist, extract_duration, format_duration, get_video_id
 
 logger = logging.getLogger(__name__)
+
+TITLE_MATCH_WEIGHT = 0.6
+ARTIST_MATCH_WEIGHT = 0.4
+AUTO_MATCH_THRESHOLD = 85
 
 
 class MatchType(Enum):
@@ -46,7 +58,7 @@ def load_spotify_creds() -> dict[str, str] | None:
         if data.get("client_id") and data.get("client_secret"):
             return data
     except Exception:
-        pass
+        logger.debug("Failed to parse Spotify credentials file", exc_info=True)
     return None
 
 
@@ -55,10 +67,9 @@ def save_spotify_creds(client_id: str, client_secret: str) -> None:
     import os
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    SPOTIFY_CREDS_FILE.write_text(
-        json.dumps({"client_id": client_id, "client_secret": client_secret}, indent=2)
-    )
-    os.chmod(SPOTIFY_CREDS_FILE, 0o600)
+    fd = os.open(str(SPOTIFY_CREDS_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SECURE_FILE_MODE)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"client_id": client_id, "client_secret": client_secret}, f, indent=2)
 
 
 def has_spotify_creds() -> bool:
@@ -79,8 +90,7 @@ def _parse_spotipy_item(item: dict) -> dict:
     track = item.get("track", item)
     if not track or not track.get("name"):
         return {}
-    artists = track.get("artists", [])
-    artist_name = ", ".join(a.get("name", "") for a in artists) if artists else ""
+    artist_name = extract_artist(track)
     album = track.get("album", {})
     return {
         "name": track.get("name", ""),
@@ -167,8 +177,7 @@ def extract_spotify_tracks(url: str) -> tuple[str, list[dict]]:
 
         for item in playlist.get("tracks", []):
             track = item.get("track", item)
-            artists = track.get("artists", [])
-            artist_name = ", ".join(a.get("name", "") for a in artists) if artists else ""
+            artist_name = extract_artist(track)
             album = track.get("album", {})
 
             tracks.append({
@@ -197,47 +206,23 @@ def _fuzzy_score(spotify_track: dict, ytm_track: dict) -> int:
     sp_artist = spotify_track.get("artist", "").lower()
 
     ytm_title = (ytm_track.get("title", "") or "").lower()
-
-    # ytmusicapi returns artists as a list of dicts or a plain string.
-    ytm_artists = ytm_track.get("artists", [])
-    if isinstance(ytm_artists, list):
-        ytm_artist = ", ".join(
-            a.get("name", "") if isinstance(a, dict) else str(a) for a in ytm_artists
-        ).lower()
-    else:
-        ytm_artist = str(ytm_artists).lower()
+    ytm_artist = extract_artist(ytm_track).lower()
 
     title_score = fuzz.ratio(sp_title, ytm_title)
     artist_score = fuzz.ratio(sp_artist, ytm_artist)
 
     # Weighted: title matters more but artist is still important.
-    return int(title_score * 0.6 + artist_score * 0.4)
+    return int(title_score * TITLE_MATCH_WEIGHT + artist_score * ARTIST_MATCH_WEIGHT)
 
-
-def _format_duration(ms: int) -> str:
-    """Format milliseconds as m:ss."""
-    total_sec = ms // 1000
-    minutes = total_sec // 60
-    seconds = total_sec % 60
-    return f"{minutes}:{seconds:02d}"
-
-
-def _format_ytm_duration(track: dict) -> str:
-    """Format a YTM track's duration."""
-    # ytmusicapi may provide duration as text or duration_seconds.
-    dur_text = track.get("duration")
-    if dur_text:
-        return dur_text
-    dur_sec = track.get("duration_seconds", 0)
-    if dur_sec:
-        return f"{dur_sec // 60}:{dur_sec % 60:02d}"
-    return "?"
 
 
 def match_tracks(
     ytmusic: YTMusic, spotify_tracks: list[dict], console: Console
 ) -> list[MatchResult]:
     """Search YTM for each Spotify track and categorize matches."""
+    if not _HAS_SPOTIFY_DEPS:
+        click.echo("Spotify import requires extra dependencies: pip install ytm-player[spotify]")
+        return []
     results: list[MatchResult] = []
 
     with Progress(
@@ -273,23 +258,18 @@ def match_tracks(
             scored.sort(key=lambda x: x[0], reverse=True)
             best_score, best_candidate = scored[0]
 
-            if best_score >= 85:
+            if best_score >= AUTO_MATCH_THRESHOLD:
                 results.append(MatchResult(
                     spotify_track=sp_track,
                     match_type=MatchType.EXACT,
                     candidates=[c for _, c in scored],
                     selected=best_candidate,
                 ))
-            elif len(scored) > 0:
+            else:
                 results.append(MatchResult(
                     spotify_track=sp_track,
                     match_type=MatchType.MULTIPLE,
                     candidates=[c for _, c in scored],
-                ))
-            else:
-                results.append(MatchResult(
-                    spotify_track=sp_track,
-                    match_type=MatchType.NONE,
                 ))
 
             progress.advance(task)
@@ -297,22 +277,13 @@ def match_tracks(
     return results
 
 
-def _get_video_id(track: dict) -> str:
-    """Extract video ID from a YTM search result."""
-    return track.get("videoId", "") or track.get("video_id", "")
-
 
 def _display_candidate(idx: int, candidate: dict) -> str:
     """Format a single YTM candidate for display."""
     title = candidate.get("title", "?")
-    artists = candidate.get("artists", [])
-    if isinstance(artists, list):
-        artist_str = ", ".join(
-            a.get("name", "") if isinstance(a, dict) else str(a) for a in artists
-        )
-    else:
-        artist_str = str(artists)
-    duration = _format_ytm_duration(candidate)
+    artist_str = extract_artist(candidate)
+    dur_sec = extract_duration(candidate)
+    duration = format_duration(dur_sec) if dur_sec else "?"
     result_type = candidate.get("resultType", "")
     suffix = f" [{result_type}]" if result_type and result_type != "song" else ""
     return f"  {idx}. {title} — {artist_str} ({duration}){suffix}"
@@ -320,6 +291,9 @@ def _display_candidate(idx: int, candidate: dict) -> str:
 
 def run_import(spotify_url: str, auth_file: Path) -> None:
     """Orchestrate the full interactive Spotify → YTM import flow."""
+    if not _HAS_SPOTIFY_DEPS:
+        click.echo("Spotify import requires extra dependencies: pip install ytm-player[spotify]")
+        return
     console = Console()
 
     # Validate URL.
@@ -429,9 +403,11 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
 
         elif choice == 2:
             video_id = click.prompt("Video ID").strip()
-            if video_id:
+            if video_id and VALID_VIDEO_ID.match(video_id):
                 result.selected = {"videoId": video_id}
                 result.match_type = MatchType.EXACT
+            elif video_id:
+                console.print("[yellow]Invalid video ID format.[/yellow]")
 
         console.print()
 
@@ -454,7 +430,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     console.print()
     with console.status(f'Creating playlist "{final_name}" on YouTube Music...'):
         try:
-            video_ids = [_get_video_id(r.selected) for r in confirmed if r.selected]
+            video_ids = [get_video_id(r.selected) for r in confirmed if r.selected]
             video_ids = [vid for vid in video_ids if vid]  # Filter empty.
 
             playlist_id = ytmusic.create_playlist(

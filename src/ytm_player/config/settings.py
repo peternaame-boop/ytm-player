@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Self
 
-from ytm_player.config.paths import CONFIG_DIR, CONFIG_FILE
+from ytm_player.config.paths import CACHE_DIR, CONFIG_DIR, CONFIG_FILE
 
 
 @dataclass
@@ -45,7 +45,7 @@ class UISettings:
     album_art: bool = True
     border_style: str = "rounded"
     progress_style: str = "block"
-    library_panels: list[int] = field(default_factory=lambda: [40, 40, 20])
+    sidebar_width: int = 30
 
 
 @dataclass
@@ -123,7 +123,6 @@ class Settings:
     def cache_dir(self) -> Path:
         if self.cache.location:
             return Path(self.cache.location)
-        from ytm_player.config.paths import CACHE_DIR
         return CACHE_DIR
 
 

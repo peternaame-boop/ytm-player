@@ -15,7 +15,7 @@ from pathlib import Path
 from ytmusicapi import YTMusic
 from ytmusicapi.helpers import get_authorization, initialize_headers, sapisid_from_cookie
 
-from ytm_player.config.paths import CONFIG_DIR, AUTH_FILE, OAUTH_FILE, OAUTH_CREDS_FILE
+from ytm_player.config.paths import CONFIG_DIR, AUTH_FILE, OAUTH_FILE, OAUTH_CREDS_FILE, SECURE_FILE_MODE
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +58,19 @@ def _patch_yt_dlp_browsers() -> None:
             _CUSTOM_CHROMIUM_BROWSERS
         )
         _yt_dlp_patched = True
-    except (ImportError, AttributeError):
-        pass
+    except (ImportError, AttributeError) as exc:
+        logger.warning(
+            "Failed to patch yt-dlp for extra browser support "
+            "(yt-dlp internals may have changed): %s", exc
+        )
 
 
 class AuthManager:
     """Manages YouTube Music authentication via browser cookie extraction."""
 
-    def __init__(self, config_dir: Path = CONFIG_DIR) -> None:
+    def __init__(self, config_dir: Path = CONFIG_DIR, auth_file: Path = AUTH_FILE) -> None:
         self._config_dir = config_dir
-        self._auth_file = config_dir / "auth.json"
+        self._auth_file = auth_file
 
     @property
     def auth_file(self) -> Path:
@@ -108,8 +111,10 @@ class AuthManager:
                 return resp
 
             ytm._session.post = _capture_post
-            ytm.get_library_playlists(limit=1)
-            ytm._session.post = orig_post
+            try:
+                ytm.get_library_playlists(limit=1)
+            finally:
+                ytm._session.post = orig_post
 
             if raw_response:
                 for stp in raw_response.get("responseContext", {}).get(
@@ -191,6 +196,7 @@ class AuthManager:
                 if has_sapisid:
                     return browser
             except Exception:
+                logger.debug("Browser %s not available", browser, exc_info=True)
                 continue
         return None
 
@@ -217,7 +223,7 @@ class AuthManager:
         # Verify we have the critical SAPISID cookie.
         try:
             sapisid = sapisid_from_cookie(cookie_str)
-        except (KeyError, Exception):
+        except Exception:
             logger.warning("SAPISID cookie not found in extracted cookies")
             return False
 
@@ -230,11 +236,11 @@ class AuthManager:
         origin = "https://music.youtube.com"
         headers["authorization"] = get_authorization(sapisid + " " + origin)
 
-        # Save.
+        # Save atomically with correct permissions from creation.
         self._config_dir.mkdir(parents=True, exist_ok=True)
-        with open(self._auth_file, "w") as f:
+        fd = os.open(str(self._auth_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SECURE_FILE_MODE)
+        with os.fdopen(fd, "w") as f:
             json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
-        os.chmod(self._auth_file, 0o600)
 
         print(f"  Cookies extracted from {browser} and saved.")
         return True
@@ -285,7 +291,7 @@ class AuthManager:
             import ytmusicapi
 
             ytmusicapi.setup(filepath=str(self._auth_file), headers_raw=normalized)
-            os.chmod(self._auth_file, 0o600)
+            os.chmod(self._auth_file, SECURE_FILE_MODE)
             print()
             print("  Browser authentication saved.")
             return True

@@ -172,7 +172,7 @@ class HelpPage(Widget):
         width: 1fr;
     }
     .help-table > .datatable--cursor {
-        background: #2a2a2a;
+        background: $selected-item;
     }
     """
 
@@ -260,7 +260,7 @@ class HelpPage(Widget):
                 filter_input.value = ""
                 self.filter_text = ""
         except Exception:
-            pass
+            logger.debug("Failed to toggle help filter visibility", exc_info=True)
 
     def watch_filter_text(self, text: str) -> None:
         self._populate_table(text)
@@ -288,9 +288,6 @@ class HelpPage(Widget):
         table = self.query_one("#help-table", DataTable)
 
         match action:
-            case Action.GO_BACK:
-                await self.app.navigate_to("back")  # type: ignore[attr-defined]
-
             case Action.FILTER:
                 self.filter_visible = True
 

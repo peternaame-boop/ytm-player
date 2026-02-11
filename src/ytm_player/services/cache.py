@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import shutil
 from pathlib import Path
 
 import aiosqlite
 
-from ytm_player.config.paths import CACHE_DIR, CACHE_DB
+from ytm_player.config.paths import CACHE_DIR, CACHE_DB, SECURE_FILE_MODE
 from ytm_player.config.settings import get_settings
+from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,7 @@ class CacheManager:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self._db_path)
+        os.chmod(self._db_path, SECURE_FILE_MODE)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_SCHEMA)
@@ -100,16 +104,20 @@ class CacheManager:
 
     async def put(self, video_id: str, data: bytes, format: str) -> Path:
         """Write raw audio *data* into the cache and return its path."""
+        if not VALID_VIDEO_ID.match(video_id):
+            raise ValueError(f"Invalid video_id: {video_id!r}")
         dest = self._cache_dir / f"{video_id}.{format}"
-        dest.write_bytes(data)
+        await asyncio.to_thread(dest.write_bytes, data)
         await self._index(video_id, dest, len(data), format)
         await self.evict()
         return dest
 
     async def put_file(self, video_id: str, source_path: Path, format: str) -> Path:
         """Copy (or move) *source_path* into the cache directory."""
+        if not VALID_VIDEO_ID.match(video_id):
+            raise ValueError(f"Invalid video_id: {video_id!r}")
         dest = self._cache_dir / f"{video_id}.{format}"
-        shutil.copy2(source_path, dest)
+        await asyncio.to_thread(shutil.copy2, source_path, dest)
         file_size = dest.stat().st_size
         await self._index(video_id, dest, file_size, format)
         await self.evict()

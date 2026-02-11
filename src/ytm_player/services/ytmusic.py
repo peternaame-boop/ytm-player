@@ -16,25 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 class YTMusicService:
-    """Singleton wrapper around ytmusicapi.YTMusic with async methods.
+    """Async wrapper around ytmusicapi.YTMusic.
 
     All public methods are async and delegate to ytmusicapi's synchronous API
     through ``asyncio.to_thread`` so they never block the event loop.
     """
 
-    _instance: YTMusicService | None = None
-
     def __init__(self, auth_path: Path = AUTH_FILE, auth_manager: AuthManager | None = None) -> None:
         self._auth_path = auth_path
         self._auth_manager = auth_manager
         self._ytm: YTMusic | None = None
-
-    @classmethod
-    def get_instance(cls, auth_path: Path = AUTH_FILE, auth_manager: AuthManager | None = None) -> YTMusicService:
-        """Return the singleton instance, creating it on first call."""
-        if cls._instance is None:
-            cls._instance = cls(auth_path, auth_manager)
-        return cls._instance
 
     @property
     def client(self) -> YTMusic:
@@ -401,10 +392,3 @@ class YTMusicService:
             return []
 
 
-# ------------------------------------------------------------------
-# Module-level convenience accessor
-# ------------------------------------------------------------------
-
-def get_ytmusic_service(auth_path: Path = AUTH_FILE) -> YTMusicService:
-    """Return the global YTMusicService singleton."""
-    return YTMusicService.get_instance(auth_path)

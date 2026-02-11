@@ -122,18 +122,6 @@ class Player:
         except ValueError:
             pass
 
-    def on_track_change(self, callback: PlayerCallback) -> None:
-        self.on(PlayerEvent.TRACK_CHANGE, callback)
-
-    def on_track_end(self, callback: PlayerCallback) -> None:
-        self.on(PlayerEvent.TRACK_END, callback)
-
-    def on_position_change(self, callback: PlayerCallback) -> None:
-        self.on(PlayerEvent.POSITION_CHANGE, callback)
-
-    def on_error(self, callback: PlayerCallback) -> None:
-        self.on(PlayerEvent.ERROR, callback)
-
     def clear_callbacks(self) -> None:
         """Remove all registered callbacks."""
         for event in PlayerEvent:
@@ -146,11 +134,11 @@ class Player:
         via call_soon_threadsafe to bridge from mpv's thread.
         """
         loop = self._get_loop()
-        for cb in self._callbacks[event]:
+        for cb in list(self._callbacks[event]):
             try:
                 if loop is not None and not loop.is_closed():
                     if asyncio.iscoroutinefunction(cb):
-                        loop.call_soon_threadsafe(asyncio.ensure_future, cb(*args))
+                        loop.call_soon_threadsafe(lambda _cb=cb: asyncio.create_task(_cb(*args)))
                     else:
                         loop.call_soon_threadsafe(cb, *args)
                 else:

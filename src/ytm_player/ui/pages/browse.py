@@ -14,7 +14,7 @@ from textual.widgets import Label, ListItem, ListView, Static
 
 from ytm_player.config.keymap import Action
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import truncate
+from ytm_player.utils.formatting import extract_artist, get_video_id, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -193,13 +193,9 @@ class ForYouSection(Widget):
             for item in contents[:8]:
                 item_title = item.get("title", "Unknown")
                 subtitle_parts: list[str] = []
-                artists = item.get("artists")
-                if isinstance(artists, list) and artists:
-                    artist_str = ", ".join(
-                        a.get("name", "") for a in artists if isinstance(a, dict)
-                    )
-                    if artist_str:
-                        subtitle_parts.append(artist_str)
+                artist_str = extract_artist(item)
+                if artist_str and artist_str != "Unknown":
+                    subtitle_parts.append(artist_str)
                 description = item.get("description", "")
                 if description:
                     subtitle_parts.append(description)
@@ -397,7 +393,7 @@ class ChartsSection(Widget):
         try:
             self.query_one("#charts-content").display = False
         except Exception:
-            pass
+            logger.debug("Failed to hide charts content on mount", exc_info=True)
 
     async def load_data(self, country: str = "ZZ") -> None:
         """Fetch and display chart data for *country*."""
@@ -444,7 +440,7 @@ class ChartsSection(Widget):
         try:
             self.query_one("#charts-content").display = False
         except Exception:
-            pass
+            logger.debug("Failed to hide charts content on error", exc_info=True)
 
 
 class NewReleasesSection(Widget):
@@ -501,7 +497,7 @@ class NewReleasesSection(Widget):
         try:
             self.query_one("#releases-content").display = False
         except Exception:
-            pass
+            logger.debug("Failed to hide releases content on mount", exc_info=True)
 
     async def load_data(self) -> None:
         """Fetch and display new releases."""
@@ -527,13 +523,9 @@ class NewReleasesSection(Widget):
 
         for album in self._albums:
             title = album.get("title", "Unknown Album")
-            artists = album.get("artists")
-            if isinstance(artists, list) and artists:
-                artist_str = ", ".join(
-                    a.get("name", "") for a in artists if isinstance(a, dict) and a.get("name")
-                )
-            else:
-                artist_str = album.get("artist", "")
+            artist_str = extract_artist(album)
+            if artist_str == "Unknown":
+                artist_str = ""
             album_type = album.get("type", "")
             year = album.get("year", "")
 
@@ -558,7 +550,7 @@ class NewReleasesSection(Widget):
         try:
             self.query_one("#releases-content").display = False
         except Exception:
-            pass
+            logger.debug("Failed to hide releases content on error", exc_info=True)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle album selection."""
@@ -653,7 +645,7 @@ class BrowsePage(Widget):
                 else:
                     section.remove_class("active-section")
             except Exception:
-                pass
+                logger.debug("Failed to toggle browse section '%s'", sid, exc_info=True)
 
         self.active_tab = index
         self._load_tab(index)
@@ -718,6 +710,7 @@ class BrowsePage(Widget):
                         )
         except Exception:
             logger.exception("Failed to load mood playlists")
+            self.app.notify("Failed to load mood playlists", severity="error")
 
     async def on_new_releases_section_album_selected(
         self, event: NewReleasesSection.AlbumSelected
@@ -735,7 +728,7 @@ class BrowsePage(Widget):
     async def _navigate_item(self, item: dict[str, Any]) -> None:
         """Route an item to the appropriate context page or play it directly."""
         result_type = item.get("resultType", item.get("type", ""))
-        video_id = item.get("videoId") or item.get("video_id")
+        video_id = get_video_id(item)
         browse_id = item.get("browseId")
 
         if result_type in ("song", "video", "flat_song") or video_id:
