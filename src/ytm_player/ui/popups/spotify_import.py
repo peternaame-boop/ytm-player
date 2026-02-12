@@ -310,7 +310,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
             # ── Multi mode content ──
             with Vertical(id="si-multi-content"):
                 yield Input(
-                    placeholder="Combined playlist name (e.g. Pangaea)",
+                    placeholder="Combined playlist name (e.g. My Playlist)",
                     id="si-multi-name-input",
                 )
                 yield Input(
