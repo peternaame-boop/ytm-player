@@ -439,40 +439,45 @@ MIT — see [LICENSE](LICENSE).
 
 ### v1.1.0 (2026-02-12)
 
-- Thread safety for queue manager (prevents race conditions)
-- IPC socket security hardening (permissions, command whitelist, input validation)
-- Stream URL expiry checks before playback
-- File permissions hardened to 0o600 across all config/state files
-- mpv crash detection and automatic recovery
-- API timeout handling (15s default, prevents TUI hangs on slow networks)
-- Gapless playback enabled by default
-- Queue persistence across restarts (saved in session.json)
-- Track change notifications wired to `[notifications]` config section
-- Human-readable error messages throughout
+**Features**
 - Liked Songs page (`g y`) — browse and play your liked music
 - Recently Played page (`g r`) — local history from SQLite
 - Download for offline — right-click any track → "Download for Offline"
 - Discord Rich Presence — show what you're listening to (optional, `pip install -e ".[discord]"`)
 - Last.fm scrobbling — automatic scrobbling + Now Playing (optional, `pip install -e ".[lastfm]"`)
+- Gapless playback enabled by default
+- Queue persistence across restarts (saved in session.json)
+- Track change notifications wired to `[notifications]` config section
 - New config sections: `[discord]`, `[lastfm]`, `[playback].gapless`, `[playback].api_timeout`
-- GitHub Actions CI pipeline (ruff lint + pytest with coverage)
-- Expanded test suite — 187 tests covering queue thread safety, IPC validation, stream expiry, downloads, Discord RPC, Last.fm, and settings
 
-#### Code Quality (2026-02-12)
+**Security & Stability**
+- IPC socket security hardening (permissions, command whitelist, input validation)
+- File permissions hardened to 0o600 across all config/state files
+- Thread safety for queue manager (prevents race conditions)
+- mpv crash detection and automatic recovery
+- Auth validation distinguishes network errors from invalid credentials
+- Disk-full (OSError) handling in cache and history managers
+- API timeout handling (15s default, prevents TUI hangs on slow networks)
 
-- Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
-- Removed dead code (`_download_multiple_tracks`, redundant imports)
-- Fixed encapsulation break (cache private method called from app)
-- API timeout now reads from settings at call time, not import time
+**Performance**
 - Batch DELETE for cache eviction (replaces per-row deletes)
 - Deferred cache-hit commits (every 10 hits instead of every hit)
-- Disk-full (OSError) handling in cache and history managers
-- Auth validation distinguishes network errors from invalid credentials
 - Reuse yt-dlp instance across stream resolves (was creating new per call)
-- Extracted `_init_mpv()` helper — DRY player initialization and crash recovery
 - Concurrent Spotify import matching with ThreadPoolExecutor
+- Stream URL expiry checks before playback
+
+**Bug Fixes & Code Quality**
+- Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
+- Fixed encapsulation break (cache private method called from app)
+- Removed dead code (`_download_multiple_tracks`, redundant imports)
+- API timeout now reads from settings at call time, not import time
+- Extracted `_init_mpv()` helper — DRY player initialization and crash recovery
 - Session state save failures now log at warning (was debug)
-- Test suite expanded to 231 tests (+44 new: CacheManager, HistoryManager, AuthManager, IPC handler, stream resolver)
+- Human-readable error messages throughout
+
+**Testing & CI**
+- GitHub Actions CI pipeline (ruff lint + pytest with coverage)
+- 231 tests covering queue, IPC, stream resolver, cache, history, auth, downloads, Discord RPC, Last.fm, and settings
 
 ### v1.0.0 (2026-02-07)
 
