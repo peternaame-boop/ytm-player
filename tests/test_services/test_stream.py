@@ -1,6 +1,8 @@
 """Tests for StreamResolver cache and expiry logic."""
 
+import asyncio
 import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -134,3 +136,112 @@ class TestCacheEviction:
         assert removed == 1
         assert resolver._get_cached("fresh") is not None
         assert resolver._get_cached("old") is None
+
+
+def _fake_info_dict(video_id: str = "dQw4w9WgXcQ") -> dict:
+    """Return a fake yt-dlp info dict for mocking extract_info."""
+    return {
+        "url": f"https://rr1---sn-fake.googlevideo.com/videoplayback?id={video_id}",
+        "acodec": "opus",
+        "abr": 128,
+        "duration": 213,
+        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+        "ext": "webm",
+    }
+
+
+def _mock_ydl(info_dict: dict | None = None):
+    """Create a mock YoutubeDL that returns info_dict from extract_info."""
+    mock_instance = MagicMock()
+    mock_instance.extract_info.return_value = info_dict
+    mock_class = MagicMock()
+    mock_class.return_value = mock_instance
+    return mock_class, mock_instance
+
+
+class TestResolveSync:
+    """Test the resolve_sync() path through real StreamResolver code with mocked yt-dlp."""
+
+    def test_returns_stream_info_with_correct_fields(self):
+        info_dict = _fake_info_dict("abc12345678")
+        mock_class, mock_inst = _mock_ydl(info_dict)
+        resolver = StreamResolver()
+        with patch("yt_dlp.YoutubeDL", mock_class):
+            result = resolver.resolve_sync("abc12345678")
+        assert result is not None
+        assert isinstance(result, StreamInfo)
+        assert result.video_id == "abc12345678"
+        assert result.url == info_dict["url"]
+        assert result.format == "opus"
+        assert result.bitrate == 128
+        assert result.duration == 213
+        assert result.expires_at > time.time()
+
+    def test_uses_cache_on_second_call(self):
+        info_dict = _fake_info_dict("cached01")
+        mock_class, mock_inst = _mock_ydl(info_dict)
+        resolver = StreamResolver()
+        with patch("yt_dlp.YoutubeDL", mock_class):
+            first = resolver.resolve_sync("cached01")
+            second = resolver.resolve_sync("cached01")
+        assert first is not None
+        assert second is not None
+        assert first.url == second.url
+        # yt-dlp should only be called once; second call served from cache.
+        assert mock_inst.extract_info.call_count == 1
+
+    def test_returns_none_on_download_error(self):
+        import yt_dlp
+
+        mock_class, mock_inst = _mock_ydl(None)
+        mock_inst.extract_info.side_effect = yt_dlp.utils.DownloadError("video unavailable")
+        resolver = StreamResolver()
+        with patch("yt_dlp.YoutubeDL", mock_class):
+            result = resolver.resolve_sync("failVideo01")
+        assert result is None
+
+    def test_invalid_video_id_returns_none(self):
+        resolver = StreamResolver()
+        # Characters not matching [a-zA-Z0-9_-] should be rejected.
+        result = resolver.resolve_sync("../etc/passwd")
+        assert result is None
+
+
+class TestResolveAsync:
+    """Test the async resolve() path with mocked yt-dlp."""
+
+    async def test_returns_stream_info(self):
+        info_dict = _fake_info_dict("asyncVid01")
+        mock_class, mock_inst = _mock_ydl(info_dict)
+        resolver = StreamResolver()
+        with patch("yt_dlp.YoutubeDL", mock_class):
+            result = await resolver.resolve("asyncVid01")
+        assert result is not None
+        assert isinstance(result, StreamInfo)
+        assert result.video_id == "asyncVid01"
+        assert result.url == info_dict["url"]
+
+    async def test_deduplicates_concurrent_requests(self):
+        info_dict = _fake_info_dict("dedup01")
+        mock_class, mock_inst = _mock_ydl(info_dict)
+
+        # Add a small delay to extract_info so both tasks overlap.
+        def slow_extract(*args, **kwargs):
+            import time as _time
+
+            _time.sleep(0.1)
+            return info_dict
+
+        mock_inst.extract_info.side_effect = slow_extract
+
+        resolver = StreamResolver()
+        with patch("yt_dlp.YoutubeDL", mock_class):
+            results = await asyncio.gather(
+                resolver.resolve("dedup01"),
+                resolver.resolve("dedup01"),
+            )
+        assert results[0] is not None
+        assert results[1] is not None
+        assert results[0].url == results[1].url
+        # extract_info should only be called once despite two concurrent resolve() calls.
+        assert mock_inst.extract_info.call_count == 1

@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 
+import requests.exceptions
 from ytmusicapi import YTMusic
 from ytmusicapi.helpers import get_authorization, initialize_headers, sapisid_from_cookie
 
@@ -133,6 +134,9 @@ class AuthManager:
                             logger.warning("Auth validation: server says logged_in=0")
                             return False
             return True
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            logger.warning("Auth validation failed — network error: %s", exc)
+            raise
         except Exception:
             logger.warning("Auth validation failed — credentials may be expired.")
             return False

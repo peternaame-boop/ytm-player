@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -227,6 +228,49 @@ def _fuzzy_score(spotify_track: dict, ytm_track: dict) -> int:
     return int(title_score * TITLE_MATCH_WEIGHT + artist_score * ARTIST_MATCH_WEIGHT)
 
 
+_MATCH_MAX_WORKERS = 5
+
+
+def _search_and_score(
+    ytmusic: YTMusic, sp_track: dict, index: int
+) -> tuple[int, MatchResult]:
+    """Search YTM for a single Spotify track and return (original_index, result).
+
+    Designed to run inside a thread pool.  All data it touches is either
+    thread-local (search_results, scored) or read-only (sp_track), so no
+    locking is needed.
+    """
+    query = f"{sp_track['name']} {sp_track['artist']}"
+    try:
+        search_results = ytmusic.search(query, filter="songs", limit=5)
+    except Exception:
+        search_results = []
+
+    if not search_results:
+        return index, MatchResult(
+            spotify_track=sp_track,
+            match_type=MatchType.NONE,
+        )
+
+    scored = [(_fuzzy_score(sp_track, c), c) for c in search_results]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_score, best_candidate = scored[0]
+
+    if best_score >= AUTO_MATCH_THRESHOLD:
+        return index, MatchResult(
+            spotify_track=sp_track,
+            match_type=MatchType.EXACT,
+            candidates=[c for _, c in scored],
+            selected=best_candidate,
+        )
+
+    return index, MatchResult(
+        spotify_track=sp_track,
+        match_type=MatchType.MULTIPLE,
+        candidates=[c for _, c in scored],
+    )
+
+
 def match_tracks(
     ytmusic: YTMusic, spotify_tracks: list[dict], console: Console
 ) -> list[MatchResult]:
@@ -234,7 +278,9 @@ def match_tracks(
     if not _HAS_SPOTIFY_DEPS:
         click.echo("Spotify import requires extra dependencies: pip install ytm-player[spotify]")
         return []
-    results: list[MatchResult] = []
+
+    # Pre-allocate results list so we can slot them back in order.
+    results: list[MatchResult | None] = [None] * len(spotify_tracks)
 
     with Progress(
         SpinnerColumn(),
@@ -245,53 +291,19 @@ def match_tracks(
     ) as progress:
         task = progress.add_task("Searching YouTube Music...", total=len(spotify_tracks))
 
-        for sp_track in spotify_tracks:
-            query = f"{sp_track['name']} {sp_track['artist']}"
-            try:
-                search_results = ytmusic.search(query, filter="songs", limit=5)
-            except Exception:
-                search_results = []
+        with ThreadPoolExecutor(max_workers=_MATCH_MAX_WORKERS) as executor:
+            futures = {
+                executor.submit(_search_and_score, ytmusic, sp_track, idx): idx
+                for idx, sp_track in enumerate(spotify_tracks)
+            }
 
-            if not search_results:
-                results.append(
-                    MatchResult(
-                        spotify_track=sp_track,
-                        match_type=MatchType.NONE,
-                    )
-                )
+            for future in as_completed(futures):
+                idx, match_result = future.result()
+                results[idx] = match_result
                 progress.advance(task)
-                continue
 
-            # Score each candidate.
-            scored = []
-            for candidate in search_results:
-                score = _fuzzy_score(sp_track, candidate)
-                scored.append((score, candidate))
-
-            scored.sort(key=lambda x: x[0], reverse=True)
-            best_score, best_candidate = scored[0]
-
-            if best_score >= AUTO_MATCH_THRESHOLD:
-                results.append(
-                    MatchResult(
-                        spotify_track=sp_track,
-                        match_type=MatchType.EXACT,
-                        candidates=[c for _, c in scored],
-                        selected=best_candidate,
-                    )
-                )
-            else:
-                results.append(
-                    MatchResult(
-                        spotify_track=sp_track,
-                        match_type=MatchType.MULTIPLE,
-                        candidates=[c for _, c in scored],
-                    )
-                )
-
-            progress.advance(task)
-
-    return results
+    # All slots should be filled; narrow the type for the caller.
+    return [r for r in results if r is not None]
 
 
 def _display_candidate(idx: int, candidate: dict) -> str:

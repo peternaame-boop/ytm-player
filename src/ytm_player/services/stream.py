@@ -52,6 +52,8 @@ class StreamResolver:
         self._cache: dict[str, StreamInfo] = {}
         self._cache_lock = threading.Lock()
         self._pending: dict[str, asyncio.Future[StreamInfo | None]] = {}
+        self._ydl: object | None = None
+        self._ydl_lock = threading.Lock()
 
     @property
     def quality(self) -> str:
@@ -61,7 +63,9 @@ class StreamResolver:
     def quality(self, value: str) -> None:
         if value not in QUALITY_FORMATS:
             raise ValueError(f"Unknown quality '{value}'. Choose from: {list(QUALITY_FORMATS)}")
-        self._quality = value
+        if value != self._quality:
+            self._quality = value
+            self._reset_ydl()
 
     def _build_ydl_opts(self) -> dict:
         """Build yt-dlp options for audio extraction."""
@@ -77,6 +81,25 @@ class StreamResolver:
             "writeinfojson": False,
             "writethumbnail": False,
         }
+
+    def _get_ydl(self):  # noqa: ANN201
+        """Return a reusable YoutubeDL instance, creating it lazily."""
+        import yt_dlp  # Lazy import
+
+        with self._ydl_lock:
+            if self._ydl is None:
+                self._ydl = yt_dlp.YoutubeDL(self._build_ydl_opts())
+            return self._ydl
+
+    def _reset_ydl(self) -> None:
+        """Close and discard the cached YoutubeDL instance."""
+        with self._ydl_lock:
+            if self._ydl is not None:
+                try:
+                    self._ydl.close()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                self._ydl = None
 
     def _resolve_sync(self, video_id: str) -> StreamInfo | None:
         """Synchronous stream resolution (runs in a thread) with retry."""
@@ -97,12 +120,11 @@ class StreamResolver:
 
     def _try_resolve(self, url: str, video_id: str, attempt: int) -> StreamInfo | None:
         """Single resolution attempt."""
-        import yt_dlp  # Lazy import: needed for YoutubeDL and exception types
+        import yt_dlp  # Lazy import: needed for exception types
 
         try:
-            ydl_opts = self._build_ydl_opts()
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+            ydl = self._get_ydl()
+            info = ydl.extract_info(url, download=False)
 
             if info is None:
                 logger.error("yt-dlp returned no info for video_id=%s", video_id)
@@ -278,9 +300,10 @@ class StreamResolver:
             self._cache.pop(video_id, None)
 
     def clear_cache(self) -> None:
-        """Remove all entries from the cache."""
+        """Remove all entries from the cache and reset the yt-dlp instance."""
         with self._cache_lock:
             self._cache.clear()
+        self._reset_ydl()
 
     def prune_expired(self) -> int:
         """Remove expired entries from the cache. Returns number removed."""

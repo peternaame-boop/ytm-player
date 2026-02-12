@@ -434,7 +434,7 @@ class YTMPlayerApp(App):
             SESSION_STATE_FILE.write_text(json.dumps(state))
             os.chmod(SESSION_STATE_FILE, SECURE_FILE_MODE)
         except Exception:
-            logger.debug("Could not save session state", exc_info=True)
+            logger.warning("Could not save session state", exc_info=True)
 
     # ── Key handling ─────────────────────────────────────────────────
 

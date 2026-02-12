@@ -74,12 +74,16 @@ class HistoryManager:
         await self._db.commit()
 
         # Prune old entries beyond retention limit.
-        await self._db.execute(
-            "DELETE FROM play_history WHERE rowid NOT IN "
-            "(SELECT rowid FROM play_history ORDER BY played_at DESC LIMIT ?)",
-            (self._max_history,),
-        )
-        await self._db.commit()
+        try:
+            await self._db.execute(
+                "DELETE FROM play_history WHERE rowid NOT IN "
+                "(SELECT rowid FROM play_history ORDER BY played_at DESC LIMIT ?)",
+                (self._max_history,),
+            )
+            await self._db.commit()
+        except OSError as exc:
+            logger.warning("Failed to prune history database: %s", exc)
+            raise RuntimeError(f"Failed to write to history database: {exc}") from exc
 
         logger.info("History database initialised at %s", self._db_path)
 
@@ -102,18 +106,22 @@ class HistoryManager:
         """Record a search query, incrementing the counter on duplicates."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
-        await self._db.execute(
-            """
-            INSERT INTO search_history (query, filter_mode, result_count)
-            VALUES (?, ?, ?)
-            ON CONFLICT(query, filter_mode) DO UPDATE SET
-                search_count = search_count + 1,
-                result_count = excluded.result_count,
-                last_searched = datetime('now')
-            """,
-            (query, filter_mode, result_count),
-        )
-        await self._db.commit()
+        try:
+            await self._db.execute(
+                """
+                INSERT INTO search_history (query, filter_mode, result_count)
+                VALUES (?, ?, ?)
+                ON CONFLICT(query, filter_mode) DO UPDATE SET
+                    search_count = search_count + 1,
+                    result_count = excluded.result_count,
+                    last_searched = datetime('now')
+                """,
+                (query, filter_mode, result_count),
+            )
+            await self._db.commit()
+        except OSError as exc:
+            logger.warning("Failed to log search to history database: %s", exc)
+            raise RuntimeError(f"Failed to write to history database: {exc}") from exc
 
     async def get_search_history(self, limit: int = 50) -> list[dict]:
         """Return recent searches ordered by last_searched descending."""
@@ -153,8 +161,12 @@ class HistoryManager:
         """Delete all search history records."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
-        await self._db.execute("DELETE FROM search_history")
-        await self._db.commit()
+        try:
+            await self._db.execute("DELETE FROM search_history")
+            await self._db.commit()
+        except OSError as exc:
+            logger.warning("Failed to clear search history: %s", exc)
+            raise RuntimeError(f"Failed to write to history database: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Play history
@@ -183,32 +195,36 @@ class HistoryManager:
         album = track.get("album", "")
         duration = track.get("duration_seconds", 0)
 
-        await self._db.execute(
-            """
-            INSERT INTO play_history
-                (video_id, title, artist, album, duration_seconds,
-                 listened_seconds, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (video_id, title, artist, album, duration, listened_seconds, source),
-        )
+        try:
+            await self._db.execute(
+                """
+                INSERT INTO play_history
+                    (video_id, title, artist, album, duration_seconds,
+                     listened_seconds, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (video_id, title, artist, album, duration, listened_seconds, source),
+            )
 
-        await self._db.execute(
-            """
-            INSERT INTO play_stats (video_id, title, artist, play_count,
-                                    total_listened_seconds, last_played)
-            VALUES (?, ?, ?, 1, ?, datetime('now'))
-            ON CONFLICT(video_id) DO UPDATE SET
-                title = excluded.title,
-                artist = excluded.artist,
-                play_count = play_count + 1,
-                total_listened_seconds = total_listened_seconds + excluded.total_listened_seconds,
-                last_played = datetime('now')
-            """,
-            (video_id, title, artist, listened_seconds),
-        )
+            await self._db.execute(
+                """
+                INSERT INTO play_stats (video_id, title, artist, play_count,
+                                        total_listened_seconds, last_played)
+                VALUES (?, ?, ?, 1, ?, datetime('now'))
+                ON CONFLICT(video_id) DO UPDATE SET
+                    title = excluded.title,
+                    artist = excluded.artist,
+                    play_count = play_count + 1,
+                    total_listened_seconds = total_listened_seconds + excluded.total_listened_seconds,
+                    last_played = datetime('now')
+                """,
+                (video_id, title, artist, listened_seconds),
+            )
 
-        await self._db.commit()
+            await self._db.commit()
+        except OSError as exc:
+            logger.warning("Failed to log play to history database: %s", exc)
+            raise RuntimeError(f"Failed to write to history database: {exc}") from exc
 
     async def get_play_history(self, limit: int = 100) -> list[dict]:
         """Return play history ordered by most recent first."""

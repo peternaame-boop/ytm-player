@@ -1,8 +1,11 @@
 """Tests for IPC validation logic."""
 
+import asyncio
 import json
 
-from ytm_player.ipc import _VALID_COMMANDS
+import pytest
+
+from ytm_player.ipc import _VALID_COMMANDS, IPCServer
 
 
 class TestIPCCommandWhitelist:
@@ -88,3 +91,74 @@ class TestIPCPayloadValidation:
         big = "x" * 70000
         payload = json.dumps({"command": "play", "args": {"data": big}})
         assert len(payload.encode()) > 65536
+
+
+class TestIPCServerHandler:
+    """Exercise the real IPCServer._client_connected handler via a Unix socket."""
+
+    @pytest.fixture
+    async def ipc_env(self, tmp_path):
+        """Start an IPCServer on a temp socket and yield a helper to send messages."""
+        socket_path = tmp_path / "test.sock"
+
+        async def handler(command: str, args: dict) -> dict:
+            return {"ok": True, "command": command, "args": args}
+
+        server = IPCServer(handler)
+
+        # Patch SOCKET_PATH for this server instance so it uses the temp path.
+        import ytm_player.ipc as ipc_mod
+
+        original = ipc_mod.SOCKET_PATH
+        ipc_mod.SOCKET_PATH = socket_path
+        try:
+            await server.start()
+
+            async def send(payload: bytes) -> dict:
+                reader, writer = await asyncio.open_unix_connection(str(socket_path))
+                writer.write(payload)
+                writer.write_eof()
+                data = await asyncio.wait_for(reader.read(), timeout=5)
+                writer.close()
+                await writer.wait_closed()
+                return json.loads(data)
+
+            yield send
+        finally:
+            await server.stop()
+            ipc_mod.SOCKET_PATH = original
+
+    async def test_valid_command_returns_handler_response(self, ipc_env):
+        send = ipc_env
+        payload = json.dumps({"command": "play", "args": {"video_id": "abc123"}}).encode()
+        resp = await send(payload)
+        assert resp["ok"] is True
+        assert resp["command"] == "play"
+        assert resp["args"] == {"video_id": "abc123"}
+
+    async def test_invalid_json_returns_error(self, ipc_env):
+        send = ipc_env
+        resp = await send(b"not json at all{{{")
+        assert resp["ok"] is False
+        assert "invalid JSON" in resp["error"]
+
+    async def test_unknown_command_returns_error(self, ipc_env):
+        send = ipc_env
+        payload = json.dumps({"command": "drop_tables"}).encode()
+        resp = await send(payload)
+        assert resp["ok"] is False
+        assert "unknown command" in resp["error"]
+
+    async def test_non_dict_payload_returns_error(self, ipc_env):
+        send = ipc_env
+        payload = json.dumps([1, 2, 3]).encode()
+        resp = await send(payload)
+        assert resp["ok"] is False
+        assert "expected JSON object" in resp["error"]
+
+    async def test_missing_command_field_returns_error(self, ipc_env):
+        send = ipc_env
+        payload = json.dumps({"args": {"foo": "bar"}}).encode()
+        resp = await send(payload)
+        assert resp["ok"] is False
+        assert "unknown command" in resp["error"]

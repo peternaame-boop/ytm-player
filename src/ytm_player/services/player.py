@@ -53,6 +53,30 @@ class Player:
             return
         self._initialized = True
 
+        self._current_track: dict | None = None
+        self._callbacks: dict[PlayerEvent, list[PlayerCallback]] = {
+            event: [] for event in PlayerEvent
+        }
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # Counter for end-file events to ignore.  Incremented when we
+        # intentionally replace/stop a track (so the resulting end-file
+        # from mpv doesn't trigger auto-advance).
+        self._end_file_skip: int = 0
+        self._skip_lock = threading.Lock()
+        self._last_position_dispatch: float = 0.0
+
+        self._mpv = self._init_mpv()
+
+    def _init_mpv(self) -> mpv.MPV:
+        """Create and configure a new mpv instance.
+
+        Sets LC_NUMERIC locale, creates the MPV process, enables gapless
+        audio if configured, and registers property observers and the
+        end-file event callback.
+
+        Prerequisites: ``_end_file_skip``, ``_skip_lock``, and ``_callbacks``
+        must already be initialised on *self* before calling this method.
+        """
         # mpv segfaults if LC_NUMERIC is not C.  Textual's async runtime
         # resets locale, so we must force it immediately before mpv init.
         import ctypes
@@ -66,7 +90,7 @@ class Player:
 
         settings = get_settings()
 
-        self._mpv = mpv.MPV(
+        instance = mpv.MPV(
             ytdl=False,
             video=False,
             terminal=False,
@@ -77,27 +101,15 @@ class Player:
         # Enable gapless playback if configured.
         if settings.playback.gapless:
             try:
-                self._mpv["gapless-audio"] = "yes"
+                instance["gapless-audio"] = "yes"
             except Exception:
                 logger.debug("Failed to enable gapless-audio")
 
-        self._current_track: dict | None = None
-        self._callbacks: dict[PlayerEvent, list[PlayerCallback]] = {
-            event: [] for event in PlayerEvent
-        }
-        self._loop: asyncio.AbstractEventLoop | None = None
-        # Counter for end-file events to ignore.  Incremented when we
-        # intentionally replace/stop a track (so the resulting end-file
-        # from mpv doesn't trigger auto-advance).
-        self._end_file_skip: int = 0
-        self._skip_lock = threading.Lock()
-        self._last_position_dispatch: float = 0.0
-
         # Register mpv property observers and event handlers.
-        self._mpv.observe_property("time-pos", self._on_time_pos_change)
-        self._mpv.observe_property("pause", self._on_pause_change)
+        instance.observe_property("time-pos", self._on_time_pos_change)
+        instance.observe_property("pause", self._on_pause_change)
 
-        @self._mpv.event_callback("end-file")
+        @instance.event_callback("end-file")
         def _on_end_file(event: Any) -> None:
             with self._skip_lock:
                 if self._end_file_skip > 0:
@@ -106,6 +118,8 @@ class Player:
             # Check if this was an error vs normal EOF.
             reason = getattr(event, "reason", None) if event else None
             self._dispatch(PlayerEvent.TRACK_END, {"reason": reason})
+
+        return instance
 
     def _get_loop(self) -> asyncio.AbstractEventLoop | None:
         """Get the event loop, caching the reference."""
@@ -315,49 +329,14 @@ class Player:
         """Attempt to re-create the mpv instance after a crash."""
         try:
             logger.info("Re-initializing mpv instance...")
-            import ctypes
-            import locale as _locale
-
-            _libc = ctypes.CDLL("libc.so.6")
-            _libc.setlocale.restype = ctypes.c_char_p
-            _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
-            _libc.setlocale(_locale.LC_NUMERIC, b"C")
-
-            self._mpv = mpv.MPV(
-                ytdl=False,
-                video=False,
-                terminal=False,
-                input_default_bindings=False,
-                input_vo_keyboard=False,
-            )
-
-            from ytm_player.config.settings import get_settings
-
-            if get_settings().playback.gapless:
-                try:
-                    self._mpv["gapless-audio"] = "yes"
-                except Exception:
-                    pass
-
-            # Re-register observers.
-            self._mpv.observe_property("time-pos", self._on_time_pos_change)
-            self._mpv.observe_property("pause", self._on_pause_change)
-
-            @self._mpv.event_callback("end-file")
-            def _on_end_file(event: Any) -> None:
-                with self._skip_lock:
-                    if self._end_file_skip > 0:
-                        self._end_file_skip -= 1
-                        return
-                reason = getattr(event, "reason", None) if event else None
-                self._dispatch(PlayerEvent.TRACK_END, {"reason": reason})
+            self._mpv = self._init_mpv()
 
             # Restore volume if possible.
             if self._loop and not self._loop.is_closed():
                 try:
-                    from ytm_player.config.settings import get_settings as _gs
+                    from ytm_player.config.settings import get_settings
 
-                    self._mpv.volume = _gs().playback.default_volume
+                    self._mpv.volume = get_settings().playback.default_volume
                 except Exception:
                     self._mpv.volume = 80
 

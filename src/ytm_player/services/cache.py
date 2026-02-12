@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS cache_index (
 """
 
 
+class CacheError(OSError):
+    """Raised when a cache write operation fails (e.g. disk full)."""
+
+
+_COMMIT_EVERY = 10  # Commit after this many cache hits instead of every one.
+
+
 class CacheManager:
     """Manages a local audio-file cache with LRU eviction."""
 
@@ -42,6 +49,7 @@ class CacheManager:
         self._db_path = db_path
         self._max_size_mb = max_size_mb if max_size_mb is not None else settings.cache.max_size_mb
         self._db: aiosqlite.Connection | None = None
+        self._hit_count: int = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -64,8 +72,11 @@ class CacheManager:
         )
 
     async def close(self) -> None:
-        """Close the database connection."""
+        """Flush pending writes and close the database connection."""
         if self._db is not None:
+            if self._hit_count > 0:
+                await self._db.commit()
+                self._hit_count = 0
             await self._db.close()
             self._db = None
 
@@ -99,7 +110,10 @@ class CacheManager:
             "UPDATE cache_index SET last_accessed = datetime('now') WHERE video_id = ?",
             (video_id,),
         )
-        await self._db.commit()
+        self._hit_count += 1
+        if self._hit_count >= _COMMIT_EVERY:
+            await self._db.commit()
+            self._hit_count = 0
         return path
 
     async def put(self, video_id: str, data: bytes, format: str) -> Path:
@@ -107,9 +121,13 @@ class CacheManager:
         if not VALID_VIDEO_ID.match(video_id):
             raise ValueError(f"Invalid video_id: {video_id!r}")
         dest = self._cache_dir / f"{video_id}.{format}"
-        await asyncio.to_thread(dest.write_bytes, data)
-        await self._index(video_id, dest, len(data), format)
-        await self.evict()
+        try:
+            await asyncio.to_thread(dest.write_bytes, data)
+            await self._index(video_id, dest, len(data), format)
+            await self.evict()
+        except OSError as exc:
+            logger.warning("Cache write failed for %s: %s", video_id, exc)
+            raise CacheError(f"Failed to cache {video_id}: {exc}") from exc
         return dest
 
     async def put_file(self, video_id: str, source_path: Path, format: str) -> Path:
@@ -117,10 +135,14 @@ class CacheManager:
         if not VALID_VIDEO_ID.match(video_id):
             raise ValueError(f"Invalid video_id: {video_id!r}")
         dest = self._cache_dir / f"{video_id}.{format}"
-        await asyncio.to_thread(shutil.copy2, source_path, dest)
-        file_size = dest.stat().st_size
-        await self._index(video_id, dest, file_size, format)
-        await self.evict()
+        try:
+            await asyncio.to_thread(shutil.copy2, source_path, dest)
+            file_size = dest.stat().st_size
+            await self._index(video_id, dest, file_size, format)
+            await self.evict()
+        except OSError as exc:
+            logger.warning("Cache write failed for %s: %s", video_id, exc)
+            raise CacheError(f"Failed to cache {video_id}: {exc}") from exc
         return dest
 
     async def has(self, video_id: str) -> bool:
@@ -137,32 +159,40 @@ class CacheManager:
         """Remove a single cached file and its index entry."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
-        async with self._db.execute(
-            "SELECT file_path FROM cache_index WHERE video_id = ?",
-            (video_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
-
-        if row is not None:
-            path = Path(row["file_path"])
-            path.unlink(missing_ok=True)
-            await self._db.execute(
-                "DELETE FROM cache_index WHERE video_id = ?",
+        try:
+            async with self._db.execute(
+                "SELECT file_path FROM cache_index WHERE video_id = ?",
                 (video_id,),
-            )
-            await self._db.commit()
+            ) as cursor:
+                row = await cursor.fetchone()
+
+            if row is not None:
+                path = Path(row["file_path"])
+                path.unlink(missing_ok=True)
+                await self._db.execute(
+                    "DELETE FROM cache_index WHERE video_id = ?",
+                    (video_id,),
+                )
+                await self._db.commit()
+        except OSError as exc:
+            logger.warning("Cache remove failed for %s: %s", video_id, exc)
+            raise CacheError(f"Failed to remove {video_id} from cache: {exc}") from exc
 
     async def clear(self) -> None:
         """Wipe the entire cache (files and index)."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
-        async with self._db.execute("SELECT file_path FROM cache_index") as cursor:
-            rows = await cursor.fetchall()
-        for row in rows:
-            Path(row["file_path"]).unlink(missing_ok=True)
-        await self._db.execute("DELETE FROM cache_index")
-        await self._db.commit()
-        logger.info("Cache cleared")
+        try:
+            async with self._db.execute("SELECT file_path FROM cache_index") as cursor:
+                rows = await cursor.fetchall()
+            for row in rows:
+                Path(row["file_path"]).unlink(missing_ok=True)
+            await self._db.execute("DELETE FROM cache_index")
+            await self._db.commit()
+            logger.info("Cache cleared")
+        except OSError as exc:
+            logger.warning("Cache clear failed: %s", exc)
+            raise CacheError(f"Failed to clear cache: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Status & eviction
@@ -198,24 +228,32 @@ class CacheManager:
         if total <= max_bytes:
             return
 
-        # Fetch entries ordered by oldest access first (LRU).
-        async with self._db.execute(
-            "SELECT video_id, file_path, file_size FROM cache_index ORDER BY last_accessed ASC"
-        ) as cursor:
-            rows = await cursor.fetchall()
+        try:
+            # Fetch entries ordered by oldest access first (LRU).
+            async with self._db.execute(
+                "SELECT video_id, file_path, file_size FROM cache_index ORDER BY last_accessed ASC"
+            ) as cursor:
+                rows = await cursor.fetchall()
 
-        for row in rows:
-            if total <= max_bytes:
-                break
-            Path(row["file_path"]).unlink(missing_ok=True)
-            await self._db.execute(
-                "DELETE FROM cache_index WHERE video_id = ?",
-                (row["video_id"],),
-            )
-            total -= row["file_size"]
-            logger.debug("Evicted %s (%d bytes)", row["video_id"], row["file_size"])
+            evict_ids: list[str] = []
+            for row in rows:
+                if total <= max_bytes:
+                    break
+                Path(row["file_path"]).unlink(missing_ok=True)
+                evict_ids.append(row["video_id"])
+                total -= row["file_size"]
+                logger.debug("Evicted %s (%d bytes)", row["video_id"], row["file_size"])
 
-        await self._db.commit()
+            if evict_ids:
+                placeholders = ",".join("?" for _ in evict_ids)
+                await self._db.execute(
+                    f"DELETE FROM cache_index WHERE video_id IN ({placeholders})",
+                    evict_ids,
+                )
+                await self._db.commit()
+        except OSError as exc:
+            logger.warning("Cache eviction failed: %s", exc)
+            raise CacheError(f"Failed to evict cache entries: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -231,12 +269,16 @@ class CacheManager:
         """Insert or replace an entry in the cache index."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
-        await self._db.execute(
-            """
-            INSERT OR REPLACE INTO cache_index
-                (video_id, file_path, file_size, format)
-            VALUES (?, ?, ?, ?)
-            """,
-            (video_id, str(path), file_size, format),
-        )
-        await self._db.commit()
+        try:
+            await self._db.execute(
+                """
+                INSERT OR REPLACE INTO cache_index
+                    (video_id, file_path, file_size, format)
+                VALUES (?, ?, ?, ?)
+                """,
+                (video_id, str(path), file_size, format),
+            )
+            await self._db.commit()
+        except OSError as exc:
+            logger.warning("Cache index write failed for %s: %s", video_id, exc)
+            raise CacheError(f"Failed to index {video_id} in cache: {exc}") from exc
