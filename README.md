@@ -434,7 +434,6 @@ MIT — see [LICENSE](LICENSE).
 
 ### v1.1.0 (2026-02-12)
 
-**Phase 1 — Rock Solid:**
 - Thread safety for queue manager (prevents race conditions)
 - IPC socket security hardening (permissions, command whitelist, input validation)
 - Stream URL expiry checks before playback
@@ -445,8 +444,6 @@ MIT — see [LICENSE](LICENSE).
 - Queue persistence across restarts (saved in session.json)
 - Track change notifications wired to `[notifications]` config section
 - Human-readable error messages throughout
-
-**Phase 2 — Feature Drop:**
 - Liked Songs page (`g y`) — browse and play your liked music
 - Recently Played page (`g r`) — local history from SQLite
 - Download for offline — right-click any track → "Download for Offline"
