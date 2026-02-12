@@ -8,32 +8,36 @@ image cannot be fetched.
 from __future__ import annotations
 
 import logging
-import urllib.request
 from collections import OrderedDict
+from io import BytesIO
+from urllib.request import urlopen
 
+from rich.color import Color
+from rich.style import Style
+from rich.text import Text
 from textual.events import Resize
 from textual.reactive import reactive
 from textual.widget import Widget
-from rich.style import Style
-from rich.color import Color
-from rich.text import Text
 
 logger = logging.getLogger(__name__)
 
 try:
     from PIL import Image
-    import io
-    HAS_PILLOW = True
+
+    _HAS_PILLOW = True
 except ImportError:
-    HAS_PILLOW = False
+    _HAS_PILLOW = False
 
 # Unicode block characters.
-_BLOCK_TOP = "\u2580"     # Upper half block ▀
+_BLOCK_TOP = "\u2580"  # Upper half block ▀
 _BLOCK_BOTTOM = "\u2584"  # Lower half block ▄
-_BLOCK_FULL = "\u2588"    # Full block █
-_NOTE = "\u266b"          # Beamed eighth notes ♫
+_BLOCK_FULL = "\u2588"  # Full block █
+_NOTE = "\u266b"  # Beamed eighth notes ♫
 
-_LRU_MAX = 20
+# Module-level thumbnail cache: URL -> rendered Text.
+_ART_CACHE: OrderedDict[str, Text] = OrderedDict()
+_ART_CACHE_MAX = 20
+
 _DOWNLOAD_TIMEOUT = 5
 
 
@@ -70,7 +74,6 @@ class AlbumArt(Widget):
         self._accent_color = accent_color
         self._bg_color = bg_color
         self._rendered: Text | None = None
-        self._cache: OrderedDict[str, bytes] = OrderedDict()
 
     # ── Reactive watchers ─────────────────────────────────────────────
 
@@ -79,79 +82,84 @@ class AlbumArt(Widget):
             self._rendered = None
         self.refresh()
 
-    def watch_thumbnail_url(self, url: str) -> None:
-        self._rendered = None
-        if url and HAS_PILLOW:
-            self.run_worker(self._load_thumbnail(url), exclusive=True)
-        else:
+    def watch_thumbnail_url(self, value: str) -> None:
+        """When thumbnail URL changes, fetch and render the image."""
+        if value and _HAS_PILLOW:
+            self.run_worker(
+                self._load_thumbnail(value), exclusive=True, group="album-art"
+            )
+        elif not value:
+            self._rendered = None
             self.refresh()
 
     # ── Thumbnail loading ─────────────────────────────────────────────
 
     async def _load_thumbnail(self, url: str) -> None:
+        """Download thumbnail and convert to half-block art."""
         import asyncio
 
-        # Check LRU cache.
-        if url in self._cache:
-            self._cache.move_to_end(url)
-            img_bytes = self._cache[url]
-        else:
-            try:
-                img_bytes = await asyncio.to_thread(self._download, url)
-            except Exception:
-                logger.debug("Failed to download thumbnail: %s", url, exc_info=True)
-                return
-
-            self._cache[url] = img_bytes
-            if len(self._cache) > _LRU_MAX:
-                self._cache.popitem(last=False)
-
-        w = self.size.width
-        h = self.size.height
-        if w < 3 or h < 1:
+        # Check cache first.
+        if url in _ART_CACHE:
+            _ART_CACHE.move_to_end(url)
+            self._rendered = _ART_CACHE[url]
+            self.refresh()
             return
 
         try:
-            self._rendered = self._image_to_half_blocks(img_bytes, w, h)
-        except Exception:
-            logger.debug("Failed to render thumbnail", exc_info=True)
-            self._rendered = None
+            img_bytes = await asyncio.to_thread(self._download, url)
+            w = self.size.width
+            h = self.size.height
+            if w < 2 or h < 1:
+                return
+            rendered = self._image_to_half_blocks(img_bytes, w, h)
 
-        self.refresh()
+            # Cache it.
+            _ART_CACHE[url] = rendered
+            if len(_ART_CACHE) > _ART_CACHE_MAX:
+                _ART_CACHE.popitem(last=False)
+
+            self._rendered = rendered
+            self.refresh()
+        except Exception:
+            logger.debug("Failed to load album art from %s", url, exc_info=True)
+            self._rendered = None
+            self.refresh()
 
     @staticmethod
     def _download(url: str) -> bytes:
-        req = urllib.request.Request(url, headers={"User-Agent": "ytm-player/1.0"})
-        with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
+        """Download image bytes (runs in thread)."""
+        with urlopen(url, timeout=_DOWNLOAD_TIMEOUT) as resp:  # noqa: S310
             return resp.read()
 
     # ── Half-block rendering ──────────────────────────────────────────
 
     @staticmethod
     def _image_to_half_blocks(img_bytes: bytes, width: int, height: int) -> Text:
-        """Convert image bytes to a Rich Text of colored half-block characters.
+        """Convert image to colored half-block characters.
 
-        Each character cell maps to two vertical pixels: the top pixel
-        colour becomes the foreground (▀) and the bottom pixel colour
-        becomes the background.
+        Each character cell represents 2 vertical pixels using the upper
+        half block (▀) with foreground = top pixel, background = bottom pixel.
         """
-        img = Image.open(io.BytesIO(img_bytes))
-        # Resize: width pixels across, height*2 pixels tall (2 pixel rows per char row).
-        img = img.convert("RGB").resize((width, height * 2), Image.LANCZOS)
+        img = Image.open(BytesIO(img_bytes)).convert("RGB")
+        # Each char = 1 pixel wide, 2 pixels tall.
+        pixel_w = width
+        pixel_h = height * 2
+        img = img.resize((pixel_w, pixel_h), Image.LANCZOS)
 
         result = Text()
-        pixels = img.load()
         for row in range(height):
             if row > 0:
                 result.append("\n")
-            for col in range(width):
-                top_r, top_g, top_b = pixels[col, row * 2]
-                bot_r, bot_g, bot_b = pixels[col, row * 2 + 1]
+            top_y = row * 2
+            bot_y = row * 2 + 1
+            for col in range(pixel_w):
+                tr, tg, tb = img.getpixel((col, top_y))
+                br, bg, bb = img.getpixel((col, bot_y))
                 style = Style(
-                    color=Color.from_rgb(top_r, top_g, top_b),
-                    bgcolor=Color.from_rgb(bot_r, bot_g, bot_b),
+                    color=Color.from_rgb(tr, tg, tb),
+                    bgcolor=Color.from_rgb(br, bg, bb),
                 )
-                result.append(_BLOCK_TOP, style=style)
+                result.append("\u2580", style=style)
         return result
 
     # ── Rendering ─────────────────────────────────────────────────────
@@ -160,11 +168,11 @@ class AlbumArt(Widget):
         w = self.size.width
         h = self.size.height
 
+        if self._rendered is not None and self.has_track:
+            return self._rendered
+
         if not self.has_track or w < 3 or h < 1:
             return self._render_empty(w, h)
-
-        if self._rendered is not None:
-            return self._rendered
 
         return self._render_placeholder(w, h)
 
@@ -208,19 +216,16 @@ class AlbumArt(Widget):
         return result
 
     def on_resize(self, event: Resize) -> None:
-        """Re-render cached image at the new widget dimensions."""
-        if not HAS_PILLOW or not self.has_track or not self.thumbnail_url:
+        """Re-render on resize if we have a cached image for the current URL."""
+        if not _HAS_PILLOW or not self.has_track or not self.thumbnail_url:
             return
         url = self.thumbnail_url
-        if url in self._cache:
-            w = event.size.width
-            h = event.size.height
-            if w >= 3 and h >= 1:
-                try:
-                    self._rendered = self._image_to_half_blocks(self._cache[url], w, h)
-                except Exception:
-                    logger.debug("Failed to re-render thumbnail on resize", exc_info=True)
-                    self._rendered = None
+        # If the URL is in cache, invalidate and re-fetch at new size.
+        if url in _ART_CACHE:
+            del _ART_CACHE[url]
+        self.run_worker(
+            self._load_thumbnail(url), exclusive=True, group="album-art"
+        )
 
     def set_track(self, thumbnail_url: str = "") -> None:
         """Update the widget for a new track."""
@@ -229,5 +234,6 @@ class AlbumArt(Widget):
 
     def clear_track(self) -> None:
         """Clear the current track display."""
+        self._rendered = None
         self.has_track = False
         self.thumbnail_url = ""
