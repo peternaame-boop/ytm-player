@@ -246,6 +246,11 @@ prefetch_next = true
 album_art = true
 progress_style = "block"     # block or line
 sidebar_width = 30
+col_index = 4                # 0 = auto-fill
+col_title = 0                # 0 = auto-fill
+col_artist = 30
+col_album = 25
+col_duration = 8
 
 [notifications]
 enabled = true
@@ -452,6 +457,22 @@ MIT — see [LICENSE](LICENSE).
 - New config sections: `[discord]`, `[lastfm]`, `[playback].gapless`, `[playback].api_timeout`
 - GitHub Actions CI pipeline (ruff lint + pytest with coverage)
 - Expanded test suite — 187 tests covering queue thread safety, IPC validation, stream expiry, downloads, Discord RPC, Last.fm, and settings
+
+#### Code Quality (2026-02-12)
+
+- Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
+- Removed dead code (`_download_multiple_tracks`, redundant imports)
+- Fixed encapsulation break (cache private method called from app)
+- API timeout now reads from settings at call time, not import time
+- Batch DELETE for cache eviction (replaces per-row deletes)
+- Deferred cache-hit commits (every 10 hits instead of every hit)
+- Disk-full (OSError) handling in cache and history managers
+- Auth validation distinguishes network errors from invalid credentials
+- Reuse yt-dlp instance across stream resolves (was creating new per call)
+- Extracted `_init_mpv()` helper — DRY player initialization and crash recovery
+- Concurrent Spotify import matching with ThreadPoolExecutor
+- Session state save failures now log at warning (was debug)
+- Test suite expanded to 231 tests (+44 new: CacheManager, HistoryManager, AuthManager, IPC handler, stream resolver)
 
 ### v1.0.0 (2026-02-07)
 
