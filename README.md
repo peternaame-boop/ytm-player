@@ -97,7 +97,7 @@ Open config in your editor: `ytm config`
 src/ytm_player/
 ├── app.py              # Main Textual application
 ├── cli.py              # Click CLI entry point
-├── ipc.py              # PID file for CLI↔TUI communication
+├── ipc.py              # Unix socket IPC for CLI↔TUI communication
 ├── config/             # Settings, keymap, theme (TOML)
 ├── services/           # Backend: auth, ytmusic, player, stream, queue, history, cache, mpris
 ├── ui/

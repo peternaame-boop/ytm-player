@@ -10,3 +10,4 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+PRD.md
