@@ -1,8 +1,8 @@
 # ytm-player
 
-A full-featured YouTube Music TUI (Terminal User Interface) client for Linux, modeled after [spotify_player](https://github.com/aome510/spotify-player). Browse your library, search, queue tracks, and control playback — all from the terminal with vim-style keybindings.
+A full-featured YouTube Music TUI (Terminal User Interface) client for Linux, macOS, and Windows, modeled after [spotify_player](https://github.com/aome510/spotify-player). Browse your library, search, queue tracks, and control playback — all from the terminal with vim-style keybindings.
 
-Requires a **YouTube Music Premium** subscription for audio playback.
+![ytm-player screenshot](screenshot.png)
 
 ## Features
 
@@ -23,7 +23,7 @@ Requires a **YouTube Music Premium** subscription for audio playback.
 
 - **Python 3.12+**
 - **[mpv](https://mpv.io/)** — audio playback backend, must be installed system-wide
-- **YouTube Music Premium** subscription
+- A **YouTube Music** account (free or Premium)
 
 ## Installation
 
@@ -43,6 +43,12 @@ sudo dnf install mpv
 
 # macOS (Homebrew)
 brew install mpv
+
+# Windows (Scoop)
+scoop install mpv
+
+# Windows (Chocolatey)
+choco install mpv
 ```
 
 ### 2. Install ytm-player
