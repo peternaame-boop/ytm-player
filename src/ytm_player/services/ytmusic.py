@@ -15,9 +15,6 @@ from ytm_player.services.auth import AuthManager
 
 logger = logging.getLogger(__name__)
 
-# Default API timeout in seconds. Prevents indefinite hangs on slow networks.
-_API_TIMEOUT: int = get_settings().playback.api_timeout
-
 
 class YTMusicService:
     """Async wrapper around ytmusicapi.YTMusic.
@@ -45,9 +42,10 @@ class YTMusicService:
 
     async def _call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """Run a sync ytmusicapi method in a thread with timeout."""
+        timeout = get_settings().playback.api_timeout
         return await asyncio.wait_for(
             asyncio.to_thread(func, *args, **kwargs),
-            timeout=_API_TIMEOUT,
+            timeout=timeout,
         )
 
     # ------------------------------------------------------------------

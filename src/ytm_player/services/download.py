@@ -109,12 +109,8 @@ class DownloadService:
     async def download_multiple(
         self,
         tracks: list[dict],
-        on_progress: asyncio.Future | None = None,
     ) -> list[DownloadResult]:
-        """Download multiple tracks sequentially, reporting progress.
-
-        Calls on_progress callback with (completed, total) after each track.
-        """
+        """Download multiple tracks sequentially."""
         results: list[DownloadResult] = []
 
         for i, track in enumerate(tracks):

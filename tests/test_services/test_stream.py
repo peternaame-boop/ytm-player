@@ -2,6 +2,8 @@
 
 import time
 
+import pytest
+
 from ytm_player.services.stream import StreamInfo, StreamResolver
 
 
@@ -108,11 +110,8 @@ class TestStreamQuality:
 
     def test_set_invalid_quality_raises(self):
         resolver = StreamResolver()
-        try:
+        with pytest.raises(ValueError):
             resolver.quality = "ultra"
-            assert False, "Should have raised ValueError"
-        except ValueError:
-            pass
 
 
 class TestCacheEviction:

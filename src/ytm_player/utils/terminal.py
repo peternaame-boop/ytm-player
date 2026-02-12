@@ -19,19 +19,12 @@ def detect_image_protocol() -> str | None:
     if term_program == "wezterm":
         return "iterm2"
 
-    if "sixel" in term or os.environ.get("TERM_FEATURES", ""):
-        return "sixel"
-
-    if _check_sixel_env():
+    term_features = os.environ.get("TERM_FEATURES", "").lower()
+    colorterm = os.environ.get("COLORTERM", "").lower()
+    if "sixel" in term or "sixel" in term_features or "sixel" in colorterm:
         return "sixel"
 
     return "block"
-
-
-def _check_sixel_env() -> bool:
-    colorterm = os.environ.get("COLORTERM", "").lower()
-    term = os.environ.get("TERM", "").lower()
-    return "sixel" in colorterm or "sixel" in term
 
 
 def get_terminal_size() -> tuple[int, int]:
@@ -40,6 +33,4 @@ def get_terminal_size() -> tuple[int, int]:
 
 
 def get_orientation(cols: int, rows: int) -> str:
-    if rows == 0:
-        return "horizontal"
-    return "horizontal" if cols / rows > 2.3 else "vertical"
+    return "horizontal" if rows == 0 or cols / rows > 2.3 else "vertical"

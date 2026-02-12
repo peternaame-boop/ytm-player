@@ -1254,8 +1254,6 @@ class YTMPlayerApp(App):
 
     async def _download_track(self, track: dict) -> None:
         """Download a single track for offline playback."""
-        from ytm_player.utils.formatting import get_video_id
-
         video_id = get_video_id(track)
         if not video_id:
             self.notify("Track has no video ID.", severity="warning", timeout=2)
@@ -1274,45 +1272,13 @@ class YTMPlayerApp(App):
             # Index in cache if available.
             if self.cache and result.file_path:
                 try:
-                    file_size = result.file_path.stat().st_size
                     fmt = result.file_path.suffix.lstrip(".")
-                    await self.cache._index(video_id, result.file_path, file_size, fmt)
+                    await self.cache.put_file(video_id, result.file_path, fmt)
                 except Exception:
                     logger.debug("Failed to index downloaded file in cache", exc_info=True)
         else:
             error = result.error or "Unknown error"
             self.notify(f"Download failed: {error}", severity="error", timeout=4)
-
-    async def _download_multiple_tracks(self, tracks: list[dict]) -> None:
-        """Download multiple tracks with a progress counter notification."""
-        total = len(tracks)
-        completed = 0
-        failed = 0
-
-        for track in tracks:
-            from ytm_player.utils.formatting import get_video_id
-
-            video_id = get_video_id(track)
-            if not video_id:
-                failed += 1
-                completed += 1
-                continue
-
-            if self.downloader.is_downloaded(video_id):
-                completed += 1
-                continue
-
-            result = await self.downloader.download(video_id)
-            completed += 1
-            if not result.success:
-                failed += 1
-
-            self.notify(f"Downloaded {completed}/{total}", timeout=2)
-
-        if failed:
-            self.notify(f"Downloads complete: {completed - failed}/{total} succeeded", timeout=4)
-        else:
-            self.notify(f"All {total} tracks downloaded", timeout=3)
 
     # ── IPC command handler ───────────────────────────────────────────
 
