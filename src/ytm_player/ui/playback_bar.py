@@ -316,7 +316,7 @@ class _FooterButton(Widget):
     _FooterButton {
         height: 1;
         width: auto;
-        padding: 0 2;
+        padding: 0 1;
     }
     _FooterButton:hover {
         background: $border;
@@ -340,14 +340,16 @@ class _FooterButton(Widget):
         event.stop()
         app = self.app
         match self._action:
-            case "help":
-                await app.navigate_to("help")  # type: ignore[attr-defined]
-            case "library":
-                await app.navigate_to("library")  # type: ignore[attr-defined]
-            case "search":
-                await app.navigate_to("search")  # type: ignore[attr-defined]
-            case "queue":
-                await app.navigate_to("queue")  # type: ignore[attr-defined]
+            case (
+                "help"
+                | "library"
+                | "search"
+                | "queue"
+                | "browse"
+                | "liked_songs"
+                | "recently_played"
+            ):
+                await app.navigate_to(self._action)  # type: ignore[attr-defined]
             case "play_pause":
                 if hasattr(app, "player") and app.player:
                     await app.player.toggle_pause()
@@ -374,21 +376,39 @@ class FooterBar(Widget):
         height: 1;
         width: 1fr;
     }
+    FooterBar #footer-help {
+        dock: right;
+    }
     """
 
-    # Map of action names to page names for active indicator.
-    _PAGE_ACTIONS = {"help", "library", "search", "queue"}
+    # Page actions that get an active-page highlight.
+    _PAGE_ACTIONS = {
+        "library",
+        "search",
+        "browse",
+        "queue",
+        "liked_songs",
+        "recently_played",
+        "help",
+    }
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="footer-inner"):
-            yield _FooterButton("[?] Help", "help", id="footer-help")
+            # Playback controls (icon-only).
+            yield _FooterButton("\u23ee", "prev")
+            yield _FooterButton("\u23ef", "play_pause")
+            yield _FooterButton("\u23ed", "next")
+            # Page navigation.
             yield _FooterButton("Library", "library", id="footer-library")
             yield _FooterButton("Search", "search", id="footer-search")
+            yield _FooterButton("Browse", "browse", id="footer-browse")
             yield _FooterButton("Queue", "queue", id="footer-queue")
-            yield _FooterButton("\u23ee Prev", "prev")
-            yield _FooterButton("\u23ef Play/Pause", "play_pause")
-            yield _FooterButton("\u23ed Next", "next")
-            yield _FooterButton("\U0001f500 Import", "spotify_import")
+            yield _FooterButton("Liked", "liked_songs", id="footer-liked_songs")
+            yield _FooterButton("Recent", "recently_played", id="footer-recently_played")
+            # Spotify import.
+            yield _FooterButton("Import", "spotify_import")
+            # Help pushed to far right.
+            yield _FooterButton("?", "help", id="footer-help")
 
     def set_active_page(self, page_name: str) -> None:
         """Highlight the footer button corresponding to the active page."""
