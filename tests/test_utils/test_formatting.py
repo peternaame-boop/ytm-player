@@ -17,7 +17,6 @@ from ytm_player.utils.formatting import (
     truncate,
 )
 
-
 # ── format_duration ──────────────────────────────────────────────────
 
 class TestFormatDuration:
@@ -96,10 +95,10 @@ class TestGetVideoId:
     def test_video_id_key(self):
         assert get_video_id({"video_id": "abc123"}) == "abc123"
 
-    def test_videoId_key(self):
+    def test_video_id_camel_case_key(self):
         assert get_video_id({"videoId": "xyz789"}) == "xyz789"
 
-    def test_both_keys_prefers_videoId(self):
+    def test_both_keys_prefers_camel_case(self):
         assert get_video_id({"videoId": "first", "video_id": "second"}) == "first"
 
     def test_missing(self):

@@ -1,7 +1,7 @@
 """Shared test fixtures for ytm-player."""
 
+
 import pytest
-from pathlib import Path
 
 
 @pytest.fixture

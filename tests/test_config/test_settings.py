@@ -1,6 +1,5 @@
 """Tests for ytm_player.config.settings."""
 
-import pytest
 
 from ytm_player.config.settings import Settings
 

@@ -1,8 +1,7 @@
 """Tests for ytm_player.services.queue.QueueManager."""
 
-import pytest
 
-from ytm_player.services.queue import QueueManager, RepeatMode
+from ytm_player.services.queue import RepeatMode
 
 
 class TestEmptyQueue:

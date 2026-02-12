@@ -61,3 +61,19 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["ytm_player"]
+
+[tool.coverage.report]
+fail_under = 10
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+]
+omit = [
+    "src/ytm_player/ui/*",
+    "src/ytm_player/__main__.py",
+]
