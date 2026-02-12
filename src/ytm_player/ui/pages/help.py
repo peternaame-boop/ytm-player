@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Label
@@ -242,7 +241,9 @@ class HelpPage(Widget):
             if category != current_category:
                 current_category = category
                 table.add_row(
-                    f"[b]{category}[/b]", "", "",
+                    f"[b]{category}[/b]",
+                    "",
+                    "",
                     key=f"header_{category}",
                 )
 

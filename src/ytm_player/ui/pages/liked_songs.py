@@ -13,7 +13,12 @@ from textual.widgets import DataTable, Label, Static
 from textual.widgets.data_table import RowKey
 
 from ytm_player.config.keymap import Action
-from ytm_player.utils.formatting import extract_artist, extract_duration, format_duration, normalize_tracks
+from ytm_player.utils.formatting import (
+    extract_artist,
+    extract_duration,
+    format_duration,
+    normalize_tracks,
+)
 
 logger = logging.getLogger(__name__)
 

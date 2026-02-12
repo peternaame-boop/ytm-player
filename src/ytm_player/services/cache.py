@@ -10,7 +10,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from ytm_player.config.paths import CACHE_DIR, CACHE_DB, SECURE_FILE_MODE
+from ytm_player.config.paths import CACHE_DB, SECURE_FILE_MODE
 from ytm_player.config.settings import get_settings
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
@@ -200,8 +200,7 @@ class CacheManager:
 
         # Fetch entries ordered by oldest access first (LRU).
         async with self._db.execute(
-            "SELECT video_id, file_path, file_size FROM cache_index "
-            "ORDER BY last_accessed ASC"
+            "SELECT video_id, file_path, file_size FROM cache_index ORDER BY last_accessed ASC"
         ) as cursor:
             rows = await cursor.fetchall()
 

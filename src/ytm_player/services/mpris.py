@@ -230,9 +230,7 @@ if _DBUS_AVAILABLE:
             length_us: int,
         ) -> None:
             self._metadata = {
-                "mpris:trackid": Variant(
-                    "o", "/org/mpris/MediaPlayer2/TrackList/CurrentTrack"
-                ),
+                "mpris:trackid": Variant("o", "/org/mpris/MediaPlayer2/TrackList/CurrentTrack"),
                 "xesam:title": Variant("s", title),
                 "xesam:artist": Variant("as", [artist]),
                 "xesam:album": Variant("s", album),
@@ -274,7 +272,9 @@ class MPRISService:
         try:
             self._bus = await MessageBus().connect()
         except Exception:
-            logger.warning("Could not connect to the session D-Bus -- MPRIS disabled", exc_info=True)
+            logger.warning(
+                "Could not connect to the session D-Bus -- MPRIS disabled", exc_info=True
+            )
             return
 
         self._root_iface = _MediaPlayer2Interface(player_callbacks)

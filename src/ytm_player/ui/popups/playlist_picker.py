@@ -10,7 +10,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, ListView, ListItem, Static
+from textual.widgets import Input, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerState
 
 from ytm_player.config.paths import RECENT_PLAYLISTS_FILE

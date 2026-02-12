@@ -6,7 +6,6 @@ Requires the optional `pypresence` package.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 

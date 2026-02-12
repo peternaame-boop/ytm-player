@@ -21,8 +21,8 @@ from textual.widgets import (
     Button,
     Input,
     Label,
-    ListView,
     ListItem,
+    ListView,
     ProgressBar,
     Static,
 )
@@ -30,7 +30,6 @@ from textual.widgets import (
 # NOTE: ytm_player.services.spotify_import is imported lazily inside worker
 # methods to avoid pulling in heavy optional deps (thefuzz, spotify_scraper)
 # at module load time.
-
 from ytm_player.utils.formatting import extract_artist
 
 logger = logging.getLogger(__name__)
@@ -477,12 +476,12 @@ class SpotifyImportPopup(ModalScreen[str | None]):
     async def _do_single_import(self, url: str) -> None:
         """Fetch Spotify tracks, then match each against YouTube Music."""
         from ytm_player.services.spotify_import import (
-            MatchType,
             MatchResult,
-            extract_spotify_tracks,
-            has_spotify_creds,
+            MatchType,
             _fuzzy_score,
             _get_video_id,
+            extract_spotify_tracks,
+            has_spotify_creds,
         )
 
         status = self.query_one("#si-status", Static)
@@ -491,9 +490,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
         # Step 1: Extract tracks from Spotify.
         try:
-            playlist_name, spotify_tracks = await asyncio.to_thread(
-                extract_spotify_tracks, url
-            )
+            playlist_name, spotify_tracks = await asyncio.to_thread(extract_spotify_tracks, url)
         except Exception as exc:
             status.update(f"[red]Failed to fetch playlist:[/red] {exc}")
             return
@@ -595,9 +592,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
         self.query_one("#si-multi-start-btn").add_class("visible")
 
         status = self.query_one("#si-status", Static)
-        status.update(
-            f"Paste {count} Spotify playlist URLs below, then click Start Import"
-        )
+        status.update(f"Paste {count} Spotify playlist URLs below, then click Start Import")
 
         # Focus the first URL input.
         self.call_later(lambda: self.query_one("#si-multi-url-0", Input).focus())
@@ -619,9 +614,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
                 return
 
             if not _URL_PATTERN.match(url):
-                self.notify(
-                    f"Invalid Spotify URL in slot {i + 1}", severity="warning"
-                )
+                self.notify(f"Invalid Spotify URL in slot {i + 1}", severity="warning")
                 url_input.focus()
                 return
             urls.append(url)
@@ -637,18 +630,16 @@ class SpotifyImportPopup(ModalScreen[str | None]):
         self.query_one("#si-progress", ProgressBar).display = True
         self.query_one("#si-results", ListView).display = True
 
-        self.run_worker(
-            self._do_multi_import(), name="spotify_multi_import", exclusive=True
-        )
+        self.run_worker(self._do_multi_import(), name="spotify_multi_import", exclusive=True)
 
     async def _do_multi_import(self) -> None:
         """Process all split playlists sequentially."""
         from ytm_player.services.spotify_import import (
-            MatchType,
             MatchResult,
-            extract_spotify_tracks,
+            MatchType,
             _fuzzy_score,
             _get_video_id,
+            extract_spotify_tracks,
         )
 
         status = self.query_one("#si-status", Static)
@@ -660,19 +651,13 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
         for url_idx, url in enumerate(self._multi_urls):
             part_num = url_idx + 1
-            status.update(
-                f"[bold]Part {part_num}/{total_urls}:[/bold] Fetching from Spotify..."
-            )
+            status.update(f"[bold]Part {part_num}/{total_urls}:[/bold] Fetching from Spotify...")
 
             # Extract tracks from this part.
             try:
-                part_name, spotify_tracks = await asyncio.to_thread(
-                    extract_spotify_tracks, url
-                )
+                part_name, spotify_tracks = await asyncio.to_thread(extract_spotify_tracks, url)
             except Exception as exc:
-                status.update(
-                    f"[red]Failed to fetch part {part_num}:[/red] {exc}"
-                )
+                status.update(f"[red]Failed to fetch part {part_num}:[/red] {exc}")
                 return
 
             if not spotify_tracks:
@@ -683,7 +668,8 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
             results_list.append(
                 _ResultItem(
-                    "▸", "bold",
+                    "▸",
+                    "bold",
                     f"Part {part_num}: {part_name} ({len(spotify_tracks)} tracks)",
                 )
             )
@@ -696,9 +682,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
             for i, sp_track in enumerate(spotify_tracks, 1):
                 query = f"{sp_track['name']} {sp_track['artist']}"
                 try:
-                    search_results = await ytmusic_svc.search(
-                        query, filter="songs", limit=5
-                    )
+                    search_results = await ytmusic_svc.search(query, filter="songs", limit=5)
                 except Exception:
                     search_results = []
 
@@ -717,8 +701,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
                 progress_bar.update(progress=i)
                 status.update(
-                    f"[bold]Part {part_num}/{total_urls}:[/bold] "
-                    f"Matching... ({i}/{total_tracks})"
+                    f"[bold]Part {part_num}/{total_urls}:[/bold] Matching... ({i}/{total_tracks})"
                 )
                 results_list.scroll_end(animate=False)
 
@@ -738,8 +721,11 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
     @staticmethod
     def _classify_match(
-        sp_track: dict, search_results: list[dict],
-        MatchType, MatchResult, _fuzzy_score,
+        sp_track: dict,
+        search_results: list[dict],
+        MatchType,
+        MatchResult,
+        _fuzzy_score,
     ):
         """Score candidates and classify the match."""
         from ytm_player.services.spotify_import import AUTO_MATCH_THRESHOLD
@@ -777,6 +763,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
         """Display candidates for the current uncertain match."""
         if self._disambig_index >= len(self._disambig_queue):
             from ytm_player.services.spotify_import import MatchType, _get_video_id
+
             self._show_summary(MatchType, _get_video_id)
             return
 
@@ -813,10 +800,12 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
         if isinstance(event.item, _CandidateItem):
             from ytm_player.services.spotify_import import MatchType
+
             result.selected = event.item.candidate
             result.match_type = MatchType.EXACT
         elif isinstance(event.item, _SkipItem):
             from ytm_player.services.spotify_import import MatchType
+
             result.selected = None
             result.match_type = MatchType.NONE
 
@@ -835,9 +824,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
         total = len(self._results)
 
         self._video_ids = [
-            _get_video_id(r.selected)
-            for r in self._results
-            if r.selected is not None
+            _get_video_id(r.selected) for r in self._results if r.selected is not None
         ]
         self._video_ids = [vid for vid in self._video_ids if vid]
 
@@ -849,9 +836,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
         status = self.query_one("#si-status", Static)
         matched = exact + fuzzy
-        status.update(
-            f"{matched} matched, {not_found} skipped/not found ({total} total)"
-        )
+        status.update(f"{matched} matched, {not_found} skipped/not found ({total} total)")
 
         if not self._video_ids:
             summary = self.query_one("#si-summary", Static)
@@ -891,7 +876,7 @@ class SpotifyImportPopup(ModalScreen[str | None]):
             total_ids = len(self._video_ids)
             if total_ids > 0:
                 batches = [
-                    self._video_ids[i:i + _ADD_BATCH_SIZE]
+                    self._video_ids[i : i + _ADD_BATCH_SIZE]
                     for i in range(0, total_ids, _ADD_BATCH_SIZE)
                 ]
                 if len(batches) > 1:

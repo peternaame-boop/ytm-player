@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import logging
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.events import Click, MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.widget import Widget
-from rich.text import Text
 
 from ytm_player.services.queue import RepeatMode
 from ytm_player.ui.theme import get_theme
 from ytm_player.ui.widgets.album_art import AlbumArt
 from ytm_player.ui.widgets.progress_bar import PlaybackProgress
-from ytm_player.utils.formatting import extract_artist, format_duration, truncate
+from ytm_player.utils.formatting import extract_artist, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,6 @@ class _TrackInfo(Widget):
         return result
 
 
-
 # ── Interactive control widgets ───────────────────────────────────
 
 
@@ -115,7 +114,6 @@ class _VolumeDisplay(Widget):
         app = self.app
         if hasattr(app, "player") and app.player:
             await app.player.change_volume(-5)
-
 
 
 class _RepeatButton(Widget):
@@ -156,7 +154,6 @@ class _RepeatButton(Widget):
                 logger.debug("Failed to update repeat mode display on click", exc_info=True)
 
 
-
 class _ShuffleButton(Widget):
     """Clickable shuffle indicator."""
 
@@ -193,7 +190,6 @@ class _ShuffleButton(Widget):
                 app.notify(f"Shuffle: {state}", timeout=2)
             except Exception:
                 logger.debug("Failed to update shuffle state display on click", exc_info=True)
-
 
 
 # ── Main playback bar ─────────────────────────────────────────────
@@ -310,7 +306,6 @@ class PlaybackBar(Widget):
         shuf.shuffle_on = enabled
 
 
-
 # ── Interactive footer bar ────────────────────────────────────────
 
 
@@ -362,6 +357,7 @@ class _FooterButton(Widget):
                 await app._play_next()  # type: ignore[attr-defined]
             case "spotify_import":
                 from ytm_player.ui.popups.spotify_import import SpotifyImportPopup
+
                 app.push_screen(SpotifyImportPopup())
 
 
@@ -399,6 +395,8 @@ class FooterBar(Widget):
         for action in self._PAGE_ACTIONS:
             try:
                 btn = self.query_one(f"#footer-{action}", _FooterButton)
-                btn.is_active = (action == page_name)
+                btn.is_active = action == page_name
             except Exception:
-                logger.debug("Failed to update footer button for action '%s'", action, exc_info=True)
+                logger.debug(
+                    "Failed to update footer button for action '%s'", action, exc_info=True
+                )

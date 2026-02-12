@@ -1,6 +1,5 @@
 """Tests for ytm_player.config.settings."""
 
-
 from ytm_player.config.settings import Settings
 
 
@@ -47,7 +46,7 @@ class TestSaveLoadRoundTrip:
 class TestPartialToml:
     def test_partial_preserves_defaults(self, tmp_config_dir):
         path = tmp_config_dir / "config.toml"
-        path.write_text('[playback]\ndefault_volume = 42\n')
+        path.write_text("[playback]\ndefault_volume = 42\n")
 
         loaded = Settings.load(path)
         assert loaded.playback.default_volume == 42

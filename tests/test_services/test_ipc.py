@@ -26,8 +26,16 @@ class TestIPCCommandWhitelist:
 
     def test_all_expected_commands_present(self):
         expected = {
-            "play", "pause", "next", "prev", "seek",
-            "now", "status", "queue", "queue_add", "queue_clear",
+            "play",
+            "pause",
+            "next",
+            "prev",
+            "seek",
+            "now",
+            "status",
+            "queue",
+            "queue_add",
+            "queue_clear",
         }
         assert _VALID_COMMANDS == expected
 

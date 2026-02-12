@@ -13,16 +13,23 @@ from ytmusicapi import YTMusic
 
 try:
     from rich.console import Console
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
     from thefuzz import fuzz
+
     _HAS_SPOTIFY_DEPS = True
 except ImportError:
     _HAS_SPOTIFY_DEPS = False
 
 from pathlib import Path
 
-from ytm_player.config.paths import CONFIG_DIR, SPOTIFY_CREDS_FILE, SECURE_FILE_MODE
-from ytm_player.utils.formatting import VALID_VIDEO_ID, extract_artist, extract_duration, format_duration, get_video_id
+from ytm_player.config.paths import CONFIG_DIR, SECURE_FILE_MODE, SPOTIFY_CREDS_FILE
+from ytm_player.utils.formatting import (
+    VALID_VIDEO_ID,
+    extract_artist,
+    extract_duration,
+    format_duration,
+    get_video_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +55,7 @@ class MatchResult:
 
 
 # ── Spotify credential helpers ────────────────────────────────────────
+
 
 def load_spotify_creds() -> dict[str, str] | None:
     """Load stored Spotify client_id/client_secret, or ``None``."""
@@ -78,6 +86,7 @@ def has_spotify_creds() -> bool:
 
 
 # ── Track extraction ──────────────────────────────────────────────────
+
 
 def _extract_playlist_id(url: str) -> str:
     """Pull the playlist/album ID from a Spotify URL."""
@@ -180,19 +189,22 @@ def extract_spotify_tracks(url: str) -> tuple[str, list[dict]]:
             artist_name = extract_artist(track)
             album = track.get("album", {})
 
-            tracks.append({
-                "name": track.get("name", ""),
-                "artist": artist_name,
-                "album": album.get("name", ""),
-                "duration_ms": track.get("duration_ms", 0),
-            })
+            tracks.append(
+                {
+                    "name": track.get("name", ""),
+                    "artist": artist_name,
+                    "album": album.get("name", ""),
+                    "duration_ms": track.get("duration_ms", 0),
+                }
+            )
 
         # Flag truncation so the TUI can warn the user.
         if track_count and track_count > len(tracks):
             logger.warning(
                 "Playlist has %d tracks but scraper returned %d (limit ~100). "
                 "Configure Spotify API credentials for full import.",
-                track_count, len(tracks),
+                track_count,
+                len(tracks),
             )
 
         return playlist_name, tracks
@@ -213,7 +225,6 @@ def _fuzzy_score(spotify_track: dict, ytm_track: dict) -> int:
 
     # Weighted: title matters more but artist is still important.
     return int(title_score * TITLE_MATCH_WEIGHT + artist_score * ARTIST_MATCH_WEIGHT)
-
 
 
 def match_tracks(
@@ -242,10 +253,12 @@ def match_tracks(
                 search_results = []
 
             if not search_results:
-                results.append(MatchResult(
-                    spotify_track=sp_track,
-                    match_type=MatchType.NONE,
-                ))
+                results.append(
+                    MatchResult(
+                        spotify_track=sp_track,
+                        match_type=MatchType.NONE,
+                    )
+                )
                 progress.advance(task)
                 continue
 
@@ -259,23 +272,26 @@ def match_tracks(
             best_score, best_candidate = scored[0]
 
             if best_score >= AUTO_MATCH_THRESHOLD:
-                results.append(MatchResult(
-                    spotify_track=sp_track,
-                    match_type=MatchType.EXACT,
-                    candidates=[c for _, c in scored],
-                    selected=best_candidate,
-                ))
+                results.append(
+                    MatchResult(
+                        spotify_track=sp_track,
+                        match_type=MatchType.EXACT,
+                        candidates=[c for _, c in scored],
+                        selected=best_candidate,
+                    )
+                )
             else:
-                results.append(MatchResult(
-                    spotify_track=sp_track,
-                    match_type=MatchType.MULTIPLE,
-                    candidates=[c for _, c in scored],
-                ))
+                results.append(
+                    MatchResult(
+                        spotify_track=sp_track,
+                        match_type=MatchType.MULTIPLE,
+                        candidates=[c for _, c in scored],
+                    )
+                )
 
             progress.advance(task)
 
     return results
-
 
 
 def _display_candidate(idx: int, candidate: dict) -> str:
@@ -314,9 +330,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
         console.print("[yellow]No tracks found in the playlist.[/yellow]")
         return
 
-    console.print(
-        f'Fetched [bold]"{playlist_name}"[/bold] ({len(spotify_tracks)} tracks)'
-    )
+    console.print(f'Fetched [bold]"{playlist_name}"[/bold] ({len(spotify_tracks)} tracks)')
     console.print()
 
     # Step 2: Initialize YTM client.
@@ -345,9 +359,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     # Step 4: Resolve ambiguous matches interactively.
     for result in multiple:
         sp = result.spotify_track
-        console.print(
-            f'── [bold]"{sp["name"]}"[/bold] by {sp["artist"]} ──'
-        )
+        console.print(f'── [bold]"{sp["name"]}"[/bold] by {sp["artist"]} ──')
         console.print("Multiple matches:")
         for i, candidate in enumerate(result.candidates[:5], 1):
             console.print(_display_candidate(i, candidate))
@@ -372,9 +384,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     still_none = [r for r in results if r.match_type == MatchType.NONE]
     for result in still_none:
         sp = result.spotify_track
-        console.print(
-            f'── [bold]"{sp["name"]}"[/bold] by {sp["artist"]} ──'
-        )
+        console.print(f'── [bold]"{sp["name"]}"[/bold] by {sp["artist"]} ──')
         console.print("[red]No match found.[/red]")
         console.print("  1. Search with different query")
         console.print("  2. Enter video ID manually")

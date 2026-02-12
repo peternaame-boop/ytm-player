@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.events import Click, MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
-from rich.text import Text
 
 from ytm_player.utils.formatting import format_duration
 
@@ -39,10 +39,10 @@ class PlaybackProgress(Widget):
 
     BLOCK_FILLED = "\u2588"  # Full block
     BLOCK_EMPTY = "\u2591"  # Light shade
-    MARKER = "\u2503"        # Heavy vertical bar (seek preview)
+    MARKER = "\u2503"  # Heavy vertical bar (seek preview)
     LINE_FILLED = "\u2501"  # Box heavy horizontal
-    LINE_HEAD = "\u25cf"    # Black circle
-    LINE_EMPTY = "\u2500"   # Box light horizontal
+    LINE_HEAD = "\u25cf"  # Black circle
+    LINE_EMPTY = "\u2500"  # Box light horizontal
 
     def __init__(
         self,
@@ -97,16 +97,26 @@ class PlaybackProgress(Widget):
 
         if self._preview_position is not None and bar_width > 0:
             # Show a marker at the preview position.
-            preview_frac = min(1.0, max(0.0, self._preview_position / self.duration)) if self.duration > 0 else 0.0
+            preview_frac = (
+                min(1.0, max(0.0, self._preview_position / self.duration))
+                if self.duration > 0
+                else 0.0
+            )
             marker_col = min(int(bar_width * preview_frac), bar_width - 1)
 
             for i in range(bar_width):
                 if i == marker_col:
                     result.append(self.MARKER, style=f"bold {self._marker_color}")
                 elif i < filled_count:
-                    result.append(self.BLOCK_FILLED if self._bar_style == "block" else self.LINE_FILLED, style=self._filled_color)
+                    result.append(
+                        self.BLOCK_FILLED if self._bar_style == "block" else self.LINE_FILLED,
+                        style=self._filled_color,
+                    )
                 else:
-                    result.append(self.BLOCK_EMPTY if self._bar_style == "block" else self.LINE_EMPTY, style=self._empty_color)
+                    result.append(
+                        self.BLOCK_EMPTY if self._bar_style == "block" else self.LINE_EMPTY,
+                        style=self._empty_color,
+                    )
         else:
             # Normal rendering (no preview).
             if self._bar_style == "line":
@@ -209,4 +219,3 @@ class PlaybackProgress(Widget):
         self.position = position
         if duration is not None:
             self.duration = duration
-

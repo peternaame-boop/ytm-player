@@ -7,6 +7,7 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -71,7 +72,7 @@ class BrowseTabBar(Widget):
                 classes = "tab-item active" if i == 0 else "tab-item"
                 yield Static(f" {label} ", id=f"tab-{i}", classes=classes)
 
-    def on_click(self, event: "Click") -> None:
+    def on_click(self, event: Click) -> None:
         """Handle click on a tab label."""
         # Walk up from the click target to find the tab Static.
         node = event.widget
@@ -674,9 +675,7 @@ class BrowsePage(Widget):
     # Item selection handlers
     # ------------------------------------------------------------------
 
-    async def on_for_you_section_item_selected(
-        self, event: ForYouSection.ItemSelected
-    ) -> None:
+    async def on_for_you_section_item_selected(self, event: ForYouSection.ItemSelected) -> None:
         """Handle item selection from the For You shelves."""
         item = event.item
         await self._navigate_item(item)
@@ -735,14 +734,10 @@ class BrowsePage(Widget):
             await self.app.play_track(item)
         elif result_type in ("album", "single"):
             if browse_id:
-                await self.app.navigate_to(
-                    "context", context_type="album", context_id=browse_id
-                )
+                await self.app.navigate_to("context", context_type="album", context_id=browse_id)
         elif result_type == "artist":
             if browse_id:
-                await self.app.navigate_to(
-                    "context", context_type="artist", context_id=browse_id
-                )
+                await self.app.navigate_to("context", context_type="artist", context_id=browse_id)
         elif result_type == "playlist":
             playlist_id = item.get("playlistId") or browse_id
             if playlist_id:

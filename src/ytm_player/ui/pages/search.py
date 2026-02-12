@@ -146,7 +146,6 @@ class SearchResultPanel(Widget):
         # Fallback
         return truncate(title, 60)
 
-
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Forward item activation to parent."""
         idx = event.list_view.index
@@ -175,9 +174,7 @@ class SearchResultPanel(Widget):
             event.stop()
             idx = self._find_clicked_item_index(event)
             if idx is not None and 0 <= idx < len(self._items):
-                self.post_message(
-                    self.ItemRightClicked(self._items[idx], self.id or "")
-                )
+                self.post_message(self.ItemRightClicked(self._items[idx], self.id or ""))
 
 
 # ---------------------------------------------------------------------------
@@ -433,9 +430,7 @@ class SearchPage(Widget):
 
         settings = get_settings()
         if settings.search.predictive:
-            self._debounce_timer = self.set_timer(
-                0.3, lambda: self._fetch_suggestions(query)
-            )
+            self._debounce_timer = self.set_timer(0.3, lambda: self._fetch_suggestions(query))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Execute search when Enter is pressed."""
@@ -509,9 +504,7 @@ class SearchPage(Widget):
                 search_input.value = query
                 self._hide_suggestions()
                 self._last_query = query
-                self.run_worker(
-                    self._execute_search(query), name="search", exclusive=True
-                )
+                self.run_worker(self._execute_search(query), name="search", exclusive=True)
 
     # ------------------------------------------------------------------
     # Search execution
@@ -566,9 +559,7 @@ class SearchPage(Widget):
             for category, api_filter in self._MUSIC_FILTERS.items()
         }
 
-        gathered = await asyncio.gather(
-            *tasks.values(), return_exceptions=True
-        )
+        gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
         for category, result in zip(tasks.keys(), gathered):
             if isinstance(result, Exception):
@@ -685,9 +676,7 @@ class SearchPage(Widget):
         elif panel_id == "playlists-panel" or result_type == "playlist":
             browse_id = item.get("browseId") or item.get("playlistId")
             if browse_id:
-                await self.app.navigate_to(
-                    "context", context_type="playlist", context_id=browse_id
-                )
+                await self.app.navigate_to("context", context_type="playlist", context_id=browse_id)
 
     def on_search_result_panel_item_right_clicked(
         self, event: SearchResultPanel.ItemRightClicked
@@ -712,17 +701,12 @@ class SearchPage(Widget):
 
             if action_id in ("play_all", "shuffle_play"):
                 browse_id = (
-                    item.get("browseId")
-                    or item.get("album_id")
-                    or item.get("playlistId")
-                    or ""
+                    item.get("browseId") or item.get("album_id") or item.get("playlistId") or ""
                 )
                 ctx_type = item_type if item_type in ("album", "playlist") else None
                 if browse_id and ctx_type:
                     self.app.run_worker(
-                        self.app.navigate_to(
-                            "context", context_type=ctx_type, context_id=browse_id
-                        )
+                        self.app.navigate_to("context", context_type=ctx_type, context_id=browse_id)
                     )
 
             elif action_id == "go_to_artist":
@@ -735,18 +719,14 @@ class SearchPage(Widget):
                     artist_id = ""
                 if artist_id:
                     self.app.run_worker(
-                        self.app.navigate_to(
-                            "context", context_type="artist", context_id=artist_id
-                        )
+                        self.app.navigate_to("context", context_type="artist", context_id=artist_id)
                     )
 
             elif action_id in ("play_top_songs", "start_radio", "view_albums", "view_similar"):
                 browse_id = item.get("browseId") or item.get("artist_id") or ""
                 if browse_id:
                     self.app.run_worker(
-                        self.app.navigate_to(
-                            "context", context_type="artist", context_id=browse_id
-                        )
+                        self.app.navigate_to("context", context_type="artist", context_id=browse_id)
                     )
 
             elif action_id == "copy_link":
@@ -773,7 +753,15 @@ class SearchPage(Widget):
     async def handle_action(self, action: Action, count: int = 1) -> None:
         """Process vim-style navigation actions dispatched from the app."""
         match action:
-            case Action.MOVE_DOWN | Action.MOVE_UP | Action.PAGE_DOWN | Action.PAGE_UP | Action.GO_TOP | Action.GO_BOTTOM | Action.SELECT:
+            case (
+                Action.MOVE_DOWN
+                | Action.MOVE_UP
+                | Action.PAGE_DOWN
+                | Action.PAGE_UP
+                | Action.GO_TOP
+                | Action.GO_BOTTOM
+                | Action.SELECT
+            ):
                 # Delegate to whichever focusable child has focus.
                 focused = self.app.focused
                 if focused is not None:
@@ -783,7 +771,9 @@ class SearchPage(Widget):
                         try:
                             track_table = focused.query_one(TrackTable)
                         except Exception:
-                            logger.debug("Failed to find TrackTable for focused widget", exc_info=True)
+                            logger.debug(
+                                "Failed to find TrackTable for focused widget", exc_info=True
+                            )
                     if track_table is not None:
                         await track_table.handle_action(action, count)
                         return

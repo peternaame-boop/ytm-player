@@ -18,26 +18,36 @@ from ytm_player.config.settings import Settings, get_settings
 from ytm_player.ipc import IPCServer, remove_pid, write_pid
 from ytm_player.services.auth import AuthManager
 from ytm_player.services.cache import CacheManager
+from ytm_player.services.discord_rpc import DiscordRPC
+from ytm_player.services.download import DownloadService
 from ytm_player.services.history import HistoryManager
+from ytm_player.services.lastfm import LastFMService
 from ytm_player.services.mpris import MPRISService
 from ytm_player.services.player import Player, PlayerEvent
 from ytm_player.services.queue import QueueManager, RepeatMode
-from ytm_player.services.discord_rpc import DiscordRPC
-from ytm_player.services.download import DownloadService
-from ytm_player.services.lastfm import LastFMService
 from ytm_player.services.stream import StreamResolver
 from ytm_player.services.ytmusic import YTMusicService
 from ytm_player.ui.playback_bar import FooterBar, PlaybackBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.popups.playlist_picker import PlaylistPicker
 from ytm_player.ui.theme import ThemeColors, get_theme
-from ytm_player.utils.formatting import copy_to_clipboard, get_video_id
 from ytm_player.ui.widgets.track_table import TrackTable
+from ytm_player.utils.formatting import copy_to_clipboard, get_video_id
 
 logger = logging.getLogger(__name__)
 
 # Valid page names.
-PAGE_NAMES = ("library", "search", "context", "browse", "lyrics", "queue", "help", "liked_songs", "recently_played")
+PAGE_NAMES = (
+    "library",
+    "search",
+    "context",
+    "browse",
+    "lyrics",
+    "queue",
+    "help",
+    "liked_songs",
+    "recently_played",
+)
 
 # Extracted constants (avoid magic numbers).
 _MAX_NAV_STACK = 20
@@ -47,6 +57,7 @@ _POSITION_POLL_INTERVAL = 0.5
 
 
 # ── Placeholder page widget ─────────────────────────────────────────
+
 
 class _PlaceholderPage(Widget):
     """Temporary placeholder shown for pages not yet implemented."""
@@ -168,27 +179,29 @@ class YTMPlayerApp(App):
         """Inject theme colors as Textual CSS variables ($var-name)."""
         variables = super().get_css_variables()
         tc = getattr(self, "theme_colors", None) or get_theme()
-        variables.update({
-            "background": tc.background,
-            "foreground": tc.foreground,
-            "primary": tc.primary,
-            "secondary": tc.secondary,
-            "accent": tc.accent,
-            "success": tc.success,
-            "warning": tc.warning,
-            "error": tc.error,
-            "playback-bar-bg": tc.playback_bar_bg,
-            "active-tab": tc.active_tab,
-            "inactive-tab": tc.inactive_tab,
-            "selected-item": tc.selected_item,
-            "progress-filled": tc.progress_filled,
-            "progress-empty": tc.progress_empty,
-            "lyrics-played": tc.lyrics_played,
-            "lyrics-current": tc.lyrics_current,
-            "lyrics-upcoming": tc.lyrics_upcoming,
-            "border": tc.border,
-            "text-muted": tc.muted_text,
-        })
+        variables.update(
+            {
+                "background": tc.background,
+                "foreground": tc.foreground,
+                "primary": tc.primary,
+                "secondary": tc.secondary,
+                "accent": tc.accent,
+                "success": tc.success,
+                "warning": tc.warning,
+                "error": tc.error,
+                "playback-bar-bg": tc.playback_bar_bg,
+                "active-tab": tc.active_tab,
+                "inactive-tab": tc.inactive_tab,
+                "selected-item": tc.selected_item,
+                "progress-filled": tc.progress_filled,
+                "progress-empty": tc.progress_empty,
+                "lyrics-played": tc.lyrics_played,
+                "lyrics-current": tc.lyrics_current,
+                "lyrics-upcoming": tc.lyrics_upcoming,
+                "border": tc.border,
+                "text-muted": tc.muted_text,
+            }
+        )
         return variables
 
     @property
@@ -207,6 +220,7 @@ class YTMPlayerApp(App):
     async def on_mount(self) -> None:
         """Initialize services and navigate to the startup page."""
         from ytm_player.config.paths import ensure_dirs
+
         ensure_dirs()
 
         # Check authentication.
@@ -385,7 +399,9 @@ class YTMPlayerApp(App):
             bar.update_repeat(mode)
             bar.update_shuffle(self.queue.shuffle_enabled)
         except Exception:
-            logger.debug("Failed to update playback bar after restoring session state", exc_info=True)
+            logger.debug(
+                "Failed to update playback bar after restoring session state", exc_info=True
+            )
 
     def _save_session_state(self) -> None:
         """Persist volume, shuffle, and repeat to disk."""
@@ -411,7 +427,9 @@ class YTMPlayerApp(App):
         }
         try:
             import os
+
             from ytm_player.config.paths import SECURE_FILE_MODE
+
             SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             SESSION_STATE_FILE.write_text(json.dumps(state))
             os.chmod(SESSION_STATE_FILE, SECURE_FILE_MODE)
@@ -434,6 +452,7 @@ class YTMPlayerApp(App):
         # Don't intercept keys when an Input or TextArea is focused — let
         # the widget handle normal text entry.
         from textual.widgets import Input, TextArea
+
         focused = self.focused
         if isinstance(focused, (Input, TextArea)):
             return
@@ -739,7 +758,9 @@ class YTMPlayerApp(App):
         page or action.
         """
         if not self.player or not self.stream_resolver:
-            self.notify("Player is still starting up. Please try again in a moment.", severity="error")
+            self.notify(
+                "Player is still starting up. Please try again in a moment.", severity="error"
+            )
             return
 
         video_id = track.get("video_id", "")
@@ -771,7 +792,7 @@ class YTMPlayerApp(App):
             self._consecutive_failures += 1
             title = track.get("title", video_id)
             self.notify(
-                f"Couldn't play \"{title}\" — track may be unavailable or region-locked. Skipping...",
+                f'Couldn\'t play "{title}" — track may be unavailable or region-locked. Skipping...',
                 severity="error",
                 timeout=4,
             )
@@ -897,7 +918,11 @@ class YTMPlayerApp(App):
         # Check Last.fm scrobble threshold.
         if self.lastfm and self.lastfm.is_connected and self.player.is_playing:
             try:
-                self.run_worker(self.lastfm.check_scrobble(self.player.position), group="scrobble", exclusive=True)
+                self.run_worker(
+                    self.lastfm.check_scrobble(self.player.position),
+                    group="scrobble",
+                    exclusive=True,
+                )
             except Exception:
                 logger.debug("Failed to check Last.fm scrobble", exc_info=True)
 
@@ -987,12 +1012,16 @@ class YTMPlayerApp(App):
                     self.call_later(lambda: self.run_worker(self.discord.clear()))
                 elif self.player and self.player.current_track:
                     t = self.player.current_track
-                    self.call_later(lambda: self.run_worker(self.discord.update(
-                        title=t.get("title", ""),
-                        artist=t.get("artist", ""),
-                        album=t.get("album", ""),
-                        position=self.player.position if self.player else 0,
-                    )))
+                    self.call_later(
+                        lambda: self.run_worker(
+                            self.discord.update(
+                                title=t.get("title", ""),
+                                artist=t.get("artist", ""),
+                                album=t.get("album", ""),
+                                position=self.player.position if self.player else 0,
+                            )
+                        )
+                    )
             except Exception:
                 logger.debug("Failed to update Discord presence", exc_info=True)
 
@@ -1065,9 +1094,7 @@ class YTMPlayerApp(App):
 
     # ── Track table integration ──────────────────────────────────────
 
-    async def on_track_table_track_selected(
-        self, message: TrackTable.TrackSelected
-    ) -> None:
+    async def on_track_table_track_selected(self, message: TrackTable.TrackSelected) -> None:
         """Handle track selection from any TrackTable widget."""
         track = message.track
         index = message.index
@@ -1156,9 +1183,9 @@ class YTMPlayerApp(App):
                     artist = artists[0]
                     artist_id = artist.get("id") or artist.get("browseId", "")
                     if artist_id:
-                        self.run_worker(self.navigate_to(
-                            "context", context_type="artist", context_id=artist_id
-                        ))
+                        self.run_worker(
+                            self.navigate_to("context", context_type="artist", context_id=artist_id)
+                        )
             elif action_id == "go_to_album":
                 album = track.get("album", {})
                 album_id = (
@@ -1167,16 +1194,13 @@ class YTMPlayerApp(App):
                     or ""
                 )
                 if album_id:
-                    self.run_worker(self.navigate_to(
-                        "context", context_type="album", context_id=album_id
-                    ))
+                    self.run_worker(
+                        self.navigate_to("context", context_type="album", context_id=album_id)
+                    )
             elif action_id == "toggle_like":
                 video_id = get_video_id(track)
                 if video_id and self.ytmusic:
-                    is_liked = (
-                        track.get("likeStatus") == "LIKE"
-                        or track.get("liked", False)
-                    )
+                    is_liked = track.get("likeStatus") == "LIKE" or track.get("liked", False)
                     rating = "INDIFFERENT" if is_liked else "LIKE"
                     label = "Unliked" if is_liked else "Liked"
 
@@ -1185,7 +1209,9 @@ class YTMPlayerApp(App):
                             await self.ytmusic.rate_song(vid, r)
                             self.notify(lbl, timeout=2)
                         except Exception:
-                            self.notify(f"Failed to {lbl.lower()} track", severity="error", timeout=3)
+                            self.notify(
+                                f"Failed to {lbl.lower()} track", severity="error", timeout=3
+                            )
 
                     self.run_worker(_rate(video_id, rating, label))
             elif action_id == "copy_link":
@@ -1199,9 +1225,7 @@ class YTMPlayerApp(App):
 
         self.push_screen(ActionsPopup(track, item_type="track"), _handle_action_result)
 
-    def on_track_table_track_right_clicked(
-        self, message: TrackTable.TrackRightClicked
-    ) -> None:
+    def on_track_table_track_right_clicked(self, message: TrackTable.TrackRightClicked) -> None:
         """Handle right-click on any TrackTable — open actions popup."""
         self._open_actions_for_track(message.track)
 
@@ -1231,6 +1255,7 @@ class YTMPlayerApp(App):
     async def _download_track(self, track: dict) -> None:
         """Download a single track for offline playback."""
         from ytm_player.utils.formatting import get_video_id
+
         video_id = get_video_id(track)
         if not video_id:
             self.notify("Track has no video ID.", severity="warning", timeout=2)
@@ -1266,6 +1291,7 @@ class YTMPlayerApp(App):
 
         for track in tracks:
             from ytm_player.utils.formatting import get_video_id
+
             video_id = get_video_id(track)
             if not video_id:
                 failed += 1

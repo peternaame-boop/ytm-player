@@ -1,6 +1,5 @@
 """Shared test fixtures for ytm-player."""
 
-
 import pytest
 
 
@@ -59,4 +58,5 @@ def sample_tracks() -> list[dict]:
 @pytest.fixture
 def queue_manager():
     from ytm_player.services.queue import QueueManager
+
     return QueueManager()

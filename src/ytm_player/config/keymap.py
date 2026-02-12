@@ -92,7 +92,6 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "seek_forward": [">"],
     "seek_backward": ["<"],
     "seek_start": ["^"],
-
     # Navigation
     "move_down": ["j", "down", "C-n"],
     "move_up": ["k", "up", "C-p"],
@@ -105,7 +104,6 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "focus_prev": ["S-tab"],
     "go_back": ["backspace", "C-q"],
     "close_popup": ["escape"],
-
     # Pages
     "library": ["g l"],
     "search": ["g s"],
@@ -117,7 +115,6 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "jump_to_current": ["g c"],
     "queue": ["z"],
     "help": ["?", "C-h"],
-
     # Actions
     "delete_item": ["delete", "d d"],
     "track_actions": ["a"],
@@ -126,7 +123,6 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "add_to_queue": ["Z", "C-z"],
     "add_to_playlist": ["A"],
     "filter": ["/"],
-
     # Sorting
     "sort_title": ["s t"],
     "sort_artist": ["s a"],
@@ -134,7 +130,6 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "sort_duration": ["s d"],
     "sort_date": ["s D"],
     "reverse_sort": ["s r"],
-
     # Search
     "toggle_search_mode": ["M-v"],
 }
@@ -198,7 +193,10 @@ class KeyMap:
             return MatchResult.EXACT, self.bindings[key_sequence]
 
         for bound_seq in self.bindings:
-            if len(bound_seq) > len(key_sequence) and bound_seq[:len(key_sequence)] == key_sequence:
+            if (
+                len(bound_seq) > len(key_sequence)
+                and bound_seq[: len(key_sequence)] == key_sequence
+            ):
                 return MatchResult.PENDING, None
 
         return MatchResult.NO_MATCH, None

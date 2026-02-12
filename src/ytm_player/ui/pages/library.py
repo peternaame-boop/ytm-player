@@ -221,8 +221,7 @@ class LibraryPanel(Widget):
             self._filtered_items = list(self._items)
         else:
             self._filtered_items = [
-                item for item in self._items
-                if query in self._format_item(item).lower()
+                item for item in self._items if query in self._format_item(item).lower()
             ]
         self._rebuild_list(self._filtered_items)
 
@@ -246,9 +245,7 @@ class LibraryPanel(Widget):
             # Instant mode: always fire, whether keyboard or click.
             idx = event.list_view.index
             if idx is not None and 0 <= idx < len(self._filtered_items):
-                self.post_message(
-                    self.ItemSelected(self._filtered_items[idx], self.id or "")
-                )
+                self.post_message(self.ItemSelected(self._filtered_items[idx], self.id or ""))
             return
 
         # Legacy double-click mode.
@@ -258,9 +255,7 @@ class LibraryPanel(Widget):
 
         idx = event.list_view.index
         if idx is not None and 0 <= idx < len(self._filtered_items):
-            self.post_message(
-                self.ItemSelected(self._filtered_items[idx], self.id or "")
-            )
+            self.post_message(self.ItemSelected(self._filtered_items[idx], self.id or ""))
 
     def _find_clicked_item_index(self, event: Click) -> int | None:
         """Walk up from the click target to find the ListItem index, or None."""
@@ -286,13 +281,9 @@ class LibraryPanel(Widget):
             event.stop()
             idx = self._find_clicked_item_index(event)
             if idx is not None and 0 <= idx < len(self._filtered_items):
-                self.post_message(
-                    self.ItemRightClicked(self._filtered_items[idx], self.id or "")
-                )
+                self.post_message(self.ItemRightClicked(self._filtered_items[idx], self.id or ""))
             else:
-                self.post_message(
-                    self.ItemRightClicked(None, self.id or "")
-                )
+                self.post_message(self.ItemRightClicked(None, self.id or ""))
             return
 
         if event.button != 1:
@@ -303,10 +294,7 @@ class LibraryPanel(Widget):
             idx = self._find_clicked_item_index(event)
             if idx is not None and 0 <= idx < len(self._filtered_items):
                 now = time.monotonic()
-                if (
-                    self._last_click_index == idx
-                    and (now - self._last_click_time) < 0.4
-                ):
+                if self._last_click_index == idx and (now - self._last_click_time) < 0.4:
                     self._last_click_time = 0.0
                     self._last_click_index = None
                     event.stop()
@@ -325,17 +313,12 @@ class LibraryPanel(Widget):
 
         now = time.monotonic()
 
-        if (
-            self._last_click_index == idx
-            and (now - self._last_click_time) < 0.4
-        ):
+        if self._last_click_index == idx and (now - self._last_click_time) < 0.4:
             self._last_click_time = 0.0
             self._last_click_index = None
             self._click_activated = True
             if 0 <= idx < len(self._filtered_items):
-                self.post_message(
-                    self.ItemSelected(self._filtered_items[idx], self.id or "")
-                )
+                self.post_message(self.ItemSelected(self._filtered_items[idx], self.id or ""))
             return
 
         self._last_click_time = now
@@ -472,9 +455,7 @@ class LibraryPage(Widget):
     # Playlist selection → load tracks inline
     # ------------------------------------------------------------------
 
-    async def on_library_panel_item_selected(
-        self, event: LibraryPanel.ItemSelected
-    ) -> None:
+    async def on_library_panel_item_selected(self, event: LibraryPanel.ItemSelected) -> None:
         """Fetch and display selected playlist's tracks inline."""
         item = event.item_data
         playlist_id = item.get("playlistId") or item.get("browseId")
@@ -556,9 +537,7 @@ class LibraryPage(Widget):
     # Track selection → play
     # ------------------------------------------------------------------
 
-    async def on_track_table_track_selected(
-        self, event: TrackTable.TrackSelected
-    ) -> None:
+    async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Queue all tracks and start playback from the selected one."""
         event.stop()
         table = self.query_one("#library-tracks", TrackTable)
@@ -574,9 +553,7 @@ class LibraryPage(Widget):
     # Right-click → context menu
     # ------------------------------------------------------------------
 
-    def on_library_panel_item_right_clicked(
-        self, event: LibraryPanel.ItemRightClicked
-    ) -> None:
+    def on_library_panel_item_right_clicked(self, event: LibraryPanel.ItemRightClicked) -> None:
         """Open context menu or create-new flow on right-click."""
         item = event.item_data
 
@@ -616,9 +593,7 @@ class LibraryPage(Widget):
             if name and name.strip():
                 self.app.run_worker(self._create_playlist(name.strip()))
 
-        self.app.push_screen(
-            InputPopup("New Playlist", placeholder="Playlist name..."), _on_name
-        )
+        self.app.push_screen(InputPopup("New Playlist", placeholder="Playlist name..."), _on_name)
 
     async def _create_playlist(self, name: str) -> None:
         """Create a new playlist and refresh the sidebar."""

@@ -19,77 +19,94 @@ from ytm_player.utils.formatting import (
 
 # ── format_duration ──────────────────────────────────────────────────
 
+
 class TestFormatDuration:
-    @pytest.mark.parametrize("seconds, expected", [
-        (0, "0:00"),
-        (1, "0:01"),
-        (59, "0:59"),
-        (60, "1:00"),
-        (125, "2:05"),
-        (3599, "59:59"),
-        (3600, "1:00:00"),
-        (3661, "1:01:01"),
-        (86400, "24:00:00"),
-        (-5, "0:00"),
-    ])
+    @pytest.mark.parametrize(
+        "seconds, expected",
+        [
+            (0, "0:00"),
+            (1, "0:01"),
+            (59, "0:59"),
+            (60, "1:00"),
+            (125, "2:05"),
+            (3599, "59:59"),
+            (3600, "1:00:00"),
+            (3661, "1:01:01"),
+            (86400, "24:00:00"),
+            (-5, "0:00"),
+        ],
+    )
     def test_format_duration(self, seconds, expected):
         assert format_duration(seconds) == expected
 
 
 # ── truncate ─────────────────────────────────────────────────────────
 
+
 class TestTruncate:
-    @pytest.mark.parametrize("text, max_len, expected", [
-        ("", 10, ""),
-        ("Hello", 10, "Hello"),
-        ("Hello", 5, "Hello"),
-        ("Hello World", 8, "Hello..."),
-        ("Hello World", 3, "Hel"),
-        ("Hello World", 2, "He"),
-        ("Hello World", 1, "H"),
-        ("Hello World", 0, ""),
-        ("Hi", 4, "Hi"),
-    ])
+    @pytest.mark.parametrize(
+        "text, max_len, expected",
+        [
+            ("", 10, ""),
+            ("Hello", 10, "Hello"),
+            ("Hello", 5, "Hello"),
+            ("Hello World", 8, "Hello..."),
+            ("Hello World", 3, "Hel"),
+            ("Hello World", 2, "He"),
+            ("Hello World", 1, "H"),
+            ("Hello World", 0, ""),
+            ("Hi", 4, "Hi"),
+        ],
+    )
     def test_truncate(self, text, max_len, expected):
         assert truncate(text, max_len) == expected
 
 
 # ── format_count ─────────────────────────────────────────────────────
 
+
 class TestFormatCount:
-    @pytest.mark.parametrize("n, expected", [
-        (0, "0"),
-        (999, "999"),
-        (1000, "1.0K"),
-        (1500, "1.5K"),
-        (1000000, "1.0M"),
-        (1500000, "1.5M"),
-        (1000000000, "1.0B"),
-        (-1500, "-1.5K"),
-        (-2000000, "-2.0M"),
-        (-3000000000, "-3.0B"),
-    ])
+    @pytest.mark.parametrize(
+        "n, expected",
+        [
+            (0, "0"),
+            (999, "999"),
+            (1000, "1.0K"),
+            (1500, "1.5K"),
+            (1000000, "1.0M"),
+            (1500000, "1.5M"),
+            (1000000000, "1.0B"),
+            (-1500, "-1.5K"),
+            (-2000000, "-2.0M"),
+            (-3000000000, "-3.0B"),
+        ],
+    )
     def test_format_count(self, n, expected):
         assert format_count(n) == expected
 
 
 # ── format_size ──────────────────────────────────────────────────────
 
+
 class TestFormatSize:
-    @pytest.mark.parametrize("bytes_val, expected", [
-        (0, "0 B"),
-        (1023, "1023 B"),
-        (1024, "1.0 KB"),
-        (1536, "1.5 KB"),
-        (1048576, "1.0 MB"),
-        (1073741824, "1.0 GB"),
-        (1099511627776, "1.0 TB"),
-    ])
+    @pytest.mark.parametrize(
+        "bytes_val, expected",
+        [
+            (0, "0 B"),
+            (1023, "1023 B"),
+            (1024, "1.0 KB"),
+            (1536, "1.5 KB"),
+            (1048576, "1.0 MB"),
+            (1073741824, "1.0 GB"),
+            (1099511627776, "1.0 TB"),
+        ],
+    )
     def test_format_size(self, bytes_val, expected):
         assert format_size(bytes_val) == expected
 
 
 # ── get_video_id ─────────────────────────────────────────────────────
+
 
 class TestGetVideoId:
     def test_video_id_key(self):
@@ -106,6 +123,7 @@ class TestGetVideoId:
 
 
 # ── extract_artist ───────────────────────────────────────────────────
+
 
 class TestExtractArtist:
     def test_string_artist(self):
@@ -127,6 +145,7 @@ class TestExtractArtist:
 
 
 # ── extract_duration ─────────────────────────────────────────────────
+
 
 class TestExtractDuration:
     def test_duration_seconds(self):
@@ -156,17 +175,20 @@ class TestExtractDuration:
 
 # ── normalize_tracks ─────────────────────────────────────────────────
 
+
 class TestNormalizeTracks:
     def test_basic_normalization(self):
-        raw = [{
-            "videoId": "abc",
-            "title": "Test",
-            "artist": "Someone",
-            "artists": [{"name": "Someone"}],
-            "album": {"name": "Album", "id": "alb1"},
-            "duration_seconds": 200,
-            "thumbnails": [{"url": "http://img/small"}, {"url": "http://img/large"}],
-        }]
+        raw = [
+            {
+                "videoId": "abc",
+                "title": "Test",
+                "artist": "Someone",
+                "artists": [{"name": "Someone"}],
+                "album": {"name": "Album", "id": "alb1"},
+                "duration_seconds": 200,
+                "thumbnails": [{"url": "http://img/small"}, {"url": "http://img/large"}],
+            }
+        ]
         result = normalize_tracks(raw)
         assert len(result) == 1
         t = result[0]
@@ -241,6 +263,7 @@ class TestNormalizeTracks:
 
 # ── format_ago ───────────────────────────────────────────────────────
 
+
 class TestFormatAgo:
     def test_seconds(self):
         ts = datetime.now(timezone.utc) - timedelta(seconds=30)
@@ -298,20 +321,27 @@ class TestFormatAgo:
 
 # ── VALID_VIDEO_ID ───────────────────────────────────────────────────
 
+
 class TestValidVideoId:
-    @pytest.mark.parametrize("vid", [
-        "dQw4w9WgXcQ",
-        "abc123",
-        "A-B_c",
-    ])
+    @pytest.mark.parametrize(
+        "vid",
+        [
+            "dQw4w9WgXcQ",
+            "abc123",
+            "A-B_c",
+        ],
+    )
     def test_valid(self, vid):
         assert VALID_VIDEO_ID.match(vid)
 
-    @pytest.mark.parametrize("vid", [
-        "",
-        "a" * 65,
-        "abc 123",
-        "abc!@#",
-    ])
+    @pytest.mark.parametrize(
+        "vid",
+        [
+            "",
+            "a" * 65,
+            "abc 123",
+            "abc!@#",
+        ],
+    )
     def test_invalid(self, vid):
         assert not VALID_VIDEO_ID.match(vid)

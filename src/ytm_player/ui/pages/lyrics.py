@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Label, Static

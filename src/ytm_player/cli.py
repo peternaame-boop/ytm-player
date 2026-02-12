@@ -24,10 +24,16 @@ from typing import Any, NoReturn
 import click
 
 from ytm_player import __version__
-from ytm_player.config.paths import CONFIG_DIR, CONFIG_FILE, AUTH_FILE, HISTORY_DB, CACHE_DIR, CACHE_DB, ensure_dirs
+from ytm_player.config.paths import (
+    CACHE_DB,
+    CACHE_DIR,
+    CONFIG_DIR,
+    CONFIG_FILE,
+    HISTORY_DB,
+    ensure_dirs,
+)
 from ytm_player.ipc import ipc_request, is_tui_running
 from ytm_player.services.auth import AuthManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -64,9 +70,7 @@ def _require_auth() -> Path:
     """Return the auth file path, or exit if not authenticated."""
     auth = AuthManager()
     if not auth.is_authenticated():
-        _error(
-            "Not authenticated. Run `ytm setup` to configure YouTube Music credentials."
-        )
+        _error("Not authenticated. Run `ytm setup` to configure YouTube Music credentials.")
     return auth.auth_file
 
 
@@ -77,8 +81,13 @@ def _require_auth() -> Path:
 
 @click.group(invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="ytm-player")
-@click.option("--json", "compact_json", is_flag=True, hidden=True,
-              help="Compact JSON output (no indentation).")
+@click.option(
+    "--json",
+    "compact_json",
+    is_flag=True,
+    hidden=True,
+    help="Compact JSON output (no indentation).",
+)
 @click.pass_context
 def main(ctx: click.Context, compact_json: bool) -> None:
     """ytm-player -- a full-featured YouTube Music TUI client.
@@ -236,16 +245,18 @@ def status(ctx: click.Context) -> None:
 @main.command()
 @click.argument("query", nargs=-1, required=True)
 @click.option(
-    "--filter", "-f", "filter_type",
+    "--filter",
+    "-f",
+    "filter_type",
     type=click.Choice(["songs", "albums", "artists", "playlists", "videos"], case_sensitive=False),
     default=None,
     help="Filter results by type.",
 )
-@click.option("--limit", "-l", type=int, default=20, show_default=True,
-              help="Maximum number of results.")
+@click.option(
+    "--limit", "-l", type=int, default=20, show_default=True, help="Maximum number of results."
+)
 @click.option("--json", "compact_json", is_flag=True, help="Compact JSON output.")
-def search(query: tuple[str, ...], filter_type: str | None, limit: int,
-           compact_json: bool) -> None:
+def search(query: tuple[str, ...], filter_type: str | None, limit: int, compact_json: bool) -> None:
     """Search YouTube Music and print results as JSON."""
     _require_auth()
     search_query = " ".join(query)
@@ -308,8 +319,9 @@ def queue_clear() -> None:
 
 
 @main.group(invoke_without_command=True)
-@click.option("--limit", "-l", type=int, default=50, show_default=True,
-              help="Number of history entries.")
+@click.option(
+    "--limit", "-l", type=int, default=50, show_default=True, help="Number of history entries."
+)
 @click.option("--json", "compact_json", is_flag=True, help="Compact JSON output.")
 @click.pass_context
 def history(ctx: click.Context, limit: int, compact_json: bool) -> None:
@@ -337,8 +349,14 @@ def history(ctx: click.Context, limit: int, compact_json: bool) -> None:
 
 
 @history.command("search")
-@click.option("--limit", "-l", type=int, default=50, show_default=True,
-              help="Number of search history entries.")
+@click.option(
+    "--limit",
+    "-l",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Number of search history entries.",
+)
 @click.option("--json", "compact_json", is_flag=True, help="Compact JSON output.")
 def history_search(limit: int, compact_json: bool) -> None:
     """Show recent search history (JSON)."""
@@ -371,22 +389,26 @@ def history_search(limit: int, compact_json: bool) -> None:
 def stats(compact_json: bool) -> None:
     """Show listening statistics (JSON)."""
     if not HISTORY_DB.exists():
-        _json_output({"total_plays": 0, "total_seconds": 0, "unique_tracks": 0},
-                      compact=compact_json)
+        _json_output(
+            {"total_plays": 0, "total_seconds": 0, "unique_tracks": 0}, compact=compact_json
+        )
         return
 
     data: dict[str, Any] = {
-        "total_plays": 0, "total_seconds": 0, "unique_tracks": 0, "top_tracks": [],
+        "total_plays": 0,
+        "total_seconds": 0,
+        "unique_tracks": 0,
+        "top_tracks": [],
     }
     try:
         with sqlite3.connect(str(HISTORY_DB)) as conn:
             total_plays = conn.execute("SELECT COUNT(*) FROM play_history").fetchone()[0]
-            total_seconds = (
-                conn.execute("SELECT COALESCE(SUM(listened_seconds), 0) FROM play_history").fetchone()[0]
-            )
-            unique_tracks = (
-                conn.execute("SELECT COUNT(DISTINCT video_id) FROM play_history").fetchone()[0]
-            )
+            total_seconds = conn.execute(
+                "SELECT COALESCE(SUM(listened_seconds), 0) FROM play_history"
+            ).fetchone()[0]
+            unique_tracks = conn.execute(
+                "SELECT COUNT(DISTINCT video_id) FROM play_history"
+            ).fetchone()[0]
             top_tracks = conn.execute(
                 "SELECT video_id, title, artist, COUNT(*) as play_count "
                 "FROM play_history GROUP BY video_id ORDER BY play_count DESC LIMIT 10"
@@ -516,8 +538,7 @@ def config() -> None:
         editor = shutil.which("xdg-open")
         target = str(CONFIG_DIR)
         if editor is None:
-            _error("No $EDITOR set and xdg-open not found. "
-                   f"Open manually: {CONFIG_DIR}")
+            _error(f"No $EDITOR set and xdg-open not found. Open manually: {CONFIG_DIR}")
 
     try:
         subprocess.run([editor, target], check=True)

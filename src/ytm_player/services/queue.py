@@ -134,12 +134,12 @@ class QueueManager:
             # Insert the new track at a random future position in shuffle order.
             insert_at = self._shuffle_position + 1 if self._shuffle_position >= 0 else 0
             # Shift existing shuffle indices that are >= new_idx.
-            self._shuffle_order = [
-                (i + 1 if i >= new_idx else i) for i in self._shuffle_order
-            ]
-            future_pos = random.randint(
-                insert_at + 1, len(self._shuffle_order)
-            ) if insert_at < len(self._shuffle_order) else len(self._shuffle_order)
+            self._shuffle_order = [(i + 1 if i >= new_idx else i) for i in self._shuffle_order]
+            future_pos = (
+                random.randint(insert_at + 1, len(self._shuffle_order))
+                if insert_at < len(self._shuffle_order)
+                else len(self._shuffle_order)
+            )
             self._shuffle_order.insert(future_pos, new_idx)
 
     def add_next(self, track: dict) -> None:
@@ -186,9 +186,7 @@ class QueueManager:
                 real_idx = self._shuffle_order[index]
                 del self._shuffle_order[index]
                 # Shift indices that pointed beyond the removed track.
-                self._shuffle_order = [
-                    (i - 1 if i > real_idx else i) for i in self._shuffle_order
-                ]
+                self._shuffle_order = [(i - 1 if i > real_idx else i) for i in self._shuffle_order]
                 del self._tracks[real_idx]
                 if index <= self._shuffle_position and self._shuffle_position > 0:
                     self._shuffle_position -= 1

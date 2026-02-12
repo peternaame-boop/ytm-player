@@ -13,7 +13,7 @@ import logging
 import os
 import socket
 import stat
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 from ytm_player.config.paths import PID_FILE, SOCKET_PATH
 
@@ -23,10 +23,20 @@ _MAX_MSG = 65536  # 64 KB
 _CLIENT_TIMEOUT = 5  # seconds
 
 # Whitelist of valid IPC commands.
-_VALID_COMMANDS = frozenset({
-    "play", "pause", "next", "prev", "seek",
-    "now", "status", "queue", "queue_add", "queue_clear",
-})
+_VALID_COMMANDS = frozenset(
+    {
+        "play",
+        "pause",
+        "next",
+        "prev",
+        "seek",
+        "now",
+        "status",
+        "queue",
+        "queue_add",
+        "queue_clear",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +137,9 @@ class IPCServer:
 
             command = request.get("command", "")
             if not isinstance(command, str) or command not in _VALID_COMMANDS:
-                writer.write(json.dumps({"ok": False, "error": f"unknown command: {command}"}).encode())
+                writer.write(
+                    json.dumps({"ok": False, "error": f"unknown command: {command}"}).encode()
+                )
                 await writer.drain()
                 return
 

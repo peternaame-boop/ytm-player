@@ -180,9 +180,7 @@ class ContextPage(Widget):
         elif event.state == WorkerState.ERROR:
             self.loading = False
             self.error_message = f"Failed to load {self.context_type}."
-            logger.exception(
-                "Failed to load %s %s", self.context_type, self.context_id
-            )
+            logger.exception("Failed to load %s %s", self.context_type, self.context_id)
 
     def watch_loading(self, loading: bool) -> None:
         try:
@@ -231,11 +229,9 @@ class ContextPage(Widget):
 
         header = Vertical(classes="context-header")
         container.mount(header)
-        header.mount(Label(f"[b]Album[/b]", markup=True))
+        header.mount(Label("[b]Album[/b]", markup=True))
         header.mount(Label(title, classes="context-title"))
-        header.mount(
-            Label(" \u00b7 ".join(subtitle_parts), classes="context-subtitle")
-        )
+        header.mount(Label(" \u00b7 ".join(subtitle_parts), classes="context-subtitle"))
 
         table = TrackTable(show_album=False, id="context-tracks")
         container.mount(table)
@@ -253,7 +249,7 @@ class ContextPage(Widget):
 
         header = Vertical(classes="context-header")
         container.mount(header)
-        header.mount(Label(f"[b]Playlist[/b]", markup=True))
+        header.mount(Label("[b]Playlist[/b]", markup=True))
         header.mount(Label(title, classes="context-title"))
         header.mount(Label(subtitle, classes="context-subtitle"))
 
@@ -269,7 +265,7 @@ class ContextPage(Widget):
 
         header = Vertical(classes="context-header")
         container.mount(header)
-        header.mount(Label(f"[b]Artist[/b]", markup=True))
+        header.mount(Label("[b]Artist[/b]", markup=True))
         header.mount(Label(name, classes="context-title"))
         if subscriber_text:
             header.mount(Label(subscriber_text, classes="context-subtitle"))
@@ -283,14 +279,8 @@ class ContextPage(Widget):
         left.mount(Label("[b]Top Songs[/b]", markup=True))
 
         songs_section = data.get("songs", {})
-        top_songs = (
-            songs_section.get("results", [])
-            if isinstance(songs_section, dict)
-            else []
-        )
-        top_tracks_table = TrackTable(
-            show_album=False, id="context-tracks"
-        )
+        top_songs = songs_section.get("results", []) if isinstance(songs_section, dict) else []
+        top_tracks_table = TrackTable(show_album=False, id="context-tracks")
         left.mount(top_tracks_table)
         top_tracks_table.load_tracks(normalize_tracks(top_songs))
 
@@ -299,16 +289,10 @@ class ContextPage(Widget):
         right.mount(Label("[b]Albums / Singles[/b]", markup=True))
 
         albums_section = data.get("albums", {})
-        albums_list = (
-            albums_section.get("results", [])
-            if isinstance(albums_section, dict)
-            else []
-        )
+        albums_list = albums_section.get("results", []) if isinstance(albums_section, dict) else []
         singles_section = data.get("singles", {})
         singles_list = (
-            singles_section.get("results", [])
-            if isinstance(singles_section, dict)
-            else []
+            singles_section.get("results", []) if isinstance(singles_section, dict) else []
         )
         all_albums = albums_list + singles_list
 
@@ -319,14 +303,11 @@ class ContextPage(Widget):
         # Similar artists bar at the bottom.
         related_section = data.get("related", {})
         related_artists = (
-            related_section.get("results", [])
-            if isinstance(related_section, dict)
-            else []
+            related_section.get("results", []) if isinstance(related_section, dict) else []
         )
         if related_artists:
             names = [
-                a.get("name", "") if isinstance(a, dict) else str(a)
-                for a in related_artists[:8]
+                a.get("name", "") if isinstance(a, dict) else str(a) for a in related_artists[:8]
             ]
             similar_text = "Similar Artists: " + " \u00b7 ".join(n for n in names if n)
             container.mount(Label(similar_text, classes="similar-artists-bar"))

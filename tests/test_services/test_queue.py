@@ -1,6 +1,5 @@
 """Tests for ytm_player.services.queue.QueueManager."""
 
-
 from ytm_player.services.queue import RepeatMode
 
 
@@ -222,9 +221,17 @@ class TestShuffleAdvanced:
         queue_manager.jump_to(0)
         queue_manager.toggle_shuffle()
 
-        extra = {"video_id": "extra_1", "title": "Extra", "artist": "X",
-                 "artists": [], "album": "", "album_id": None,
-                 "duration": 100, "thumbnail_url": None, "is_video": False}
+        extra = {
+            "video_id": "extra_1",
+            "title": "Extra",
+            "artist": "X",
+            "artists": [],
+            "album": "",
+            "album_id": None,
+            "duration": 100,
+            "thumbnail_url": None,
+            "is_video": False,
+        }
         queue_manager.add_next(extra)
         assert queue_manager.length == 6
         # The next track should be the one we just added.

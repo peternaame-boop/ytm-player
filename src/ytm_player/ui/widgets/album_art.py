@@ -85,9 +85,7 @@ class AlbumArt(Widget):
     def watch_thumbnail_url(self, value: str) -> None:
         """When thumbnail URL changes, fetch and render the image."""
         if value and _HAS_PILLOW:
-            self.run_worker(
-                self._load_thumbnail(value), exclusive=True, group="album-art"
-            )
+            self.run_worker(self._load_thumbnail(value), exclusive=True, group="album-art")
         elif not value:
             self._rendered = None
             self.refresh()
@@ -223,9 +221,7 @@ class AlbumArt(Widget):
         # If the URL is in cache, invalidate and re-fetch at new size.
         if url in _ART_CACHE:
             del _ART_CACHE[url]
-        self.run_worker(
-            self._load_thumbnail(url), exclusive=True, group="album-art"
-        )
+        self.run_worker(self._load_thumbnail(url), exclusive=True, group="album-art")
 
     def set_track(self, thumbnail_url: str = "") -> None:
         """Update the widget for a new track."""

@@ -56,12 +56,14 @@ class Player:
         # mpv segfaults if LC_NUMERIC is not C.  Textual's async runtime
         # resets locale, so we must force it immediately before mpv init.
         import ctypes
+
         _libc = ctypes.CDLL("libc.so.6")
         _libc.setlocale.restype = ctypes.c_char_p
         _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
         _libc.setlocale(locale.LC_NUMERIC, b"C")
 
         from ytm_player.config.settings import get_settings
+
         settings = get_settings()
 
         self._mpv = mpv.MPV(
@@ -315,6 +317,7 @@ class Player:
             logger.info("Re-initializing mpv instance...")
             import ctypes
             import locale as _locale
+
             _libc = ctypes.CDLL("libc.so.6")
             _libc.setlocale.restype = ctypes.c_char_p
             _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
@@ -329,6 +332,7 @@ class Player:
             )
 
             from ytm_player.config.settings import get_settings
+
             if get_settings().playback.gapless:
                 try:
                     self._mpv["gapless-audio"] = "yes"
@@ -352,6 +356,7 @@ class Player:
             if self._loop and not self._loop.is_closed():
                 try:
                     from ytm_player.config.settings import get_settings as _gs
+
                     self._mpv.volume = _gs().playback.default_volume
                 except Exception:
                     self._mpv.volume = 80

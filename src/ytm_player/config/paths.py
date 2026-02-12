@@ -15,7 +15,9 @@ _xdg_cache = os.environ.get("XDG_CACHE_HOME")
 SECURE_FILE_MODE = 0o600
 SECURE_DIR_MODE = 0o700
 
-CONFIG_DIR = (Path(_xdg_config) / "ytm-player") if _xdg_config else (Path.home() / ".config" / "ytm-player")
+CONFIG_DIR = (
+    (Path(_xdg_config) / "ytm-player") if _xdg_config else (Path.home() / ".config" / "ytm-player")
+)
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 AUTH_FILE = CONFIG_DIR / "auth.json"
 OAUTH_FILE = CONFIG_DIR / "oauth.json"
@@ -26,14 +28,24 @@ PID_FILE = CONFIG_DIR / "ytm.pid"
 # Unix sockets have a ~108 byte path limit. Use XDG_RUNTIME_DIR (short,
 # per-user, tmpfs) when available, fall back to CONFIG_DIR.
 _xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
-SOCKET_PATH = (Path(_xdg_runtime) / "ytm-player.sock") if _xdg_runtime else (CONFIG_DIR / "ytm.sock")
+SOCKET_PATH = (
+    (Path(_xdg_runtime) / "ytm-player.sock") if _xdg_runtime else (CONFIG_DIR / "ytm.sock")
+)
 KEYMAP_FILE = CONFIG_DIR / "keymap.toml"
 THEME_FILE = CONFIG_DIR / "theme.toml"
 RECENT_PLAYLISTS_FILE = CONFIG_DIR / "recent_playlists.json"
 SESSION_STATE_FILE = CONFIG_DIR / "session.json"
 
-CACHE_DIR = (Path(_xdg_cache) / "ytm-player" / "audio") if _xdg_cache else (Path.home() / ".cache" / "ytm-player" / "audio")
-CACHE_DB = (Path(_xdg_cache) / "ytm-player" / "cache.db") if _xdg_cache else (Path.home() / ".cache" / "ytm-player" / "cache.db")
+CACHE_DIR = (
+    (Path(_xdg_cache) / "ytm-player" / "audio")
+    if _xdg_cache
+    else (Path.home() / ".cache" / "ytm-player" / "audio")
+)
+CACHE_DB = (
+    (Path(_xdg_cache) / "ytm-player" / "cache.db")
+    if _xdg_cache
+    else (Path.home() / ".cache" / "ytm-player" / "cache.db")
+)
 HISTORY_DB = CONFIG_DIR / "history.db"
 
 _dirs_ensured = False

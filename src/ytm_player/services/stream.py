@@ -80,7 +80,6 @@ class StreamResolver:
 
     def _resolve_sync(self, video_id: str) -> StreamInfo | None:
         """Synchronous stream resolution (runs in a thread) with retry."""
-        import yt_dlp  # Lazy import: ~200-400ms, only needed on first stream resolution
 
         if not VALID_VIDEO_ID.match(video_id):
             logger.warning("Invalid video_id rejected: %r", video_id)
@@ -147,13 +146,17 @@ class StreamResolver:
         except yt_dlp.utils.DownloadError as exc:
             logger.warning(
                 "yt-dlp download error for video_id=%s (attempt %d): %s",
-                video_id, attempt + 1, exc,
+                video_id,
+                attempt + 1,
+                exc,
             )
             return None
         except Exception:
             logger.warning(
                 "Unexpected error resolving stream for video_id=%s (attempt %d)",
-                video_id, attempt + 1, exc_info=True,
+                video_id,
+                attempt + 1,
+                exc_info=True,
             )
             return None
 
@@ -181,9 +184,7 @@ class StreamResolver:
 
             # If still over the cap, evict the oldest entries by expires_at.
             if len(self._cache) > _CACHE_MAX_SIZE:
-                sorted_ids = sorted(
-                    self._cache, key=lambda vid: self._cache[vid].expires_at
-                )
+                sorted_ids = sorted(self._cache, key=lambda vid: self._cache[vid].expires_at)
                 excess = len(self._cache) - _CACHE_MAX_SIZE
                 for vid in sorted_ids[:excess]:
                     del self._cache[vid]

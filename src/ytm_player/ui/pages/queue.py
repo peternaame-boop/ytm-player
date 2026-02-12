@@ -137,9 +137,7 @@ class QueuePage(Widget):
         if current_track:
             title = current_track.get("title", "Unknown")
             artist = current_track.get("artist", "Unknown")
-            header.mount(
-                Label(f"Now Playing: {title}", classes="queue-now-playing-title")
-            )
+            header.mount(Label(f"Now Playing: {title}", classes="queue-now-playing-title"))
             header.mount(Label(artist, classes="queue-now-playing-artist"))
             header.display = True
         else:
@@ -171,9 +169,7 @@ class QueuePage(Widget):
         if current_track:
             title = current_track.get("title", "Unknown")
             artist = current_track.get("artist", "Unknown")
-            header.mount(
-                Label(f"Now Playing: {title}", classes="queue-now-playing-title")
-            )
+            header.mount(Label(f"Now Playing: {title}", classes="queue-now-playing-title"))
             header.mount(Label(artist, classes="queue-now-playing-artist"))
             header.display = True
         else:
@@ -200,7 +196,10 @@ class QueuePage(Widget):
                 indicator = "\u25b6" if i == current_index else str(i + 1)
 
                 row_key = table.add_row(
-                    indicator, title, artist, dur_str,
+                    indicator,
+                    title,
+                    artist,
+                    dur_str,
                     key=f"q_{i}",
                 )
                 self._row_keys.append(row_key)
@@ -222,11 +221,7 @@ class QueuePage(Widget):
         }.get(repeat, "Off")
 
         shuffle_label = "On" if shuffle else "Off"
-        footer_text = (
-            f"Repeat: {repeat_label}  "
-            f"Shuffle: {shuffle_label}  "
-            f"Tracks: {count}"
-        )
+        footer_text = f"Repeat: {repeat_label}  Shuffle: {shuffle_label}  Tracks: {count}"
 
         try:
             footer = self.query_one("#queue-footer", Static)

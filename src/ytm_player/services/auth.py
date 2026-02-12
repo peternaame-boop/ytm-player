@@ -15,13 +15,24 @@ from pathlib import Path
 from ytmusicapi import YTMusic
 from ytmusicapi.helpers import get_authorization, initialize_headers, sapisid_from_cookie
 
-from ytm_player.config.paths import CONFIG_DIR, AUTH_FILE, OAUTH_FILE, OAUTH_CREDS_FILE, SECURE_FILE_MODE
+from ytm_player.config.paths import (
+    AUTH_FILE,
+    CONFIG_DIR,
+    SECURE_FILE_MODE,
+)
 
 logger = logging.getLogger(__name__)
 
 # Browsers to try, in preference order.
 _BROWSERS = (
-    "helium", "chrome", "chromium", "brave", "firefox", "edge", "vivaldi", "opera",
+    "helium",
+    "chrome",
+    "chromium",
+    "brave",
+    "firefox",
+    "edge",
+    "vivaldi",
+    "opera",
 )
 
 # Custom Chromium-based browsers not in yt-dlp's built-in list.
@@ -54,14 +65,13 @@ def _patch_yt_dlp_browsers() -> None:
             return orig_fn(browser_name)
 
         c._get_chromium_based_browser_settings = _patched
-        c.CHROMIUM_BASED_BROWSERS = c.CHROMIUM_BASED_BROWSERS | set(
-            _CUSTOM_CHROMIUM_BROWSERS
-        )
+        c.CHROMIUM_BASED_BROWSERS = c.CHROMIUM_BASED_BROWSERS | set(_CUSTOM_CHROMIUM_BROWSERS)
         _yt_dlp_patched = True
     except (ImportError, AttributeError) as exc:
         logger.warning(
             "Failed to patch yt-dlp for extra browser support "
-            "(yt-dlp internals may have changed): %s", exc
+            "(yt-dlp internals may have changed): %s",
+            exc,
         )
 
 
@@ -117,14 +127,9 @@ class AuthManager:
                 ytm._session.post = orig_post
 
             if raw_response:
-                for stp in raw_response.get("responseContext", {}).get(
-                    "serviceTrackingParams", []
-                ):
+                for stp in raw_response.get("responseContext", {}).get("serviceTrackingParams", []):
                     for param in stp.get("params", []):
-                        if (
-                            param.get("key") == "logged_in"
-                            and param.get("value") == "0"
-                        ):
+                        if param.get("key") == "logged_in" and param.get("value") == "0":
                             logger.warning("Auth validation: server says logged_in=0")
                             return False
             return True
@@ -189,8 +194,7 @@ class AuthManager:
             try:
                 jar = extract_cookies_from_browser(browser)
                 has_sapisid = any(
-                    c.name in ("SAPISID", "__Secure-3PAPISID")
-                    and c.domain == ".youtube.com"
+                    c.name in ("SAPISID", "__Secure-3PAPISID") and c.domain == ".youtube.com"
                     for c in jar
                 )
                 if has_sapisid:

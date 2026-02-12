@@ -70,6 +70,7 @@ class TestFilePermissions:
     def test_saved_file_permissions(self, tmp_config_dir):
         import os
         import stat
+
         path = tmp_config_dir / "config.toml"
         Settings().save(path)
         mode = stat.S_IMODE(os.stat(path).st_mode)

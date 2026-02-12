@@ -162,7 +162,6 @@ class TrackTable(DataTable):
         video_id = track.get("video_id", f"row_{index}")
         return self.add_row(*cells, key=f"{video_id}_{index}")
 
-
     # -- Playing state ----------------------------------------------------
 
     def set_playing(self, video_id: str | None) -> None:
@@ -205,7 +204,9 @@ class TrackTable(DataTable):
             try:
                 self.update_cell(self._row_keys[new_index], "index", "\u25b6")
             except Exception:
-                logger.debug("Failed to set playing indicator for index %d", new_index, exc_info=True)
+                logger.debug(
+                    "Failed to set playing indicator for index %d", new_index, exc_info=True
+                )
 
         self._playing_index = new_index
 
@@ -231,9 +232,7 @@ class TrackTable(DataTable):
             # so we can use the current cursor position.
             row_idx = self.cursor_row
             if row_idx is not None and 0 <= row_idx < len(self._tracks):
-                self.post_message(
-                    self.TrackRightClicked(self._tracks[row_idx], row_idx)
-                )
+                self.post_message(self.TrackRightClicked(self._tracks[row_idx], row_idx))
 
     # -- Vim-style navigation ---------------------------------------------
 

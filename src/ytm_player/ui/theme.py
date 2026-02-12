@@ -59,34 +59,36 @@ class ThemeColors:
         path.write_text("\n".join(lines))
 
     def to_css(self) -> str:
-        return "\n".join([
-            ":root {",
-            f"    --background: {self.background};",
-            f"    --foreground: {self.foreground};",
-            f"    --primary: {self.primary};",
-            f"    --secondary: {self.secondary};",
-            f"    --accent: {self.accent};",
-            f"    --success: {self.success};",
-            f"    --warning: {self.warning};",
-            f"    --error: {self.error};",
-            f"    --playback-bar-bg: {self.playback_bar_bg};",
-            f"    --active-tab: {self.active_tab};",
-            f"    --inactive-tab: {self.inactive_tab};",
-            f"    --selected-item: {self.selected_item};",
-            f"    --progress-filled: {self.progress_filled};",
-            f"    --progress-empty: {self.progress_empty};",
-            f"    --lyrics-played: {self.lyrics_played};",
-            f"    --lyrics-current: {self.lyrics_current};",
-            f"    --lyrics-upcoming: {self.lyrics_upcoming};",
-            f"    --border: {self.border};",
-            f"    --muted-text: {self.muted_text};",
-            "}",
-            "",
-            "Screen {",
-            f"    background: {self.background};",
-            f"    color: {self.foreground};",
-            "}",
-        ])
+        return "\n".join(
+            [
+                ":root {",
+                f"    --background: {self.background};",
+                f"    --foreground: {self.foreground};",
+                f"    --primary: {self.primary};",
+                f"    --secondary: {self.secondary};",
+                f"    --accent: {self.accent};",
+                f"    --success: {self.success};",
+                f"    --warning: {self.warning};",
+                f"    --error: {self.error};",
+                f"    --playback-bar-bg: {self.playback_bar_bg};",
+                f"    --active-tab: {self.active_tab};",
+                f"    --inactive-tab: {self.inactive_tab};",
+                f"    --selected-item: {self.selected_item};",
+                f"    --progress-filled: {self.progress_filled};",
+                f"    --progress-empty: {self.progress_empty};",
+                f"    --lyrics-played: {self.lyrics_played};",
+                f"    --lyrics-current: {self.lyrics_current};",
+                f"    --lyrics-upcoming: {self.lyrics_upcoming};",
+                f"    --border: {self.border};",
+                f"    --muted-text: {self.muted_text};",
+                "}",
+                "",
+                "Screen {",
+                f"    background: {self.background};",
+                f"    color: {self.foreground};",
+                "}",
+            ]
+        )
 
 
 _theme: ThemeColors | None = None

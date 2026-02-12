@@ -26,7 +26,9 @@ class YTMusicService:
     through ``asyncio.to_thread`` so they never block the event loop.
     """
 
-    def __init__(self, auth_path: Path = AUTH_FILE, auth_manager: AuthManager | None = None) -> None:
+    def __init__(
+        self, auth_path: Path = AUTH_FILE, auth_manager: AuthManager | None = None
+    ) -> None:
         self._auth_path = auth_path
         self._auth_manager = auth_manager
         self._ytm: YTMusic | None = None
@@ -193,9 +195,7 @@ class YTMusicService:
             logger.exception("get_artist failed for %r", artist_id)
             return {}
 
-    async def get_playlist(
-        self, playlist_id: str, limit: int = 100
-    ) -> dict[str, Any]:
+    async def get_playlist(self, playlist_id: str, limit: int = 100) -> dict[str, Any]:
         """Return playlist metadata and tracks."""
         try:
             return await self._call(self.client.get_playlist, playlist_id, limit=limit)
@@ -262,9 +262,7 @@ class YTMusicService:
     async def get_radio(self, video_id: str) -> list[dict[str, Any]]:
         """Start a radio queue from a song and return its tracks."""
         try:
-            result = await self._call(
-                self.client.get_watch_playlist, videoId=video_id, radio=True
-            )
+            result = await self._call(self.client.get_watch_playlist, videoId=video_id, radio=True)
             return result.get("tracks", []) if isinstance(result, dict) else []
         except Exception:
             logger.exception("get_radio failed for %r", video_id)
@@ -286,16 +284,12 @@ class YTMusicService:
         except Exception:
             logger.exception("rate_song failed for %r rating=%r", video_id, rating)
 
-    async def add_playlist_items(
-        self, playlist_id: str, video_ids: list[str]
-    ) -> None:
+    async def add_playlist_items(self, playlist_id: str, video_ids: list[str]) -> None:
         """Add songs to an existing playlist."""
         try:
             await self._call(self.client.add_playlist_items, playlist_id, video_ids)
         except Exception:
-            logger.exception(
-                "add_playlist_items failed for playlist=%r", playlist_id
-            )
+            logger.exception("add_playlist_items failed for playlist=%r", playlist_id)
 
     async def create_playlist(
         self,
@@ -349,9 +343,7 @@ class YTMusicService:
             logger.exception("unsubscribe_artist failed for %r", channel_id)
             return False
 
-    async def remove_playlist_items(
-        self, playlist_id: str, videos: list[dict[str, Any]]
-    ) -> None:
+    async def remove_playlist_items(self, playlist_id: str, videos: list[dict[str, Any]]) -> None:
         """Remove items from a playlist.
 
         Args:
@@ -362,9 +354,7 @@ class YTMusicService:
         try:
             await self._call(self.client.remove_playlist_items, playlist_id, videos)
         except Exception:
-            logger.exception(
-                "remove_playlist_items failed for playlist=%r", playlist_id
-            )
+            logger.exception("remove_playlist_items failed for playlist=%r", playlist_id)
 
     # ------------------------------------------------------------------
     # History
@@ -377,5 +367,3 @@ class YTMusicService:
         except Exception:
             logger.exception("get_history failed")
             return []
-
-

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Self
 
-from ytm_player.config.paths import CACHE_DIR, CONFIG_DIR, CONFIG_FILE
+from ytm_player.config.paths import CACHE_DIR, CONFIG_FILE
 
 
 @dataclass
@@ -125,7 +125,9 @@ class Settings:
 
     def save(self, path: Path = CONFIG_FILE) -> None:
         import os
+
         from ytm_player.config.paths import SECURE_FILE_MODE
+
         path.parent.mkdir(parents=True, exist_ok=True)
         lines: list[str] = []
 

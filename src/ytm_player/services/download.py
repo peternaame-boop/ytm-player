@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ytm_player.config.paths import CACHE_DIR, SECURE_FILE_MODE
+from ytm_player.config.paths import SECURE_FILE_MODE
 from ytm_player.config.settings import get_settings
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
@@ -53,11 +53,13 @@ class DownloadService:
             "extract_flat": False,
             "writethumbnail": False,
             "writeinfojson": False,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "opus",
-                "preferredquality": "128",
-            }],
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "opus",
+                    "preferredquality": "128",
+                }
+            ],
         }
 
     def _download_sync(self, video_id: str) -> DownloadResult:
@@ -84,7 +86,8 @@ class DownloadService:
                     return DownloadResult(video_id=video_id, success=True, file_path=path)
 
             return DownloadResult(
-                video_id=video_id, success=False,
+                video_id=video_id,
+                success=False,
                 error="Download completed but file not found",
             )
 
@@ -113,7 +116,6 @@ class DownloadService:
         Calls on_progress callback with (completed, total) after each track.
         """
         results: list[DownloadResult] = []
-        total = len(tracks)
 
         for i, track in enumerate(tracks):
             video_id = track.get("video_id", "")
@@ -123,7 +125,11 @@ class DownloadService:
 
             # Skip if already downloaded.
             if self.is_downloaded(video_id):
-                results.append(DownloadResult(video_id=video_id, success=True, file_path=self.get_path(video_id)))
+                results.append(
+                    DownloadResult(
+                        video_id=video_id, success=True, file_path=self.get_path(video_id)
+                    )
+                )
                 continue
 
             result = await self.download(video_id)

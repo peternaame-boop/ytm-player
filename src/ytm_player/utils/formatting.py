@@ -101,17 +101,13 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
         title = t.get("title", "Unknown")
         artist = extract_artist(t)
         album_info = t.get("album")
-        album = (
-            album_info.get("name", "")
-            if isinstance(album_info, dict)
-            else (album_info or "")
+        album = album_info.get("name", "") if isinstance(album_info, dict) else (album_info or "")
+        album_id = album_info.get("id") if isinstance(album_info, dict) else t.get("album_id")
+        raw_dur = (
+            t.get("duration_seconds")
+            if t.get("duration_seconds") is not None
+            else t.get("duration")
         )
-        album_id = (
-            album_info.get("id")
-            if isinstance(album_info, dict)
-            else t.get("album_id")
-        )
-        raw_dur = t.get("duration_seconds") if t.get("duration_seconds") is not None else t.get("duration")
         duration = extract_duration(t) if raw_dur is not None else None
         thumbnail = None
         thumbs = t.get("thumbnails")

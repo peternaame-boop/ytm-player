@@ -254,9 +254,7 @@ class HistoryManager:
         if self._db is None:
             raise RuntimeError("Database not initialized")
 
-        async with self._db.execute(
-            "SELECT COUNT(*) AS total_plays FROM play_history"
-        ) as cur:
+        async with self._db.execute("SELECT COUNT(*) AS total_plays FROM play_history") as cur:
             total_plays = (await cur.fetchone())["total_plays"]
 
         async with self._db.execute(
@@ -264,9 +262,7 @@ class HistoryManager:
         ) as cur:
             total_listen_time = (await cur.fetchone())["s"]
 
-        async with self._db.execute(
-            "SELECT COUNT(*) AS c FROM play_stats"
-        ) as cur:
+        async with self._db.execute("SELECT COUNT(*) AS c FROM play_stats") as cur:
             unique_tracks = (await cur.fetchone())["c"]
 
         top_tracks = await self.get_top_tracks(limit=10)

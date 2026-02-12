@@ -72,7 +72,9 @@ class LastFMService:
             self._connected = False
             return False
 
-    async def now_playing(self, title: str, artist: str, album: str = "", duration: int = 0) -> None:
+    async def now_playing(
+        self, title: str, artist: str, album: str = "", duration: int = 0
+    ) -> None:
         """Send a "Now Playing" notification to Last.fm."""
         if not self._connected or not self._network:
             return
