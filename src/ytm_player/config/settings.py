@@ -23,6 +23,8 @@ class PlaybackSettings:
     prefer_audio: bool = True
     default_volume: int = 80
     seek_step: int = 5
+    gapless: bool = True
+    api_timeout: int = 15
 
 
 @dataclass
@@ -103,6 +105,8 @@ class Settings:
         return settings
 
     def save(self, path: Path = CONFIG_FILE) -> None:
+        import os
+        from ytm_player.config.paths import SECURE_FILE_MODE
         path.parent.mkdir(parents=True, exist_ok=True)
         lines: list[str] = []
 
@@ -115,6 +119,7 @@ class Settings:
             lines.append("")
 
         path.write_text("\n".join(lines))
+        os.chmod(path, SECURE_FILE_MODE)
 
     def _create_default(self, path: Path) -> None:
         self.save(path)

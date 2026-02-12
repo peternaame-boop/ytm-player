@@ -61,6 +61,9 @@ class Player:
         _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
         _libc.setlocale(locale.LC_NUMERIC, b"C")
 
+        from ytm_player.config.settings import get_settings
+        settings = get_settings()
+
         self._mpv = mpv.MPV(
             ytdl=False,
             video=False,
@@ -68,6 +71,13 @@ class Player:
             input_default_bindings=False,
             input_vo_keyboard=False,
         )
+
+        # Enable gapless playback if configured.
+        if settings.playback.gapless:
+            try:
+                self._mpv["gapless-audio"] = "yes"
+            except Exception:
+                logger.debug("Failed to enable gapless-audio")
 
         self._current_track: dict | None = None
         self._callbacks: dict[PlayerEvent, list[PlayerCallback]] = {
@@ -229,8 +239,16 @@ class Player:
 
     def _play_sync(self, url: str) -> None:
         """Synchronous mpv play call."""
-        self._mpv.play(url)
-        self._mpv.pause = False
+        try:
+            self._mpv.play(url)
+            self._mpv.pause = False
+        except mpv.ShutdownError:
+            logger.warning("mpv crashed, attempting recovery...")
+            if self._try_recover():
+                self._mpv.play(url)
+                self._mpv.pause = False
+            else:
+                raise RuntimeError("mpv recovery failed")
 
     async def pause(self) -> None:
         self._mpv.pause = True
@@ -279,6 +297,70 @@ class Player:
     async def mute(self) -> None:
         """Toggle mute state."""
         self._mpv.mute = not self._mpv.mute
+
+    # ── Health & Recovery ────────────────────────────────────────────
+
+    @property
+    def is_healthy(self) -> bool:
+        """Check if the mpv instance is responsive."""
+        try:
+            _ = self._mpv.idle_active
+            return True
+        except (mpv.ShutdownError, OSError):
+            return False
+
+    def _try_recover(self) -> bool:
+        """Attempt to re-create the mpv instance after a crash."""
+        try:
+            logger.info("Re-initializing mpv instance...")
+            import ctypes
+            import locale as _locale
+            _libc = ctypes.CDLL("libc.so.6")
+            _libc.setlocale.restype = ctypes.c_char_p
+            _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
+            _libc.setlocale(_locale.LC_NUMERIC, b"C")
+
+            self._mpv = mpv.MPV(
+                ytdl=False,
+                video=False,
+                terminal=False,
+                input_default_bindings=False,
+                input_vo_keyboard=False,
+            )
+
+            from ytm_player.config.settings import get_settings
+            if get_settings().playback.gapless:
+                try:
+                    self._mpv["gapless-audio"] = "yes"
+                except Exception:
+                    pass
+
+            # Re-register observers.
+            self._mpv.observe_property("time-pos", self._on_time_pos_change)
+            self._mpv.observe_property("pause", self._on_pause_change)
+
+            @self._mpv.event_callback("end-file")
+            def _on_end_file(event: Any) -> None:
+                with self._skip_lock:
+                    if self._end_file_skip > 0:
+                        self._end_file_skip -= 1
+                        return
+                reason = getattr(event, "reason", None) if event else None
+                self._dispatch(PlayerEvent.TRACK_END, {"reason": reason})
+
+            # Restore volume if possible.
+            if self._loop and not self._loop.is_closed():
+                try:
+                    from ytm_player.config.settings import get_settings as _gs
+                    self._mpv.volume = _gs().playback.default_volume
+                except Exception:
+                    self._mpv.volume = 80
+
+            logger.info("mpv recovery successful")
+            return True
+        except Exception:
+            logger.exception("mpv recovery failed")
+            return False
 
     # ── Lifecycle ───────────────────────────────────────────────────
 

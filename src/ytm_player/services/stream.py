@@ -204,6 +204,15 @@ class StreamResolver:
             self._put_cache(info)
         return info
 
+    def is_expired(self, video_id: str) -> bool:
+        """Check if a cached stream URL has expired or will expire soon."""
+        with self._cache_lock:
+            cached = self._cache.get(video_id)
+            if cached is None:
+                return True
+            # Consider expired if within 5 minutes of expiry (buffer for playback).
+            return time.time() >= (cached.expires_at - 300)
+
     async def resolve(self, video_id: str) -> StreamInfo | None:
         """Resolve a video ID to a StreamInfo asynchronously.
 
@@ -213,8 +222,12 @@ class StreamResolver:
         """
         cached = self._get_cached(video_id)
         if cached is not None:
-            logger.debug("Cache hit for video_id=%s", video_id)
-            return cached
+            # Re-resolve if the URL will expire within 5 minutes.
+            if time.time() < (cached.expires_at - 300):
+                logger.debug("Cache hit for video_id=%s", video_id)
+                return cached
+            logger.debug("Cache entry near-expired for video_id=%s, re-resolving", video_id)
+            self.invalidate(video_id)
 
         # Deduplicate concurrent requests for the same video
         if video_id in self._pending:
@@ -234,6 +247,29 @@ class StreamResolver:
             raise
         finally:
             self._pending.pop(video_id, None)
+
+    async def prefetch(self, video_id: str) -> None:
+        """Resolve a video ID in the background without blocking the caller.
+
+        Used to pre-cache the next track's stream URL so playback starts
+        instantly when the user hits next or the current track ends.
+        """
+        if self._get_cached(video_id) is not None:
+            return  # Already cached, nothing to do.
+        if video_id in self._pending:
+            return  # Already being resolved.
+        try:
+            await self.resolve(video_id)
+        except Exception:
+            logger.debug("Prefetch failed for video_id=%s", video_id, exc_info=True)
+
+    @staticmethod
+    def warm_import() -> None:
+        """Import yt_dlp eagerly to avoid the 200-400ms cold-start penalty."""
+        try:
+            import yt_dlp  # noqa: F401
+        except ImportError:
+            logger.warning("yt-dlp is not installed")
 
     def invalidate(self, video_id: str) -> None:
         """Remove a specific video ID from the cache."""

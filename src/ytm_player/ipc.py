@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import socket
+import stat
 from typing import Any, Callable, Awaitable
 
 from ytm_player.config.paths import PID_FILE, SOCKET_PATH
@@ -20,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 _MAX_MSG = 65536  # 64 KB
 _CLIENT_TIMEOUT = 5  # seconds
+
+# Whitelist of valid IPC commands.
+_VALID_COMMANDS = frozenset({
+    "play", "pause", "next", "prev", "seek",
+    "now", "status", "queue", "queue_add", "queue_clear",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +55,7 @@ def write_pid() -> None:
     """Write the current process PID to the PID file."""
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(str(os.getpid()))
+    os.chmod(PID_FILE, stat.S_IRUSR | stat.S_IWUSR)
 
 
 def remove_pid() -> None:
@@ -79,6 +87,8 @@ class IPCServer:
         self._server = await asyncio.start_unix_server(
             self._client_connected, path=str(SOCKET_PATH)
         )
+        # Restrict socket to owner only (0o600).
+        os.chmod(SOCKET_PATH, stat.S_IRUSR | stat.S_IWUSR)
         logger.info("IPC server listening on %s", SOCKET_PATH)
 
     async def stop(self) -> None:
@@ -97,9 +107,33 @@ class IPCServer:
             if not raw:
                 return
 
-            request = json.loads(raw.decode())
+            # Reject oversized payloads.
+            if len(raw) > _MAX_MSG:
+                writer.write(json.dumps({"ok": False, "error": "payload too large"}).encode())
+                await writer.drain()
+                return
+
+            try:
+                request = json.loads(raw.decode("utf-8", errors="replace"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                writer.write(json.dumps({"ok": False, "error": "invalid JSON"}).encode())
+                await writer.drain()
+                return
+
+            if not isinstance(request, dict):
+                writer.write(json.dumps({"ok": False, "error": "expected JSON object"}).encode())
+                await writer.drain()
+                return
+
             command = request.get("command", "")
+            if not isinstance(command, str) or command not in _VALID_COMMANDS:
+                writer.write(json.dumps({"ok": False, "error": f"unknown command: {command}"}).encode())
+                await writer.drain()
+                return
+
             args = request.get("args", {})
+            if not isinstance(args, dict):
+                args = {}
 
             response = await self._handler(command, args)
             writer.write(json.dumps(response).encode())

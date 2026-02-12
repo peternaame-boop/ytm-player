@@ -10,9 +10,13 @@ from typing import Any
 from ytmusicapi import YTMusic
 
 from ytm_player.config.paths import AUTH_FILE
+from ytm_player.config.settings import get_settings
 from ytm_player.services.auth import AuthManager
 
 logger = logging.getLogger(__name__)
+
+# Default API timeout in seconds. Prevents indefinite hangs on slow networks.
+_API_TIMEOUT: int = get_settings().playback.api_timeout
 
 
 class YTMusicService:
@@ -37,6 +41,13 @@ class YTMusicService:
                 self._ytm = YTMusic(str(self._auth_path))
         return self._ytm
 
+    async def _call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run a sync ytmusicapi method in a thread with timeout."""
+        return await asyncio.wait_for(
+            asyncio.to_thread(func, *args, **kwargs),
+            timeout=_API_TIMEOUT,
+        )
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
@@ -59,9 +70,10 @@ class YTMusicService:
             List of result dicts.
         """
         try:
-            return await asyncio.to_thread(
-                self.client.search, query, filter=filter, limit=limit
-            )
+            return await self._call(self.client.search, query, filter=filter, limit=limit)
+        except asyncio.TimeoutError:
+            logger.warning("Search timed out for query=%r", query)
+            return []
         except Exception:
             logger.exception("Search failed for query=%r filter=%r", query, filter)
             return []
@@ -69,7 +81,7 @@ class YTMusicService:
     async def get_search_suggestions(self, query: str) -> list[str]:
         """Return autocomplete suggestions for *query*."""
         try:
-            return await asyncio.to_thread(self.client.get_search_suggestions, query)
+            return await self._call(self.client.get_search_suggestions, query)
         except Exception:
             logger.exception("get_search_suggestions failed for query=%r", query)
             return []
@@ -81,7 +93,7 @@ class YTMusicService:
     async def get_library_playlists(self, limit: int = 25) -> list[dict[str, Any]]:
         """Return the user's library playlists."""
         try:
-            return await asyncio.to_thread(self.client.get_library_playlists, limit=limit)
+            return await self._call(self.client.get_library_playlists, limit=limit)
         except Exception:
             logger.exception("get_library_playlists failed")
             return []
@@ -89,7 +101,7 @@ class YTMusicService:
     async def get_library_albums(self, limit: int = 25) -> list[dict[str, Any]]:
         """Return the user's saved albums."""
         try:
-            return await asyncio.to_thread(self.client.get_library_albums, limit=limit)
+            return await self._call(self.client.get_library_albums, limit=limit)
         except Exception:
             logger.exception("get_library_albums failed")
             return []
@@ -97,9 +109,7 @@ class YTMusicService:
     async def get_library_artists(self, limit: int = 25) -> list[dict[str, Any]]:
         """Return the user's subscribed/followed artists."""
         try:
-            return await asyncio.to_thread(
-                self.client.get_library_subscriptions, limit=limit
-            )
+            return await self._call(self.client.get_library_subscriptions, limit=limit)
         except Exception:
             logger.exception("get_library_artists failed")
             return []
@@ -107,9 +117,7 @@ class YTMusicService:
     async def get_liked_songs(self, limit: int = 100) -> list[dict[str, Any]]:
         """Return tracks from the user's Liked Music playlist."""
         try:
-            playlist = await asyncio.to_thread(
-                self.client.get_liked_songs, limit=limit
-            )
+            playlist = await self._call(self.client.get_liked_songs, limit=limit)
             return playlist.get("tracks", []) if isinstance(playlist, dict) else []
         except Exception:
             logger.exception("get_liked_songs failed")
@@ -122,7 +130,7 @@ class YTMusicService:
     async def get_home(self) -> list[dict[str, Any]]:
         """Return personalised home page recommendations."""
         try:
-            return await asyncio.to_thread(self.client.get_home, limit=6)
+            return await self._call(self.client.get_home, limit=6)
         except Exception:
             logger.exception("get_home failed")
             return []
@@ -130,7 +138,7 @@ class YTMusicService:
     async def get_mood_categories(self) -> list[dict[str, Any]]:
         """Return available mood/genre categories."""
         try:
-            return await asyncio.to_thread(self.client.get_mood_categories)
+            return await self._call(self.client.get_mood_categories)
         except Exception:
             logger.exception("get_mood_categories failed")
             return []
@@ -138,9 +146,7 @@ class YTMusicService:
     async def get_mood_playlists(self, category_id: str) -> list[dict[str, Any]]:
         """Return playlists for a given mood/genre *category_id*."""
         try:
-            return await asyncio.to_thread(
-                self.client.get_mood_playlists, category_id
-            )
+            return await self._call(self.client.get_mood_playlists, category_id)
         except Exception:
             logger.exception("get_mood_playlists failed for %r", category_id)
             return []
@@ -148,7 +154,7 @@ class YTMusicService:
     async def get_charts(self, country: str = "ZZ") -> dict[str, Any]:
         """Return chart data for *country* (``ZZ`` = global)."""
         try:
-            return await asyncio.to_thread(self.client.get_charts, country=country)
+            return await self._call(self.client.get_charts, country=country)
         except Exception:
             logger.exception("get_charts failed for country=%r", country)
             return {}
@@ -156,7 +162,7 @@ class YTMusicService:
     async def get_new_releases(self) -> list[dict[str, Any]]:
         """Return new album releases."""
         try:
-            result = await asyncio.to_thread(self.client.get_new_releases)
+            result = await self._call(self.client.get_new_releases)
             # ytmusicapi may return a list directly or a dict with a key.
             if isinstance(result, list):
                 return result
@@ -174,7 +180,7 @@ class YTMusicService:
     async def get_album(self, album_id: str) -> dict[str, Any]:
         """Return full album details including track listing."""
         try:
-            return await asyncio.to_thread(self.client.get_album, album_id)
+            return await self._call(self.client.get_album, album_id)
         except Exception:
             logger.exception("get_album failed for %r", album_id)
             return {}
@@ -182,7 +188,7 @@ class YTMusicService:
     async def get_artist(self, artist_id: str) -> dict[str, Any]:
         """Return artist page data (top songs, albums, related, etc.)."""
         try:
-            return await asyncio.to_thread(self.client.get_artist, artist_id)
+            return await self._call(self.client.get_artist, artist_id)
         except Exception:
             logger.exception("get_artist failed for %r", artist_id)
             return {}
@@ -192,9 +198,7 @@ class YTMusicService:
     ) -> dict[str, Any]:
         """Return playlist metadata and tracks."""
         try:
-            return await asyncio.to_thread(
-                self.client.get_playlist, playlist_id, limit=limit
-            )
+            return await self._call(self.client.get_playlist, playlist_id, limit=limit)
         except Exception:
             logger.exception("get_playlist failed for %r", playlist_id)
             return {}
@@ -202,7 +206,7 @@ class YTMusicService:
     async def get_song(self, video_id: str) -> dict[str, Any]:
         """Return detailed info for a single song/video."""
         try:
-            return await asyncio.to_thread(self.client.get_song, video_id)
+            return await self._call(self.client.get_song, video_id)
         except Exception:
             logger.exception("get_song failed for %r", video_id)
             return {}
@@ -214,13 +218,11 @@ class YTMusicService:
         playlist to obtain it, then request the actual lyrics.
         """
         try:
-            watch = await asyncio.to_thread(
-                self.client.get_watch_playlist, video_id
-            )
+            watch = await self._call(self.client.get_watch_playlist, video_id)
             lyrics_browse_id = watch.get("lyrics")
             if not lyrics_browse_id:
                 return None
-            return await asyncio.to_thread(self.client.get_lyrics, lyrics_browse_id)
+            return await self._call(self.client.get_lyrics, lyrics_browse_id)
         except Exception:
             logger.exception("get_lyrics failed for %r", video_id)
             return None
@@ -247,9 +249,7 @@ class YTMusicService:
             kwargs: dict[str, Any] = {"videoId": video_id}
             if playlist_id is not None:
                 kwargs["playlistId"] = playlist_id
-            result = await asyncio.to_thread(
-                self.client.get_watch_playlist, **kwargs
-            )
+            result = await self._call(self.client.get_watch_playlist, **kwargs)
             return result.get("tracks", []) if isinstance(result, dict) else []
         except Exception:
             logger.exception(
@@ -262,7 +262,7 @@ class YTMusicService:
     async def get_radio(self, video_id: str) -> list[dict[str, Any]]:
         """Start a radio queue from a song and return its tracks."""
         try:
-            result = await asyncio.to_thread(
+            result = await self._call(
                 self.client.get_watch_playlist, videoId=video_id, radio=True
             )
             return result.get("tracks", []) if isinstance(result, dict) else []
@@ -282,7 +282,7 @@ class YTMusicService:
             rating: ``"LIKE"``, ``"DISLIKE"``, or ``"INDIFFERENT"`` (remove rating).
         """
         try:
-            await asyncio.to_thread(self.client.rate_song, video_id, rating)
+            await self._call(self.client.rate_song, video_id, rating)
         except Exception:
             logger.exception("rate_song failed for %r rating=%r", video_id, rating)
 
@@ -291,9 +291,7 @@ class YTMusicService:
     ) -> None:
         """Add songs to an existing playlist."""
         try:
-            await asyncio.to_thread(
-                self.client.add_playlist_items, playlist_id, video_ids
-            )
+            await self._call(self.client.add_playlist_items, playlist_id, video_ids)
         except Exception:
             logger.exception(
                 "add_playlist_items failed for playlist=%r", playlist_id
@@ -307,11 +305,8 @@ class YTMusicService:
     ) -> str:
         """Create a new playlist and return its ID."""
         try:
-            result = await asyncio.to_thread(
-                self.client.create_playlist,
-                title,
-                description,
-                privacy_status=privacy,
+            result = await self._call(
+                self.client.create_playlist, title, description, privacy_status=privacy
             )
             return result if isinstance(result, str) else ""
         except Exception:
@@ -325,9 +320,7 @@ class YTMusicService:
             True if deletion succeeded, False otherwise.
         """
         try:
-            result = await asyncio.to_thread(
-                self.client.delete_playlist, playlist_id
-            )
+            result = await self._call(self.client.delete_playlist, playlist_id)
             return result == "STATUS_SUCCEEDED" if isinstance(result, str) else bool(result)
         except Exception:
             logger.exception("delete_playlist failed for %r", playlist_id)
@@ -341,9 +334,7 @@ class YTMusicService:
                 ``MPREb_``; the corresponding playlistId starts with ``OLAK5``).
         """
         try:
-            await asyncio.to_thread(
-                self.client.rate_playlist, playlist_id, "INDIFFERENT"
-            )
+            await self._call(self.client.rate_playlist, playlist_id, "INDIFFERENT")
             return True
         except Exception:
             logger.exception("remove_album_from_library failed for %r", playlist_id)
@@ -352,9 +343,7 @@ class YTMusicService:
     async def unsubscribe_artist(self, channel_id: str) -> bool:
         """Unsubscribe from an artist (remove from library)."""
         try:
-            await asyncio.to_thread(
-                self.client.unsubscribe_artists, [channel_id]
-            )
+            await self._call(self.client.unsubscribe_artists, [channel_id])
             return True
         except Exception:
             logger.exception("unsubscribe_artist failed for %r", channel_id)
@@ -371,9 +360,7 @@ class YTMusicService:
                 must contain ``videoId`` and ``setVideoId``.
         """
         try:
-            await asyncio.to_thread(
-                self.client.remove_playlist_items, playlist_id, videos
-            )
+            await self._call(self.client.remove_playlist_items, playlist_id, videos)
         except Exception:
             logger.exception(
                 "remove_playlist_items failed for playlist=%r", playlist_id
@@ -386,7 +373,7 @@ class YTMusicService:
     async def get_history(self) -> list[dict[str, Any]]:
         """Return the user's recently played tracks."""
         try:
-            return await asyncio.to_thread(self.client.get_history)
+            return await self._call(self.client.get_history)
         except Exception:
             logger.exception("get_history failed")
             return []

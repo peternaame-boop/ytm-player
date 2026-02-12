@@ -207,7 +207,7 @@ class YTMPlayerApp(App):
         auth = AuthManager()
         if not auth.is_authenticated():
             self.notify(
-                "Not authenticated. Run `ytm setup` first.",
+                "Not signed in to YouTube Music. Run `ytm setup` to connect your account.",
                 severity="error",
                 timeout=5,
             )
@@ -226,7 +226,7 @@ class YTMPlayerApp(App):
                 logger.info("Auto-refresh succeeded.")
             else:
                 self.notify(
-                    "Session expired. Run `ytm setup` to re-authenticate.",
+                    "Your YouTube Music session expired. Run `ytm setup` to sign in again.",
                     severity="error",
                     timeout=8,
                 )
@@ -251,7 +251,11 @@ class YTMPlayerApp(App):
             await self.cache.init()
         except Exception:
             logger.exception("Failed to initialize services")
-            self.notify("Failed to initialize services. Check logs.", severity="error")
+            self.notify(
+                "Could not start player services. Make sure mpv is installed and in your PATH.",
+                severity="error",
+                timeout=6,
+            )
             self.set_timer(2.0, self.exit)
             return
 
@@ -263,6 +267,9 @@ class YTMPlayerApp(App):
             self.mpris = MPRISService()
             callbacks = self._build_mpris_callbacks()
             await self.mpris.start(callbacks)
+
+        # Pre-warm yt-dlp import in a thread so first playback isn't slow.
+        asyncio.get_running_loop().run_in_executor(None, StreamResolver.warm_import)
 
         # Register player event handlers.
         self.player.on(PlayerEvent.TRACK_END, self._on_track_end)
@@ -338,6 +345,14 @@ class YTMPlayerApp(App):
         if state.get("shuffle", False):
             self.queue.toggle_shuffle()
 
+        # Restore queue from last session.
+        saved_tracks = state.get("queue_tracks", [])
+        if saved_tracks and isinstance(saved_tracks, list):
+            self.queue.add_multiple(saved_tracks)
+            saved_index = state.get("queue_index", 0)
+            if isinstance(saved_index, int) and 0 <= saved_index < len(saved_tracks):
+                self.queue.jump_to(saved_index)
+
         # Update the playback bar to reflect restored state.
         try:
             bar = self.query_one("#playback-bar", PlaybackBar)
@@ -358,14 +373,23 @@ class YTMPlayerApp(App):
             except Exception:
                 logger.debug("Failed to read player volume for session save", exc_info=True)
 
+        # Serialize queue tracks (limit to 500 to keep file size reasonable).
+        queue_tracks = list(self.queue.tracks)[:500]
+        queue_index = self.queue.current_index
+
         state = {
             "volume": volume,
             "repeat": self.queue.repeat_mode.value,
             "shuffle": self.queue.shuffle_enabled,
+            "queue_tracks": queue_tracks,
+            "queue_index": queue_index,
         }
         try:
+            import os
+            from ytm_player.config.paths import SECURE_FILE_MODE
             SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             SESSION_STATE_FILE.write_text(json.dumps(state))
+            os.chmod(SESSION_STATE_FILE, SECURE_FILE_MODE)
         except Exception:
             logger.debug("Could not save session state", exc_info=True)
 
@@ -684,18 +708,18 @@ class YTMPlayerApp(App):
         page or action.
         """
         if not self.player or not self.stream_resolver:
-            self.notify("Player not initialized.", severity="error")
+            self.notify("Player is still starting up. Please try again in a moment.", severity="error")
             return
 
         video_id = track.get("video_id", "")
         if not video_id:
-            self.notify("Track has no video ID.", severity="error")
+            self.notify("This track can't be played (missing ID).", severity="error")
             return
 
         # Log listen time for the previous track.
         await self._log_current_listen()
 
-        # Update UI immediately.
+        # Update UI immediately — show track info before stream resolves.
         try:
             bar = self.query_one("#playback-bar", PlaybackBar)
             bar.update_track(track)
@@ -703,15 +727,22 @@ class YTMPlayerApp(App):
         except Exception:
             logger.debug("Playback bar not ready during play_track", exc_info=True)
 
-        # Resolve the stream URL.
-        self.notify(f"Loading: {track.get('title', video_id)}", timeout=3)
+        # Resolve the stream URL.  Only show "Loading..." if it takes > 0.5s
+        # (i.e. it wasn't prefetched).  This keeps the UX snappy for cache hits.
+        loading_timer = self.set_timer(
+            0.5,
+            lambda: self.notify(f"Loading: {track.get('title', video_id)}", timeout=3),
+        )
         stream_info = await self.stream_resolver.resolve(video_id)
+        loading_timer.stop()
 
         if stream_info is None:
             self._consecutive_failures += 1
+            title = track.get("title", video_id)
             self.notify(
-                f"Failed to resolve stream for: {track.get('title', video_id)}",
+                f"Couldn't play \"{title}\" — track may be unavailable or region-locked. Skipping...",
                 severity="error",
+                timeout=4,
             )
             # Auto-advance to the next track unless we've failed too many times.
             if self._consecutive_failures < _MAX_CONSECUTIVE_FAILURES:
@@ -719,7 +750,11 @@ class YTMPlayerApp(App):
                 if next_track:
                     self.call_later(lambda: self.run_worker(self.play_track(next_track)))
             else:
-                self.notify("Too many consecutive failures — stopping.", severity="error")
+                self.notify(
+                    "Multiple tracks failed in a row. Check your internet connection or try again later.",
+                    severity="error",
+                    timeout=6,
+                )
                 self._consecutive_failures = 0
             return
 
@@ -784,7 +819,7 @@ class YTMPlayerApp(App):
         except Exception:
             logger.exception("Failed to fetch radio tracks")
 
-        self.notify("No more tracks available.", timeout=2)
+        self.notify("No more suggestions available. Add more tracks to your queue.", timeout=3)
 
     # ── Player event callbacks ───────────────────────────────────────
 
@@ -831,6 +866,38 @@ class YTMPlayerApp(App):
                     table.set_playing(video_id)
         except Exception:
             logger.debug("Failed to update playing indicator on track table", exc_info=True)
+
+        # Show track change notification if enabled.
+        if self.settings.notifications.enabled:
+            title = track.get("title", "Unknown")
+            artist = track.get("artist", "Unknown")
+            fmt = self.settings.notifications.format
+            try:
+                msg = fmt.format(title=title, artist=artist, album=track.get("album", ""))
+            except (KeyError, ValueError):
+                msg = f"{title} — {artist}"
+            self.notify(msg, timeout=self.settings.notifications.timeout_seconds)
+
+        # Prefetch the next track's stream URL so "next" is instant.
+        self._prefetch_next_track()
+
+    def _prefetch_next_track(self) -> None:
+        """Prefetch the next track's stream URL in the background.
+
+        Called after a new track starts playing so that hitting "next"
+        or reaching the end of the current track starts instantly.
+        """
+        if not self.stream_resolver:
+            return
+        next_track = self.queue.peek_next()
+        if next_track:
+            next_id = next_track.get("video_id", "")
+            if next_id:
+                self.run_worker(
+                    self.stream_resolver.prefetch(next_id),
+                    group="prefetch",
+                    exclusive=True,
+                )
 
     def _on_volume_change(self, volume: int) -> None:
         """Handle volume change events."""
