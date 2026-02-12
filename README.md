@@ -159,6 +159,8 @@ ytm queue clear    # Clear queue
 
 ## Keybindings
 
+### Keyboard
+
 | Key | Action |
 |-----|--------|
 | `space` | Play/Pause |
@@ -175,12 +177,23 @@ ytm queue clear    # Clear queue
 | `?` | Help (full keybinding reference) |
 | `tab` | Focus next panel |
 | `a` | Track actions menu |
-| `right-click` | Context menu on tracks |
 | `/` | Filter current list |
 | `Ctrl+r` | Cycle repeat mode |
 | `Ctrl+s` | Toggle shuffle |
 | `backspace` | Go back |
 | `q` | Quit |
+
+### Mouse
+
+| Action | Where | Effect |
+|--------|-------|--------|
+| Click | Progress bar | Seek to position |
+| Scroll up/down | Progress bar | Scrub forward/backward (commits after 0.6s pause) |
+| Scroll up/down | Volume display | Adjust volume by 5% |
+| Click | Repeat button | Cycle repeat mode (off → all → one) |
+| Click | Shuffle button | Toggle shuffle on/off |
+| Click | Footer buttons | Navigate pages, play/pause, prev/next |
+| Right-click | Track row | Open context menu (play, queue, add to playlist, etc.) |
 
 Custom keybindings: edit `~/.config/ytm-player/keymap.toml`
 
