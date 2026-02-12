@@ -450,6 +450,8 @@ MIT — see [LICENSE](LICENSE).
 - Discord Rich Presence — show what you're listening to (optional, `pip install -e ".[discord]"`)
 - Last.fm scrobbling — automatic scrobbling + Now Playing (optional, `pip install -e ".[lastfm]"`)
 - New config sections: `[discord]`, `[lastfm]`, `[playback].gapless`, `[playback].api_timeout`
+- GitHub Actions CI pipeline (ruff lint + pytest with coverage)
+- Expanded test suite — 187 tests covering queue thread safety, IPC validation, stream expiry, downloads, Discord RPC, Last.fm, and settings
 
 ### v1.0.0 (2026-02-07)
 
