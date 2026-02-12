@@ -6,13 +6,16 @@ A full-featured YouTube Music player for the terminal. Browse your library, sear
 
 ## Features
 
-- **Full playback control** — play, pause, seek, volume, shuffle, repeat via mpv
-- **7 pages** — Library, Search, Browse (For You, Charts, Moods), Context (album/artist/playlist), Lyrics, Queue, Help
+- **Full playback control** — play, pause, seek, volume, shuffle, repeat via mpv with gapless audio
+- **9 pages** — Library, Search, Browse, Context (album/artist/playlist), Lyrics, Queue, Liked Songs, Recently Played, Help
 - **Vim-style navigation** — `j`/`k` movement, multi-key sequences (`g l` for library, `g s` for search), count prefixes (`5j`)
 - **Predictive search** — debounced with 300ms delay, music-first mode with toggle to all results
 - **Spotify import** — import playlists from Spotify via API or URL scraping
 - **History tracking** — play history + search history stored in SQLite with listening stats
 - **Audio caching** — LRU cache (1GB default) for offline-like replay of previously heard tracks
+- **Offline downloads** — right-click any track → "Download for Offline" to save locally
+- **Discord Rich Presence** — show what you're listening to in your Discord status
+- **Last.fm scrobbling** — automatic scrobbling with Now Playing updates
 - **Album art** — colored half-block rendering in the playback bar (requires Pillow)
 - **MPRIS integration** — hardware media keys and desktop player controls via D-Bus
 - **CLI mode** — headless subcommands for scripting (`ytm search`, `ytm stats`, `ytm history`)
@@ -73,8 +76,14 @@ pip install -e ".[mpris]"
 # Album art rendering (colored half-block images)
 pip install -e ".[images]"
 
+# Discord Rich Presence
+pip install -e ".[discord]"
+
+# Last.fm scrobbling
+pip install -e ".[lastfm]"
+
 # All optional features
-pip install -e ".[spotify,mpris,images]"
+pip install -e ".[spotify,mpris,images,discord,lastfm]"
 
 # Development tools (pytest, ruff)
 pip install -e ".[dev]"
@@ -174,6 +183,8 @@ ytm queue clear    # Clear queue
 | `g b` | Go to Browse |
 | `z` | Go to Queue |
 | `l` | Go to Lyrics |
+| `g y` | Go to Liked Songs |
+| `g r` | Go to Recently Played |
 | `?` | Help (full keybinding reference) |
 | `tab` | Focus next panel |
 | `a` | Track actions menu |
@@ -242,6 +253,16 @@ timeout_seconds = 5
 
 [mpris]
 enabled = true
+
+[discord]
+enabled = false              # Requires pypresence
+
+[lastfm]
+enabled = false              # Requires pylast
+api_key = ""
+api_secret = ""
+session_key = ""
+username = ""
 ```
 
 ### Example `theme.toml`
@@ -322,17 +343,20 @@ src/ytm_player/
 │   ├── history.py      #   SQLite play/search history
 │   ├── cache.py        #   LRU audio file cache
 │   ├── mpris.py        #   D-Bus MPRIS media controls
+│   ├── download.py     #   Offline audio downloads
+│   ├── discord_rpc.py  #   Discord Rich Presence
+│   ├── lastfm.py       #   Last.fm scrobbling
 │   └── spotify_import.py  # Spotify playlist import
 ├── ui/
 │   ├── playback_bar.py # Persistent bottom bar (track info, progress, controls)
 │   ├── theme.py        # Theme system with CSS variable generation
-│   ├── pages/          # Library, Search, Browse, Context, Lyrics, Queue, Help
+│   ├── pages/          # Library, Search, Browse, Context, Lyrics, Queue, Liked Songs, Recently Played, Help
 │   ├── popups/         # Actions menu, playlist picker, Spotify import
 │   └── widgets/        # TrackTable, PlaybackProgress, AlbumArt
 └── utils/              # Terminal detection, formatting helpers
 ```
 
-**Stack:** [Textual](https://textual.textualize.io/) (TUI) · [ytmusicapi](https://github.com/sigma67/ytmusicapi) (API) · [yt-dlp](https://github.com/yt-dlp/yt-dlp) (streams) · [python-mpv](https://github.com/jaseg/python-mpv) (playback) · [aiosqlite](https://github.com/omnilib/aiosqlite) (history/cache) · [dbus-next](https://github.com/altdesktop/python-dbus-next) (MPRIS)
+**Stack:** [Textual](https://textual.textualize.io/) (TUI) · [ytmusicapi](https://github.com/sigma67/ytmusicapi) (API) · [yt-dlp](https://github.com/yt-dlp/yt-dlp) (streams/downloads) · [python-mpv](https://github.com/jaseg/python-mpv) (playback) · [aiosqlite](https://github.com/omnilib/aiosqlite) (history/cache) · [dbus-next](https://github.com/altdesktop/python-dbus-next) (MPRIS) · [pypresence](https://github.com/qwertyquerty/pypresence) (Discord) · [pylast](https://github.com/pylast/pylast) (Last.fm)
 
 ## Troubleshooting
 
@@ -407,6 +431,28 @@ max_size_mb = 512
 MIT — see [LICENSE](LICENSE).
 
 ## Changelog
+
+### v1.1.0 (2026-02-12)
+
+**Phase 1 — Rock Solid:**
+- Thread safety for queue manager (prevents race conditions)
+- IPC socket security hardening (permissions, command whitelist, input validation)
+- Stream URL expiry checks before playback
+- File permissions hardened to 0o600 across all config/state files
+- mpv crash detection and automatic recovery
+- API timeout handling (15s default, prevents TUI hangs on slow networks)
+- Gapless playback enabled by default
+- Queue persistence across restarts (saved in session.json)
+- Track change notifications wired to `[notifications]` config section
+- Human-readable error messages throughout
+
+**Phase 2 — Feature Drop:**
+- Liked Songs page (`g y`) — browse and play your liked music
+- Recently Played page (`g r`) — local history from SQLite
+- Download for offline — right-click any track → "Download for Offline"
+- Discord Rich Presence — show what you're listening to (optional, `pip install -e ".[discord]"`)
+- Last.fm scrobbling — automatic scrobbling + Now Playing (optional, `pip install -e ".[lastfm]"`)
+- New config sections: `[discord]`, `[lastfm]`, `[playback].gapless`, `[playback].api_timeout`
 
 ### v1.0.0 (2026-02-07)
 

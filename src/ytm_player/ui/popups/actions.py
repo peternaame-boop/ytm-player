@@ -19,6 +19,7 @@ TRACK_ACTIONS: list[tuple[str, str]] = [
     ("play", "Play"),
     ("play_next", "Play Next"),
     ("add_to_queue", "Add to Queue"),
+    ("download", "Download for Offline"),
     ("start_radio", "Start Radio"),
     ("go_to_artist", "Go to Artist"),
     ("go_to_album", "Go to Album"),

@@ -22,6 +22,9 @@ from ytm_player.services.history import HistoryManager
 from ytm_player.services.mpris import MPRISService
 from ytm_player.services.player import Player, PlayerEvent
 from ytm_player.services.queue import QueueManager, RepeatMode
+from ytm_player.services.discord_rpc import DiscordRPC
+from ytm_player.services.download import DownloadService
+from ytm_player.services.lastfm import LastFMService
 from ytm_player.services.stream import StreamResolver
 from ytm_player.services.ytmusic import YTMusicService
 from ytm_player.ui.playback_bar import FooterBar, PlaybackBar
@@ -34,7 +37,7 @@ from ytm_player.ui.widgets.track_table import TrackTable
 logger = logging.getLogger(__name__)
 
 # Valid page names.
-PAGE_NAMES = ("library", "search", "context", "browse", "lyrics", "queue", "help")
+PAGE_NAMES = ("library", "search", "context", "browse", "lyrics", "queue", "help", "liked_songs", "recently_played")
 
 # Extracted constants (avoid magic numbers).
 _MAX_NAV_STACK = 20
@@ -134,6 +137,9 @@ class YTMPlayerApp(App):
         self.history: HistoryManager | None = None
         self.cache: CacheManager | None = None
         self.mpris: MPRISService | None = None
+        self.discord: DiscordRPC | None = None
+        self.lastfm: LastFMService | None = None
+        self.downloader: DownloadService = DownloadService()
 
         # Key input state for multi-key sequences and count prefixes.
         self._key_buffer: list[str] = []
@@ -268,6 +274,22 @@ class YTMPlayerApp(App):
             callbacks = self._build_mpris_callbacks()
             await self.mpris.start(callbacks)
 
+        # Start Discord Rich Presence if enabled.
+        if self.settings.discord.enabled:
+            self.discord = DiscordRPC()
+            await self.discord.connect()
+
+        # Start Last.fm scrobbling if enabled.
+        if self.settings.lastfm.enabled:
+            self.lastfm = LastFMService(
+                api_key=self.settings.lastfm.api_key,
+                api_secret=self.settings.lastfm.api_secret,
+                session_key=self.settings.lastfm.session_key,
+                username=self.settings.lastfm.username,
+                password_hash=self.settings.lastfm.password_hash,
+            )
+            await self.lastfm.connect()
+
         # Pre-warm yt-dlp import in a thread so first playback isn't slow.
         asyncio.get_running_loop().run_in_executor(None, StreamResolver.warm_import)
 
@@ -312,6 +334,9 @@ class YTMPlayerApp(App):
 
         if self.mpris:
             await self.mpris.stop()
+
+        if self.discord:
+            await self.discord.disconnect()
 
         if self.history:
             await self.history.close()
@@ -563,6 +588,10 @@ class YTMPlayerApp(App):
                 await self.navigate_to("browse")
             case Action.HELP:
                 await self.navigate_to("help")
+            case Action.LIKED_SONGS:
+                await self.navigate_to("liked_songs")
+            case Action.RECENTLY_PLAYED:
+                await self.navigate_to("recently_played")
             case Action.CURRENT_CONTEXT:
                 await self.navigate_to("context")
 
@@ -603,8 +632,6 @@ class YTMPlayerApp(App):
                 | Action.SORT_DURATION
                 | Action.SORT_DATE
                 | Action.REVERSE_SORT
-                | Action.LIKED_SONGS
-                | Action.RECENTLY_PLAYED
                 | Action.JUMP_TO_CURRENT
                 | Action.TOGGLE_SEARCH_MODE
             ):
@@ -671,8 +698,10 @@ class YTMPlayerApp(App):
         from ytm_player.ui.pages.context import ContextPage
         from ytm_player.ui.pages.help import HelpPage
         from ytm_player.ui.pages.library import LibraryPage
+        from ytm_player.ui.pages.liked_songs import LikedSongsPage
         from ytm_player.ui.pages.lyrics import LyricsPage
         from ytm_player.ui.pages.queue import QueuePage
+        from ytm_player.ui.pages.recently_played import RecentlyPlayedPage
         from ytm_player.ui.pages.search import SearchPage
 
         page_map: dict[str, type[Widget]] = {
@@ -683,6 +712,8 @@ class YTMPlayerApp(App):
             "lyrics": LyricsPage,
             "queue": QueuePage,
             "help": HelpPage,
+            "liked_songs": LikedSongsPage,
+            "recently_played": RecentlyPlayedPage,
         }
         page_cls = page_map.get(page_name)
         if page_cls is None:
@@ -763,6 +794,24 @@ class YTMPlayerApp(App):
         # Start playback.
         await self.player.play(stream_info.url, track)
         self._track_start_position = 0.0
+
+        # Update Discord Rich Presence.
+        if self.discord and self.discord.is_connected:
+            await self.discord.update(
+                title=track.get("title", ""),
+                artist=track.get("artist", ""),
+                album=track.get("album", ""),
+                duration=stream_info.duration,
+            )
+
+        # Send Last.fm "Now Playing".
+        if self.lastfm and self.lastfm.is_connected:
+            await self.lastfm.now_playing(
+                title=track.get("title", ""),
+                artist=track.get("artist", ""),
+                album=track.get("album", ""),
+                duration=stream_info.duration,
+            )
 
         # Update MPRIS metadata.
         if self.mpris:
@@ -845,6 +894,13 @@ class YTMPlayerApp(App):
             except Exception:
                 logger.debug("Failed to update MPRIS position", exc_info=True)
 
+        # Check Last.fm scrobble threshold.
+        if self.lastfm and self.lastfm.is_connected and self.player.is_playing:
+            try:
+                self.run_worker(self.lastfm.check_scrobble(self.player.position), group="scrobble", exclusive=True)
+            except Exception:
+                logger.debug("Failed to check Last.fm scrobble", exc_info=True)
+
     def _on_track_change(self, track: dict) -> None:
         """Handle track change event from the player.
 
@@ -923,6 +979,22 @@ class YTMPlayerApp(App):
                 )
             except Exception:
                 logger.debug("Failed to update MPRIS playback status", exc_info=True)
+
+        # Update Discord presence on pause/resume.
+        if self.discord and self.discord.is_connected:
+            try:
+                if paused:
+                    self.call_later(lambda: self.run_worker(self.discord.clear()))
+                elif self.player and self.player.current_track:
+                    t = self.player.current_track
+                    self.call_later(lambda: self.run_worker(self.discord.update(
+                        title=t.get("title", ""),
+                        artist=t.get("artist", ""),
+                        album=t.get("album", ""),
+                        position=self.player.position if self.player else 0,
+                    )))
+            except Exception:
+                logger.debug("Failed to update Discord presence", exc_info=True)
 
     # ── History logging ──────────────────────────────────────────────
 
@@ -1068,6 +1140,8 @@ class YTMPlayerApp(App):
 
             if action_id == "play":
                 self.run_worker(self.play_track(track))
+            elif action_id == "download":
+                self.run_worker(self._download_track(track))
             elif action_id == "play_next":
                 self.queue.add_next(track)
                 self.notify("Playing next", timeout=2)
@@ -1151,6 +1225,68 @@ class YTMPlayerApp(App):
             first = self.queue.next_track()
             if first:
                 await self.play_track(first)
+
+    # ── Download ─────────────────────────────────────────────────────
+
+    async def _download_track(self, track: dict) -> None:
+        """Download a single track for offline playback."""
+        from ytm_player.utils.formatting import get_video_id
+        video_id = get_video_id(track)
+        if not video_id:
+            self.notify("Track has no video ID.", severity="warning", timeout=2)
+            return
+
+        if self.downloader.is_downloaded(video_id):
+            self.notify("Already downloaded.", timeout=2)
+            return
+
+        title = track.get("title", video_id)
+        self.notify(f"Downloading: {title}", timeout=3)
+
+        result = await self.downloader.download(video_id)
+        if result.success:
+            self.notify(f"Downloaded: {title}", timeout=3)
+            # Index in cache if available.
+            if self.cache and result.file_path:
+                try:
+                    file_size = result.file_path.stat().st_size
+                    fmt = result.file_path.suffix.lstrip(".")
+                    await self.cache._index(video_id, result.file_path, file_size, fmt)
+                except Exception:
+                    logger.debug("Failed to index downloaded file in cache", exc_info=True)
+        else:
+            error = result.error or "Unknown error"
+            self.notify(f"Download failed: {error}", severity="error", timeout=4)
+
+    async def _download_multiple_tracks(self, tracks: list[dict]) -> None:
+        """Download multiple tracks with a progress counter notification."""
+        total = len(tracks)
+        completed = 0
+        failed = 0
+
+        for track in tracks:
+            from ytm_player.utils.formatting import get_video_id
+            video_id = get_video_id(track)
+            if not video_id:
+                failed += 1
+                completed += 1
+                continue
+
+            if self.downloader.is_downloaded(video_id):
+                completed += 1
+                continue
+
+            result = await self.downloader.download(video_id)
+            completed += 1
+            if not result.success:
+                failed += 1
+
+            self.notify(f"Downloaded {completed}/{total}", timeout=2)
+
+        if failed:
+            self.notify(f"Downloads complete: {completed - failed}/{total} succeeded", timeout=4)
+        else:
+            self.notify(f"All {total} tracks downloaded", timeout=3)
 
     # ── IPC command handler ───────────────────────────────────────────
 
