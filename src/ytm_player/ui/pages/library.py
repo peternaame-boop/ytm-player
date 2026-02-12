@@ -89,6 +89,14 @@ class LibraryPanel(Widget):
             self.item_data = item_data
             self.panel_id = panel_id
 
+    class ItemDoubleClicked(Message):
+        """Emitted when an item is double-clicked in instant_select mode."""
+
+        def __init__(self, item_data: dict[str, Any], panel_id: str) -> None:
+            super().__init__()
+            self.item_data = item_data
+            self.panel_id = panel_id
+
     class ItemRightClicked(Message):
         """Emitted when an item (or empty space) is right-clicked."""
 
@@ -291,8 +299,23 @@ class LibraryPanel(Widget):
             return
 
         if self._instant_select:
-            # Instant mode: single click fires selection via ListView.Selected.
-            # No need for double-click tracking — just let it through.
+            # Track double-clicks even in instant mode.
+            idx = self._find_clicked_item_index(event)
+            if idx is not None and 0 <= idx < len(self._filtered_items):
+                now = time.monotonic()
+                if (
+                    self._last_click_index == idx
+                    and (now - self._last_click_time) < 0.4
+                ):
+                    self._last_click_time = 0.0
+                    self._last_click_index = None
+                    event.stop()
+                    self.post_message(
+                        self.ItemDoubleClicked(self._filtered_items[idx], self.id or "")
+                    )
+                    return
+                self._last_click_time = now
+                self._last_click_index = idx
             return
 
         # ── Legacy double-click mode ──
@@ -500,6 +523,34 @@ class LibraryPage(Widget):
             self.query_one("#empty-state").display = True
             empty = self.query_one("#empty-state", Static)
             empty.update("Failed to load playlist")
+
+    # ------------------------------------------------------------------
+    # Double-click playlist → play all from top
+    # ------------------------------------------------------------------
+
+    async def on_library_panel_item_double_clicked(
+        self, event: LibraryPanel.ItemDoubleClicked
+    ) -> None:
+        """Queue all tracks from the playlist and start playback."""
+        item = event.item_data
+        playlist_id = item.get("playlistId") or item.get("browseId")
+        if not playlist_id:
+            return
+
+        try:
+            data = await self.app.ytmusic.get_playlist(playlist_id)
+            tracks = normalize_tracks(data.get("tracks", []))
+            if not tracks:
+                self.app.notify("Playlist is empty", severity="warning")
+                return
+
+            self.app.queue.clear()
+            self.app.queue.add_multiple(tracks)
+            self.app.queue.jump_to(0)
+            await self.app.play_track(tracks[0])
+        except Exception:
+            logger.exception("Failed to load playlist %s for playback", playlist_id)
+            self.app.notify("Failed to load playlist", severity="error")
 
     # ------------------------------------------------------------------
     # Track selection → play
