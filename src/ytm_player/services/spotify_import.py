@@ -231,9 +231,7 @@ def _fuzzy_score(spotify_track: dict, ytm_track: dict) -> int:
 _MATCH_MAX_WORKERS = 5
 
 
-def _search_and_score(
-    ytmusic: YTMusic, sp_track: dict, index: int
-) -> tuple[int, MatchResult]:
+def _search_and_score(ytmusic: YTMusic, sp_track: dict, index: int) -> tuple[int, MatchResult]:
     """Search YTM for a single Spotify track and return (original_index, result).
 
     Designed to run inside a thread pool.  All data it touches is either

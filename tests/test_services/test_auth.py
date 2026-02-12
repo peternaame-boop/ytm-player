@@ -41,10 +41,7 @@ class TestAlternatingLines:
 
     def test_pseudo_headers_stripped_in_alternating(self):
         raw = (
-            ":authority\nmusic.youtube.com\n"
-            ":method\nPOST\n"
-            "cookie\nabc=123\n"
-            "user-agent\nMozilla/5.0"
+            ":authority\nmusic.youtube.com\n:method\nPOST\ncookie\nabc=123\nuser-agent\nMozilla/5.0"
         )
         result = _normalize_raw_headers(raw)
         assert ":authority" not in result

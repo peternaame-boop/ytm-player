@@ -1,6 +1,5 @@
 """Tests for ytm_player.services.cache.CacheManager."""
 
-
 import pytest
 
 from ytm_player.services.cache import CacheManager
