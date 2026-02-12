@@ -1,6 +1,6 @@
 # ytm-player
 
-A full-featured YouTube Music TUI (Terminal User Interface) client for Linux, macOS, and Windows, modeled after [spotify_player](https://github.com/aome510/spotify-player). Browse your library, search, queue tracks, and control playback — all from the terminal with vim-style keybindings.
+A full-featured YouTube Music player for the terminal. Browse your library, search, queue tracks, and control playback — all from a TUI with vim-style keybindings. Runs on Linux, macOS, and Windows.
 
 ![ytm-player screenshot](screenshot.png)
 
