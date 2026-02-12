@@ -80,15 +80,22 @@ pip install -e ".[dev]"
 ytm setup
 ```
 
-The setup wizard will attempt to auto-extract cookies from your browser (Chrome, Firefox, Brave, Edge). If auto-detection fails, it will prompt you to manually paste request headers from YouTube Music:
+The setup wizard has two modes:
+
+**Automatic (preferred):** It scans your installed browsers (Helium, Chrome, Chromium, Brave, Firefox, Edge, Vivaldi, Opera) for YouTube Music cookies. If found, credentials are extracted automatically — no manual steps needed. Just make sure you're logged into [music.youtube.com](https://music.youtube.com) in at least one browser.
+
+**Manual fallback:** If auto-detection fails (e.g. cookies are encrypted or browser isn't supported), the wizard walks you through pasting raw request headers:
 
 1. Open [music.youtube.com](https://music.youtube.com) in your browser
 2. Open DevTools (F12) → Network tab
-3. Click any request to `music.youtube.com`
-4. Copy the request headers (specifically the `Cookie` and `Authorization` headers)
-5. Paste them into the setup wizard
+3. Refresh the page, filter requests by `/browse`
+4. Click a `music.youtube.com` request
+5. Right-click "Request Headers" → Copy
+6. Paste into the wizard and press Enter on an empty line
 
-Credentials are stored in `~/.config/ytm-player/` with `0o600` permissions.
+The wizard accepts multiple paste formats (Chrome alternating lines, Firefox `Name: Value`, terminal escape-separated).
+
+Credentials are stored in `~/.config/ytm-player/headers_auth.json` with `0o600` permissions.
 
 ## Usage
 
