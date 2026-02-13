@@ -423,11 +423,13 @@ class LibraryPage(Widget):
     def __init__(
         self,
         *,
+        playlist_id: str | None = None,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
+        self._restore_playlist_id: str | None = playlist_id
         self._active_playlist_id: str | None = None
         self._active_focus: str = "sidebar"  # "sidebar" or "tracks"
 
@@ -459,6 +461,13 @@ class LibraryPage(Widget):
         self.query_one("#content-header").display = False
 
         self.run_worker(self._load_library(), name="load-library", exclusive=True)
+
+    def get_nav_state(self) -> dict[str, Any]:
+        """Return state to preserve when navigating away."""
+        state: dict[str, Any] = {}
+        if self._active_playlist_id:
+            state["playlist_id"] = self._active_playlist_id
+        return state
 
     # ------------------------------------------------------------------
     # Pinned navigation
@@ -496,6 +505,31 @@ class LibraryPage(Widget):
             logger.exception("Failed to load library data")
         finally:
             self.is_loading = False
+
+        # Auto-select a playlist after loading the sidebar.
+        await self._auto_select_playlist()
+
+    async def _auto_select_playlist(self) -> None:
+        """Auto-select a playlist: restored state first, then currently playing."""
+        target_id = self._restore_playlist_id
+        self._restore_playlist_id = None  # Only use once.
+
+        # Fall back to the currently-playing playlist from the queue.
+        if not target_id:
+            target_id = getattr(self.app, "_active_library_playlist_id", None)
+
+        if not target_id:
+            return
+
+        # Find the playlist in the sidebar and trigger selection.
+        panel = self.query_one("#playlists", LibraryPanel)
+        for item in panel._items:
+            pid = item.get("playlistId") or item.get("browseId")
+            if pid == target_id:
+                await self.on_library_panel_item_selected(
+                    LibraryPanel.ItemSelected(item, "playlists")
+                )
+                break
 
     async def refresh_library(self) -> None:
         """Public method to reload playlists."""
@@ -578,6 +612,7 @@ class LibraryPage(Widget):
             self.app.queue.clear()
             self.app.queue.add_multiple(tracks)
             self.app.queue.jump_to(0)
+            self.app._active_library_playlist_id = playlist_id  # type: ignore[attr-defined]
             await self.app.play_track(tracks[0])
         except Exception:
             logger.exception("Failed to load playlist %s for playback", playlist_id)
@@ -597,6 +632,8 @@ class LibraryPage(Widget):
         self.app.queue.clear()
         self.app.queue.add_multiple(tracks)
         self.app.queue.jump_to(idx)
+        if self._active_playlist_id:
+            self.app._active_library_playlist_id = self._active_playlist_id  # type: ignore[attr-defined]
         await self.app.play_track(event.track)
 
     # ------------------------------------------------------------------

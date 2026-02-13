@@ -75,7 +75,7 @@ class YTMusicService:
             logger.warning("Search timed out for query=%r", query)
             return []
         except Exception:
-            logger.exception("Search failed for query=%r filter=%r", query, filter)
+            logger.debug("Search failed for query=%r filter=%r", query, filter)
             return []
 
     async def get_search_suggestions(self, query: str) -> list[str]:
@@ -83,7 +83,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_search_suggestions, query)
         except Exception:
-            logger.exception("get_search_suggestions failed for query=%r", query)
+            logger.debug("get_search_suggestions failed for query=%r", query)
             return []
 
     # ------------------------------------------------------------------
@@ -95,7 +95,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_library_playlists, limit=limit)
         except Exception:
-            logger.exception("get_library_playlists failed")
+            logger.debug("get_library_playlists failed")
             return []
 
     async def get_library_albums(self, limit: int = 25) -> list[dict[str, Any]]:
@@ -103,7 +103,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_library_albums, limit=limit)
         except Exception:
-            logger.exception("get_library_albums failed")
+            logger.debug("get_library_albums failed")
             return []
 
     async def get_library_artists(self, limit: int = 25) -> list[dict[str, Any]]:
@@ -111,7 +111,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_library_subscriptions, limit=limit)
         except Exception:
-            logger.exception("get_library_artists failed")
+            logger.debug("get_library_artists failed")
             return []
 
     async def get_liked_songs(self, limit: int = 100) -> list[dict[str, Any]]:
@@ -120,7 +120,7 @@ class YTMusicService:
             playlist = await self._call(self.client.get_liked_songs, limit=limit)
             return playlist.get("tracks", []) if isinstance(playlist, dict) else []
         except Exception:
-            logger.exception("get_liked_songs failed")
+            logger.debug("get_liked_songs failed")
             return []
 
     # ------------------------------------------------------------------
@@ -130,9 +130,9 @@ class YTMusicService:
     async def get_home(self) -> list[dict[str, Any]]:
         """Return personalised home page recommendations."""
         try:
-            return await self._call(self.client.get_home, limit=6)
+            return await self._call(self.client.get_home, limit=3)
         except Exception:
-            logger.exception("get_home failed")
+            logger.debug("get_home failed", exc_info=True)
             return []
 
     async def get_mood_categories(self) -> list[dict[str, Any]]:
@@ -140,7 +140,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_mood_categories)
         except Exception:
-            logger.exception("get_mood_categories failed")
+            logger.debug("get_mood_categories failed")
             return []
 
     async def get_mood_playlists(self, category_id: str) -> list[dict[str, Any]]:
@@ -148,7 +148,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_mood_playlists, category_id)
         except Exception:
-            logger.exception("get_mood_playlists failed for %r", category_id)
+            logger.debug("get_mood_playlists failed for %r", category_id)
             return []
 
     async def get_charts(self, country: str = "ZZ") -> dict[str, Any]:
@@ -156,7 +156,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_charts, country=country)
         except Exception:
-            logger.exception("get_charts failed for country=%r", country)
+            logger.debug("get_charts failed for country=%r", country)
             return {}
 
     async def get_new_releases(self) -> list[dict[str, Any]]:
@@ -170,7 +170,7 @@ class YTMusicService:
                 return result.get("albums", result.get("results", []))
             return []
         except Exception:
-            logger.exception("get_new_releases failed")
+            logger.debug("get_new_releases failed")
             return []
 
     # ------------------------------------------------------------------
@@ -182,7 +182,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_album, album_id)
         except Exception:
-            logger.exception("get_album failed for %r", album_id)
+            logger.debug("get_album failed for %r", album_id)
             return {}
 
     async def get_artist(self, artist_id: str) -> dict[str, Any]:
@@ -190,7 +190,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_artist, artist_id)
         except Exception:
-            logger.exception("get_artist failed for %r", artist_id)
+            logger.debug("get_artist failed for %r", artist_id)
             return {}
 
     async def get_playlist(self, playlist_id: str, limit: int = 100) -> dict[str, Any]:
@@ -198,7 +198,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_playlist, playlist_id, limit=limit)
         except Exception:
-            logger.exception("get_playlist failed for %r", playlist_id)
+            logger.debug("get_playlist failed for %r", playlist_id)
             return {}
 
     async def get_song(self, video_id: str) -> dict[str, Any]:
@@ -206,7 +206,7 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_song, video_id)
         except Exception:
-            logger.exception("get_song failed for %r", video_id)
+            logger.debug("get_song failed for %r", video_id)
             return {}
 
     async def get_lyrics(self, video_id: str) -> dict[str, Any] | None:
@@ -222,7 +222,7 @@ class YTMusicService:
                 return None
             return await self._call(self.client.get_lyrics, lyrics_browse_id)
         except Exception:
-            logger.exception("get_lyrics failed for %r", video_id)
+            logger.debug("get_lyrics failed for %r", video_id)
             return None
 
     # ------------------------------------------------------------------
@@ -250,7 +250,7 @@ class YTMusicService:
             result = await self._call(self.client.get_watch_playlist, **kwargs)
             return result.get("tracks", []) if isinstance(result, dict) else []
         except Exception:
-            logger.exception(
+            logger.debug(
                 "get_watch_playlist failed for video=%r playlist=%r",
                 video_id,
                 playlist_id,
@@ -263,7 +263,7 @@ class YTMusicService:
             result = await self._call(self.client.get_watch_playlist, videoId=video_id, radio=True)
             return result.get("tracks", []) if isinstance(result, dict) else []
         except Exception:
-            logger.exception("get_radio failed for %r", video_id)
+            logger.debug("get_radio failed for %r", video_id)
             return []
 
     # ------------------------------------------------------------------
@@ -280,14 +280,14 @@ class YTMusicService:
         try:
             await self._call(self.client.rate_song, video_id, rating)
         except Exception:
-            logger.exception("rate_song failed for %r rating=%r", video_id, rating)
+            logger.debug("rate_song failed for %r rating=%r", video_id, rating)
 
     async def add_playlist_items(self, playlist_id: str, video_ids: list[str]) -> None:
         """Add songs to an existing playlist."""
         try:
             await self._call(self.client.add_playlist_items, playlist_id, video_ids)
         except Exception:
-            logger.exception("add_playlist_items failed for playlist=%r", playlist_id)
+            logger.debug("add_playlist_items failed for playlist=%r", playlist_id)
 
     async def create_playlist(
         self,
@@ -302,7 +302,7 @@ class YTMusicService:
             )
             return result if isinstance(result, str) else ""
         except Exception:
-            logger.exception("create_playlist failed for title=%r", title)
+            logger.debug("create_playlist failed for title=%r", title)
             return ""
 
     async def delete_playlist(self, playlist_id: str) -> bool:
@@ -315,7 +315,7 @@ class YTMusicService:
             result = await self._call(self.client.delete_playlist, playlist_id)
             return result == "STATUS_SUCCEEDED" if isinstance(result, str) else bool(result)
         except Exception:
-            logger.exception("delete_playlist failed for %r", playlist_id)
+            logger.debug("delete_playlist failed for %r", playlist_id)
             return False
 
     async def remove_album_from_library(self, playlist_id: str) -> bool:
@@ -329,7 +329,7 @@ class YTMusicService:
             await self._call(self.client.rate_playlist, playlist_id, "INDIFFERENT")
             return True
         except Exception:
-            logger.exception("remove_album_from_library failed for %r", playlist_id)
+            logger.debug("remove_album_from_library failed for %r", playlist_id)
             return False
 
     async def unsubscribe_artist(self, channel_id: str) -> bool:
@@ -338,7 +338,7 @@ class YTMusicService:
             await self._call(self.client.unsubscribe_artists, [channel_id])
             return True
         except Exception:
-            logger.exception("unsubscribe_artist failed for %r", channel_id)
+            logger.debug("unsubscribe_artist failed for %r", channel_id)
             return False
 
     async def remove_playlist_items(self, playlist_id: str, videos: list[dict[str, Any]]) -> None:
@@ -352,7 +352,7 @@ class YTMusicService:
         try:
             await self._call(self.client.remove_playlist_items, playlist_id, videos)
         except Exception:
-            logger.exception("remove_playlist_items failed for playlist=%r", playlist_id)
+            logger.debug("remove_playlist_items failed for playlist=%r", playlist_id)
 
     # ------------------------------------------------------------------
     # History
@@ -363,5 +363,5 @@ class YTMusicService:
         try:
             return await self._call(self.client.get_history)
         except Exception:
-            logger.exception("get_history failed")
+            logger.debug("get_history failed")
             return []

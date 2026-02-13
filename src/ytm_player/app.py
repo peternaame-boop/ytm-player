@@ -163,11 +163,17 @@ class YTMPlayerApp(App):
         # Navigation stack for back navigation.
         self._nav_stack: list[tuple[str, dict]] = []
 
+        # Last playlist played from Library (for auto-selecting on return).
+        self._active_library_playlist_id: str | None = None
+
         # Track position tracking for history logging.
         self._track_start_position: float = 0.0
 
         # Consecutive stream failure counter (prevents infinite skip loops).
         self._consecutive_failures: int = 0
+
+        # Guard against duplicate end-file events advancing twice.
+        self._advancing: bool = False
 
         # Reference to the position poll timer (for cleanup).
         self._poll_timer = None
@@ -684,11 +690,22 @@ class YTMPlayerApp(App):
             return
 
         if page_name == self._current_page and not kwargs:
-            return  # Already on this page; nothing to do.
+            # Clicking the same page again goes back to the previous page.
+            if self._nav_stack:
+                prev_page, prev_kwargs = self._nav_stack.pop()
+                page_name = prev_page
+                kwargs = prev_kwargs
+            else:
+                return
 
         # Push current page onto the nav stack before switching.
+        # Grab live state from the current page (e.g. active playlist).
         if self._current_page and self._current_page != page_name:
-            self._nav_stack.append((self._current_page, self._current_page_kwargs))
+            nav_kwargs = dict(self._current_page_kwargs)
+            current_page = self._get_current_page()
+            if current_page and hasattr(current_page, "get_nav_state"):
+                nav_kwargs.update(current_page.get_nav_state())
+            self._nav_stack.append((self._current_page, nav_kwargs))
             # Cap stack size.
             if len(self._nav_stack) > _MAX_NAV_STACK:
                 self._nav_stack = self._nav_stack[-_MAX_NAV_STACK:]
@@ -785,7 +802,11 @@ class YTMPlayerApp(App):
             0.5,
             lambda: self.notify(f"Loading: {track.get('title', video_id)}", timeout=3),
         )
-        stream_info = await self.stream_resolver.resolve(video_id)
+        try:
+            stream_info = await self.stream_resolver.resolve(video_id)
+        except Exception:
+            logger.debug("Stream resolution raised for %s", video_id, exc_info=True)
+            stream_info = None
         loading_timer.stop()
 
         if stream_info is None:
@@ -813,7 +834,16 @@ class YTMPlayerApp(App):
         self._consecutive_failures = 0
 
         # Start playback.
-        await self.player.play(stream_info.url, track)
+        try:
+            await self.player.play(stream_info.url, track)
+        except Exception:
+            logger.debug("player.play() failed for %s", video_id, exc_info=True)
+            self._consecutive_failures += 1
+            if self._consecutive_failures < _MAX_CONSECUTIVE_FAILURES:
+                next_track = self.queue.next_track()
+                if next_track:
+                    self.call_later(lambda: self.run_worker(self.play_track(next_track)))
+            return
         self._track_start_position = 0.0
 
         # Update Discord Rich Presence.
@@ -894,8 +924,22 @@ class YTMPlayerApp(App):
     # ── Player event callbacks ───────────────────────────────────────
 
     async def _on_track_end(self, event: Any = None) -> None:
-        """Handle track ending -- advance to next."""
-        await self._play_next()
+        """Handle track ending -- advance to next.
+
+        Uses ``_advancing`` flag to prevent duplicate end-file events
+        from advancing the queue twice.
+        """
+        if self._advancing:
+            logger.debug("Ignoring duplicate track-end while already advancing")
+            return
+        self._advancing = True
+        logger.debug("Track ended (event=%s), advancing to next", event)
+        try:
+            await self._play_next()
+        except Exception:
+            logger.debug("Error in _on_track_end", exc_info=True)
+        finally:
+            self._advancing = False
 
     def _poll_position(self) -> None:
         """Timer callback: poll the player position and update the bar."""

@@ -449,6 +449,11 @@ MIT — see [LICENSE](LICENSE).
 - Queue persistence across restarts (saved in session.json)
 - Track change notifications wired to `[notifications]` config section
 - New config sections: `[discord]`, `[lastfm]`, `[playback].gapless`, `[playback].api_timeout`
+- Configurable column widths via `[ui]` settings (`col_index`, `col_title`, `col_artist`, `col_album`, `col_duration`)
+- Liked Songs and Recently Played pinned in library sidebar
+- Clicking the active footer page navigates back to the previous page
+- Library remembers selected playlist when navigating away and back
+- Library auto-opens the currently-playing playlist on return
 
 **Security & Stability**
 - IPC socket security hardening (permissions, command whitelist, input validation)
@@ -467,6 +472,15 @@ MIT — see [LICENSE](LICENSE).
 - Stream URL expiry checks before playback
 
 **Bug Fixes & Code Quality**
+- Fixed auto-advance bug: songs after the 2nd track would not play due to stale `_end_file_skip` counter
+- Fixed thread-safe skip counter — check+increment now atomic under lock
+- Fixed duplicate end-file events causing track skipping (debounce guard)
+- Fixed `player.play()` failure leaving stale `_current_track` state
+- Fixed unhandled exceptions in stream resolution crashing the playback chain
+- Fixed `player.play()` exceptions silently stopping all playback
+- Fixed Browse page crash from unawaited async mount operations
+- Fixed API error tracebacks polluting TUI with red stderr overlay
+- Reset skip counter on mpv crash recovery
 - Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
 - Fixed encapsulation break (cache private method called from app)
 - Removed dead code (`_download_multiple_tracks`, redundant imports)

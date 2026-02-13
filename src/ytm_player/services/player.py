@@ -115,7 +115,9 @@ class Player:
                 if self._end_file_skip > 0:
                     self._end_file_skip -= 1
                     return
-            # Check if this was an error vs normal EOF.
+                # Track ended naturally — clear so play() won't
+                # increment _end_file_skip for an already-idle mpv.
+                self._current_track = None
             reason = getattr(event, "reason", None) if event else None
             self._dispatch(PlayerEvent.TRACK_END, {"reason": reason})
 
@@ -160,18 +162,35 @@ class Player:
         via call_soon_threadsafe to bridge from mpv's thread.
         """
         loop = self._get_loop()
+
+        def _schedule_async(coro_fn: Any, call_args: tuple) -> None:
+            """Create a task for an async callback with error handling."""
+
+            async def _safe_wrapper() -> None:
+                try:
+                    await coro_fn(*call_args)
+                except Exception:
+                    logger.debug("Async callback error for %s", event, exc_info=True)
+
+            asyncio.create_task(_safe_wrapper())
+
         for cb in list(self._callbacks[event]):
             try:
                 if loop is not None and not loop.is_closed():
                     if asyncio.iscoroutinefunction(cb):
-                        loop.call_soon_threadsafe(lambda _cb=cb: asyncio.create_task(_cb(*args)))
+                        loop.call_soon_threadsafe(_schedule_async, cb, args)
                     else:
                         loop.call_soon_threadsafe(cb, *args)
                 else:
-                    # No loop available; call directly (best effort).
-                    cb(*args)
+                    # No loop: only sync callbacks can run; skip async ones.
+                    if asyncio.iscoroutinefunction(cb):
+                        logger.warning(
+                            "Dropping async %s callback — no event loop available", event
+                        )
+                    else:
+                        cb(*args)
             except Exception:
-                logger.exception("Error in %s callback", event)
+                logger.debug("Error in %s callback", event, exc_info=True)
 
     # ── mpv observers ───────────────────────────────────────────────
 
@@ -240,16 +259,17 @@ class Player:
 
     async def play(self, url: str, track_info: dict) -> None:
         """Play a stream URL with associated track metadata."""
-        if self._current_track is not None:
-            # A track is already playing — mpv will fire end-file for it
-            # when we load the new URL.  Tell the callback to ignore it.
-            with self._skip_lock:
+        with self._skip_lock:
+            if self._current_track is not None:
+                # A track is still playing — mpv will fire end-file for it
+                # when we load the new URL.  Tell the callback to ignore it.
                 self._end_file_skip += 1
-        self._current_track = track_info
+            self._current_track = track_info
         try:
             await asyncio.to_thread(self._play_sync, url)
             self._dispatch(PlayerEvent.TRACK_CHANGE, track_info)
         except Exception as exc:
+            self._current_track = None
             logger.error("Failed to play %s: %s", track_info.get("video_id", "?"), exc)
             self._dispatch(PlayerEvent.ERROR, exc)
 
@@ -329,6 +349,8 @@ class Player:
         """Attempt to re-create the mpv instance after a crash."""
         try:
             logger.info("Re-initializing mpv instance...")
+            with self._skip_lock:
+                self._end_file_skip = 0
             self._mpv = self._init_mpv()
 
             # Restore volume if possible.

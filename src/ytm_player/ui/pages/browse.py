@@ -158,14 +158,27 @@ class ForYouSection(Widget):
         self.is_loading = True
         try:
             self._shelves = await self.app.ytmusic.get_home()
-            self._populate_shelves()
         except Exception:
-            logger.exception("Failed to load home recommendations")
+            logger.debug("Failed to load home recommendations", exc_info=True)
+            self._show_error("Failed to load recommendations.")
+            self.is_loading = False
+            return
+
+        try:
+            await self._populate_shelves()
+        except Exception:
+            logger.debug("Failed to render home shelves", exc_info=True)
+            # Clean up any partially-mounted widgets.
+            try:
+                container = self.query_one("#foryou-shelves", Vertical)
+                await container.remove_children()
+            except Exception:
+                pass
             self._show_error("Failed to load recommendations.")
         finally:
             self.is_loading = False
 
-    def _populate_shelves(self) -> None:
+    async def _populate_shelves(self) -> None:
         loading = self.query_one("#foryou-loading", Static)
         loading.display = False
 
@@ -174,10 +187,10 @@ class ForYouSection(Widget):
         for lv in container.query(ListView):
             if hasattr(lv, "_shelf_items"):
                 lv._shelf_items = []  # type: ignore[attr-defined]
-        container.remove_children()
+        await container.remove_children()
 
         if not self._shelves:
-            container.mount(Static("No recommendations available.", classes="loading"))
+            await container.mount(Static("No recommendations available.", classes="loading"))
             return
 
         for shelf in self._shelves:
@@ -186,27 +199,32 @@ class ForYouSection(Widget):
             if not contents:
                 continue
 
-            container.mount(Label(title, classes="shelf-title"))
+            try:
+                await container.mount(Label(title, classes="shelf-title"))
 
-            list_view = ListView(classes="shelf-items")
-            container.mount(list_view)
+                list_view = ListView(classes="shelf-items")
+                await container.mount(list_view)
 
-            for item in contents[:8]:
-                item_title = item.get("title", "Unknown")
-                subtitle_parts: list[str] = []
-                artist_str = extract_artist(item)
-                if artist_str and artist_str != "Unknown":
-                    subtitle_parts.append(artist_str)
-                description = item.get("description", "")
-                if description:
-                    subtitle_parts.append(description)
-                subtitle = " - ".join(subtitle_parts)
-                display = truncate(f"{item_title}  {subtitle}", 80) if subtitle else item_title
+                for item in contents[:8]:
+                    item_title = item.get("title", "Unknown")
+                    subtitle_parts: list[str] = []
+                    artist_str = extract_artist(item)
+                    if artist_str and artist_str != "Unknown":
+                        subtitle_parts.append(artist_str)
+                    description = item.get("description", "")
+                    if description:
+                        subtitle_parts.append(str(description))
+                    subtitle = " - ".join(subtitle_parts)
+                    display = (
+                        truncate(f"{item_title}  {subtitle}", 80) if subtitle else item_title
+                    )
 
-                list_view.append(ListItem(Label(display)))
+                    list_view.append(ListItem(Label(display)))
 
-            # Store items on the list_view for later retrieval.
-            list_view._shelf_items = contents[:8]  # type: ignore[attr-defined]
+                # Store items on the list_view for later retrieval.
+                list_view._shelf_items = contents[:8]  # type: ignore[attr-defined]
+            except Exception:
+                logger.debug("Failed to render shelf %r", title, exc_info=True)
 
     def _show_error(self, message: str) -> None:
         loading = self.query_one("#foryou-loading", Static)
@@ -277,14 +295,14 @@ class MoodsGenresSection(Widget):
         self.is_loading = True
         try:
             self._categories = await self.app.ytmusic.get_mood_categories()
-            self._populate_categories()
+            await self._populate_categories()
         except Exception:
-            logger.exception("Failed to load mood categories")
+            logger.debug("Failed to load mood categories")
             self._show_error("Failed to load moods & genres.")
         finally:
             self.is_loading = False
 
-    def _populate_categories(self) -> None:
+    async def _populate_categories(self) -> None:
         loading = self.query_one("#moods-loading", Static)
         loading.display = False
 
@@ -293,10 +311,10 @@ class MoodsGenresSection(Widget):
         for lv in container.query(ListView):
             if hasattr(lv, "_category_items"):
                 lv._category_items = []  # type: ignore[attr-defined]
-        container.remove_children()
+        await container.remove_children()
 
         if not self._categories:
-            container.mount(Static("No categories available.", classes="loading"))
+            await container.mount(Static("No categories available.", classes="loading"))
             return
 
         self._all_items = []
@@ -308,10 +326,10 @@ class MoodsGenresSection(Widget):
                 continue
 
             if group_title:
-                container.mount(Label(group_title, classes="category-title"))
+                await container.mount(Label(group_title, classes="category-title"))
 
             list_view = ListView()
-            container.mount(list_view)
+            await container.mount(list_view)
 
             for item in items:
                 title = item.get("title", "Unknown")
@@ -404,7 +422,7 @@ class ChartsSection(Widget):
             self._chart_data = await self.app.ytmusic.get_charts(country=country)
             self._populate_charts()
         except Exception:
-            logger.exception("Failed to load charts for country=%r", country)
+            logger.debug("Failed to load charts for country=%r", country)
             self._show_error("Failed to load charts.")
         finally:
             self.is_loading = False
@@ -507,7 +525,7 @@ class NewReleasesSection(Widget):
             self._albums = await self.app.ytmusic.get_new_releases()
             self._populate_releases()
         except Exception:
-            logger.exception("Failed to load new releases")
+            logger.debug("Failed to load new releases")
             self._show_error("Failed to load new releases.")
         finally:
             self.is_loading = False
@@ -708,7 +726,7 @@ class BrowsePage(Widget):
                             "context", context_type="playlist", context_id=playlist_id
                         )
         except Exception:
-            logger.exception("Failed to load mood playlists")
+            logger.debug("Failed to load mood playlists")
             self.app.notify("Failed to load mood playlists", severity="error")
 
     async def on_new_releases_section_album_selected(
