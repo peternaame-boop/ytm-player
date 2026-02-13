@@ -215,9 +215,7 @@ class ForYouSection(Widget):
                     if description:
                         subtitle_parts.append(str(description))
                     subtitle = " - ".join(subtitle_parts)
-                    display = (
-                        truncate(f"{item_title}  {subtitle}", 80) if subtitle else item_title
-                    )
+                    display = truncate(f"{item_title}  {subtitle}", 80) if subtitle else item_title
 
                     list_view.append(ListItem(Label(display)))
 
