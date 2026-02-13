@@ -444,8 +444,11 @@ MIT — see [LICENSE](LICENSE).
 - Clicking the active footer page navigates back to the previous page
 - Library remembers selected playlist when navigating away and back
 - Library auto-opens the currently-playing playlist on return
+- Library restores cursor to last selected track row when navigating back (falls back to currently-playing track)
+- Click outside popups to dismiss — actions menu and Spotify import close when clicking the background
 
 **Bug Fixes**
+- Fixed right-click on track table triggering playback instead of only opening context menu
 - Fixed auto-advance bug: songs after the 2nd track would not play due to stale `_end_file_skip` counter
 - Fixed thread-safe skip counter — check+increment now atomic under lock
 - Fixed duplicate end-file events causing track skipping (debounce guard)

@@ -90,6 +90,7 @@ class TrackTable(DataTable):
         self._row_keys: list[RowKey] = []
         self._playing_video_id: str | None = None
         self._playing_index: int | None = None
+        self._right_clicked: bool = False
 
     @property
     def tracks(self) -> list[dict]:
@@ -220,6 +221,9 @@ class TrackTable(DataTable):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Forward track selection as a TrackSelected message."""
+        if self._right_clicked:
+            self._right_clicked = False
+            return
         row_idx = event.cursor_row
         if 0 <= row_idx < len(self._tracks):
             self.post_message(self.TrackSelected(self._tracks[row_idx], row_idx))
@@ -234,8 +238,7 @@ class TrackTable(DataTable):
         """Handle right-click to emit TrackRightClicked."""
         if event.button == 3:
             event.stop()
-            # The cursor row is updated by Textual before on_click fires,
-            # so we can use the current cursor position.
+            self._right_clicked = True
             row_idx = self.cursor_row
             if row_idx is not None and 0 <= row_idx < len(self._tracks):
                 self.post_message(self.TrackRightClicked(self._tracks[row_idx], row_idx))

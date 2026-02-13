@@ -200,6 +200,11 @@ class ActionsPopup(ModalScreen[str | None]):
 
     # ── Selection ───────────────────────────────────────────────────
 
+    def on_click(self, event: Any) -> None:
+        """Dismiss when clicking outside the popup box."""
+        if event.widget is self:
+            self.dismiss(None)
+
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Return the selected action string and close."""
         event.stop()

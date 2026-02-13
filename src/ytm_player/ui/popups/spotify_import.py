@@ -903,6 +903,11 @@ class SpotifyImportPopup(ModalScreen[str | None]):
 
     # ── Cancel ───────────────────────────────────────────────────────
 
+    def on_click(self, event: Click) -> None:
+        """Dismiss when clicking outside the popup box."""
+        if event.widget is self:
+            self.action_cancel()
+
     def action_cancel(self) -> None:
         """Cancel active workers and dismiss the popup."""
         for worker in self.workers:
