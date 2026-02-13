@@ -10,6 +10,7 @@ from textual.widgets import DataTable
 from textual.widgets.data_table import RowKey
 
 from ytm_player.config import Action
+from ytm_player.config.settings import get_settings
 from ytm_player.utils.formatting import extract_artist, extract_duration, format_duration
 
 logger = logging.getLogger(__name__)
@@ -112,13 +113,18 @@ class TrackTable(DataTable):
 
     def _setup_columns(self) -> None:
         """Add the standard track table columns."""
+        ui = get_settings().ui
+
+        def w(v: int) -> int | None:
+            return v if v > 0 else None
+
         if self._show_index:
-            self.add_column("#", width=4, key="index")
-        self.add_column("Title", width=None, key="title")
-        self.add_column("Artist", width=None, key="artist")
+            self.add_column("#", width=w(ui.col_index), key="index")
+        self.add_column("Title", width=w(ui.col_title), key="title")
+        self.add_column("Artist", width=w(ui.col_artist), key="artist")
         if self._show_album:
-            self.add_column("Album", width=None, key="album")
-        self.add_column("Duration", width=8, key="duration")
+            self.add_column("Album", width=w(ui.col_album), key="album")
+        self.add_column("Duration", width=w(ui.col_duration), key="duration")
 
     # -- Data loading -----------------------------------------------------
 

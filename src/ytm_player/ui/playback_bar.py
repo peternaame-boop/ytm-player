@@ -387,8 +387,6 @@ class FooterBar(Widget):
         "search",
         "browse",
         "queue",
-        "liked_songs",
-        "recently_played",
         "help",
     }
 
@@ -403,8 +401,6 @@ class FooterBar(Widget):
             yield _FooterButton("Search", "search", id="footer-search")
             yield _FooterButton("Browse", "browse", id="footer-browse")
             yield _FooterButton("Queue", "queue", id="footer-queue")
-            yield _FooterButton("Liked", "liked_songs", id="footer-liked_songs")
-            yield _FooterButton("Recent", "recently_played", id="footer-recently_played")
             # Spotify import.
             yield _FooterButton("Import", "spotify_import")
             # Help pushed to far right.

@@ -12,7 +12,7 @@ from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Input, Label, ListItem, ListView, Static
+from textual.widgets import Input, Label, ListItem, ListView, Rule, Static
 
 from ytm_player.config.keymap import Action
 from ytm_player.config.settings import get_settings
@@ -345,8 +345,39 @@ class LibraryPage(Widget):
         width: 1fr;
     }
 
-    #playlists {
+    #sidebar {
         width: 30;
+        height: 1fr;
+    }
+
+    #pinned-nav {
+        height: auto;
+        padding: 0 1;
+    }
+
+    .pinned-item {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+
+    .pinned-item:hover {
+        background: $border;
+        color: $text;
+    }
+
+    .pinned-item.active {
+        color: $primary;
+        text-style: bold;
+    }
+
+    #pinned-separator {
+        margin: 0 1;
+        color: $border;
+    }
+
+    #playlists {
+        width: 1fr;
     }
 
     #content-area {
@@ -402,7 +433,12 @@ class LibraryPage(Widget):
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield LibraryPanel("Playlists", id="playlists", instant_select=True)
+            with Vertical(id="sidebar"):
+                with Vertical(id="pinned-nav"):
+                    yield Static("\u2665 Liked Songs", id="nav-liked", classes="pinned-item")
+                    yield Static("\u23f1 Recently Played", id="nav-recent", classes="pinned-item")
+                yield Rule(id="pinned-separator")
+                yield LibraryPanel("Playlists", id="playlists", instant_select=True)
             with Vertical(id="content-area"):
                 yield Vertical(id="content-header")
                 yield Static("Select a playlist", id="empty-state")
@@ -413,7 +449,7 @@ class LibraryPage(Widget):
         settings = get_settings()
         sidebar_width = settings.ui.sidebar_width
         try:
-            self.query_one("#playlists").styles.width = sidebar_width
+            self.query_one("#sidebar").styles.width = sidebar_width
         except Exception:
             logger.debug("Failed to set sidebar width from settings", exc_info=True)
 
@@ -423,6 +459,20 @@ class LibraryPage(Widget):
         self.query_one("#content-header").display = False
 
         self.run_worker(self._load_library(), name="load-library", exclusive=True)
+
+    # ------------------------------------------------------------------
+    # Pinned navigation
+    # ------------------------------------------------------------------
+
+    async def on_click(self, event: Click) -> None:
+        """Handle clicks on pinned navigation items."""
+        target = event.widget
+        if target.id == "nav-liked":
+            event.stop()
+            await self.app.navigate_to("liked_songs")  # type: ignore[attr-defined]
+        elif target.id == "nav-recent":
+            event.stop()
+            await self.app.navigate_to("recently_played")  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Data loading

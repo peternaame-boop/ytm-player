@@ -13,6 +13,7 @@ from textual.widgets import DataTable, Label, Static
 from textual.widgets.data_table import RowKey
 
 from ytm_player.config.keymap import Action
+from ytm_player.config.settings import get_settings
 from ytm_player.utils.formatting import (
     extract_artist,
     extract_duration,
@@ -87,10 +88,15 @@ class LikedSongsPage(Widget):
 
     def on_mount(self) -> None:
         table = self.query_one("#liked-table", DataTable)
-        table.add_column("#", width=4, key="index")
-        table.add_column("Title", width=None, key="title")
-        table.add_column("Artist", width=None, key="artist")
-        table.add_column("Duration", width=8, key="duration")
+        ui = get_settings().ui
+
+        def w(v: int) -> int | None:
+            return v if v > 0 else None
+
+        table.add_column("#", width=w(ui.col_index), key="index")
+        table.add_column("Title", width=w(ui.col_title), key="title")
+        table.add_column("Artist", width=w(ui.col_artist), key="artist")
+        table.add_column("Duration", width=w(ui.col_duration), key="duration")
         table.display = False
         self.run_worker(self._load_liked_songs(), group="liked-load")
 

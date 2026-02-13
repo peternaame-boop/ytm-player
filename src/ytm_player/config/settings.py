@@ -48,6 +48,11 @@ class UISettings:
     border_style: str = "rounded"
     progress_style: str = "block"
     sidebar_width: int = 30
+    col_index: int = 4
+    col_title: int = 0  # 0 = auto-fill (flexible)
+    col_artist: int = 0
+    col_album: int = 0
+    col_duration: int = 8
 
 
 @dataclass
