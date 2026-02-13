@@ -322,6 +322,13 @@ class YTMPlayerApp(App):
         # Poll playback position on a timer (avoids cross-thread issues).
         self._poll_timer = self.set_interval(_POSITION_POLL_INTERVAL, self._poll_position)
 
+        # Dim the Lyrics button until a track is playing.
+        try:
+            footer = self.query_one("#app-footer", FooterBar)
+            footer.set_lyrics_available(False)
+        except Exception:
+            pass
+
         # Navigate to startup page.
         startup = self.settings.general.startup_page
         if startup not in PAGE_NAMES:
@@ -981,6 +988,13 @@ class YTMPlayerApp(App):
             bar.update_playback_state(is_playing=True, is_paused=False)
         except Exception:
             logger.debug("Failed to update playback bar on track change", exc_info=True)
+
+        # Un-dim the Lyrics button now that a track is playing.
+        try:
+            footer = self.query_one("#app-footer", FooterBar)
+            footer.set_lyrics_available(True)
+        except Exception:
+            pass
 
         # Update playing indicator on any visible TrackTable.
         video_id = track.get("video_id", "")

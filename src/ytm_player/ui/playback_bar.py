@@ -324,6 +324,7 @@ class _FooterButton(Widget):
     """
 
     is_active: reactive[bool] = reactive(False)
+    is_dimmed: reactive[bool] = reactive(False)
 
     def __init__(self, label: str, action: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -334,6 +335,8 @@ class _FooterButton(Widget):
         theme = get_theme()
         if self.is_active:
             return Text(self._label, style=f"bold {theme.primary}")
+        if self.is_dimmed:
+            return Text(self._label, style="dim")
         return Text(self._label, style=theme.muted_text)
 
     async def on_click(self, event: Click) -> None:
@@ -346,6 +349,7 @@ class _FooterButton(Widget):
                 | "search"
                 | "queue"
                 | "browse"
+                | "lyrics"
                 | "liked_songs"
                 | "recently_played"
             ):
@@ -387,6 +391,7 @@ class FooterBar(Widget):
         "search",
         "browse",
         "queue",
+        "lyrics",
         "help",
     }
 
@@ -401,6 +406,7 @@ class FooterBar(Widget):
             yield _FooterButton("Search", "search", id="footer-search")
             yield _FooterButton("Browse", "browse", id="footer-browse")
             yield _FooterButton("Queue", "queue", id="footer-queue")
+            yield _FooterButton("Lyrics", "lyrics", id="footer-lyrics")
             # Spotify import.
             yield _FooterButton("Import", "spotify_import")
             # Help pushed to far right.
@@ -416,3 +422,11 @@ class FooterBar(Widget):
                 logger.debug(
                     "Failed to update footer button for action '%s'", action, exc_info=True
                 )
+
+    def set_lyrics_available(self, available: bool) -> None:
+        """Dim or un-dim the Lyrics button."""
+        try:
+            btn = self.query_one("#footer-lyrics", _FooterButton)
+            btn.is_dimmed = not available
+        except Exception:
+            pass
