@@ -424,12 +424,14 @@ class LibraryPage(Widget):
         self,
         *,
         playlist_id: str | None = None,
+        cursor_row: int | None = None,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         self._restore_playlist_id: str | None = playlist_id
+        self._restore_cursor_row: int | None = cursor_row
         self._active_playlist_id: str | None = None
         self._active_focus: str = "sidebar"  # "sidebar" or "tracks"
 
@@ -467,6 +469,12 @@ class LibraryPage(Widget):
         state: dict[str, Any] = {}
         if self._active_playlist_id:
             state["playlist_id"] = self._active_playlist_id
+        try:
+            table = self.query_one("#library-tracks", TrackTable)
+            if table.display and table.cursor_row is not None:
+                state["cursor_row"] = table.cursor_row
+        except Exception:
+            pass
         return state
 
     # ------------------------------------------------------------------
@@ -531,6 +539,40 @@ class LibraryPage(Widget):
                 )
                 break
 
+    def _restore_track_cursor(self, table: TrackTable) -> None:
+        """Move cursor to the saved row, or to the currently-playing track."""
+        if table.row_count == 0:
+            return
+
+        # Prefer the saved cursor row from navigation state.
+        row = self._restore_cursor_row
+        self._restore_cursor_row = None  # Only use once.
+
+        if row is not None and 0 <= row < table.row_count:
+            table.move_cursor(row=row)
+            return
+
+        # Fall back to the currently-playing track.
+        playing_id = getattr(self.app, "player", None) and getattr(
+            self.app.player, "_current_track", None
+        )
+        if playing_id and isinstance(playing_id, dict):
+            playing_id = playing_id.get("video_id")
+
+        if not playing_id:
+            # Try from queue's current track.
+            queue = getattr(self.app, "queue", None)
+            if queue:
+                current = queue.current_track
+                if current:
+                    playing_id = current.get("video_id")
+
+        if playing_id:
+            for i, track in enumerate(table._tracks):
+                if track.get("video_id") == playing_id:
+                    table.move_cursor(row=i)
+                    return
+
     async def refresh_library(self) -> None:
         """Public method to reload playlists."""
         await self._load_library()
@@ -581,6 +623,9 @@ class LibraryPage(Widget):
             table = self.query_one("#library-tracks", TrackTable)
             table.display = True
             table.load_tracks(normalize_tracks(tracks))
+
+            # Restore cursor position or scroll to the currently-playing track.
+            self._restore_track_cursor(table)
 
         except Exception:
             logger.exception("Failed to load playlist %s", playlist_id)
