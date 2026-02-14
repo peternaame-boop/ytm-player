@@ -1,4 +1,4 @@
-"""Synced lyrics display page."""
+"""Persistent lyrics sidebar — right side, stays mounted across page switches."""
 
 from __future__ import annotations
 
@@ -20,10 +20,7 @@ from ytm_player.services.player import PlayerEvent
 
 logger = logging.getLogger(__name__)
 
-# Seconds of manual-scroll inactivity before snapping back to auto-scroll.
 _AUTO_SCROLL_RESUME_DELAY = 3.0
-
-# Regex for synced lyrics timestamps: [mm:ss.xx] or [mm:ss]
 _TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]")
 
 
@@ -40,7 +37,6 @@ def _parse_synced_lyrics(raw: str) -> list[tuple[float, str]]:
             ts = minutes * 60 + seconds + frac
             text = _TIMESTAMP_RE.sub("", line).strip()
             lines.append((ts, text))
-    # Sort by timestamp in case the source isn't ordered.
     lines.sort(key=lambda x: x[0])
     return lines
 
@@ -52,7 +48,7 @@ class _LyricLine(Static):
     _LyricLine {
         width: 1fr;
         height: auto;
-        padding: 0 4;
+        padding: 0 2;
     }
     """
 
@@ -61,48 +57,53 @@ class _LyricLine(Static):
         self._text = text
 
 
-class LyricsPage(Widget):
-    """Displays lyrics for the currently playing track.
+class LyricsSidebar(Widget):
+    """Right-side lyrics sidebar. Stays mounted; toggled via display CSS.
 
-    Supports synced (timestamped) and unsynced lyrics. Synced lyrics auto-scroll
-    to the current line, with color coding for played, current, and upcoming lines.
-    Manual scrolling pauses auto-scroll for a few seconds before resuming.
+    Registers player events once in on_mount. When hidden (display: none),
+    skips visual updates and sets a _needs_rebuild flag for when shown.
     """
 
     DEFAULT_CSS = """
-    LyricsPage {
-        layout: vertical;
-        width: 1fr;
+    LyricsSidebar {
+        width: 40;
         height: 1fr;
+        layout: vertical;
+        border-left: solid $border;
     }
-    .lyrics-header {
-        height: auto;
-        max-height: 3;
-        padding: 1 2;
+
+    LyricsSidebar.hidden {
+        display: none;
+    }
+
+    LyricsSidebar .ls-header {
+        height: 1;
+        padding: 0 2;
         text-style: bold;
     }
-    .lyrics-header-subtitle {
-        color: $text-muted;
-        padding: 0 2;
-    }
-    .lyrics-scroll {
+
+    LyricsSidebar .ls-scroll {
         height: 1fr;
         width: 1fr;
     }
-    .lyrics-status {
+
+    LyricsSidebar .ls-status {
         width: 1fr;
         height: 1fr;
         content-align: center middle;
         color: $text-muted;
     }
-    .lyrics-played {
+
+    LyricsSidebar .lyrics-played {
         color: $text-muted;
     }
-    .lyrics-current {
+
+    LyricsSidebar .lyrics-current {
         color: $success;
         text-style: bold;
     }
-    .lyrics-upcoming {
+
+    LyricsSidebar .lyrics-upcoming {
         color: $text;
     }
     """
@@ -122,66 +123,86 @@ class LyricsPage(Widget):
         self._current_video_id: str | None = None
         self._position_callback: Any = None
         self._track_change_callback: Any = None
+        self._needs_rebuild: bool = False
+        self._pending_track: dict | None = None
 
     def compose(self) -> ComposeResult:
-        yield Label("", id="lyrics-title", classes="lyrics-header")
-        yield Label("", id="lyrics-subtitle", classes="lyrics-header-subtitle")
-        yield Label("Loading lyrics...", id="lyrics-status", classes="lyrics-status")
-        yield VerticalScroll(id="lyrics-scroll", classes="lyrics-scroll")
+        yield Label("", id="ls-title", classes="ls-header")
+        yield Label("No track playing", id="ls-status", classes="ls-status")
+        yield VerticalScroll(id="ls-scroll", classes="ls-scroll")
 
     def on_mount(self) -> None:
-        self.query_one("#lyrics-scroll").display = False
-        self.query_one("#lyrics-subtitle").display = False
-        self._register_player_events()
-        self._load_for_current_track()
+        self.query_one("#ls-scroll").display = False
+        # Player may not be ready yet (app services init after compose).
+        # Events are registered lazily in _ensure_player_events().
+        self._events_registered = False
 
     def on_unmount(self) -> None:
         self._unregister_player_events()
 
-    # ── Player event integration ──────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────
 
-    def _register_player_events(self) -> None:
-        """Subscribe to player position and track-change events."""
-        player = self.app.player  # type: ignore[attr-defined]
+    def activate(self) -> None:
+        """Called by the app when the sidebar is toggled visible.
 
+        Registers player events (lazy, since player isn't ready at mount
+        time) and loads lyrics for the current track.
+        """
+        self._ensure_player_events()
+        self._current_video_id = None  # Force reload
+        self._load_for_current_track()
+
+    # ── Player event integration ─────────────────────────────────────
+
+    def _ensure_player_events(self) -> None:
+        """Register player events if not already done and player is available."""
+        if self._events_registered:
+            return
+        player = getattr(self.app, "player", None)
+        if not player:
+            return
+        self._events_registered = True
         self._position_callback = self._on_position_change
         self._track_change_callback = self._on_track_change
-
         player.on(PlayerEvent.POSITION_CHANGE, self._position_callback)
         player.on(PlayerEvent.TRACK_CHANGE, self._track_change_callback)
 
     def _unregister_player_events(self) -> None:
-        """Unsubscribe from player events."""
         try:
-            player = self.app.player  # type: ignore[attr-defined]
+            player = getattr(self.app, "player", None)
+            if not player:
+                return
             if self._position_callback:
                 player.off(PlayerEvent.POSITION_CHANGE, self._position_callback)
             if self._track_change_callback:
                 player.off(PlayerEvent.TRACK_CHANGE, self._track_change_callback)
         except Exception:
-            logger.debug("Failed to unregister player events in lyrics page", exc_info=True)
+            logger.debug("Failed to unregister player events in lyrics sidebar", exc_info=True)
 
     def _on_track_change(self, track_info: dict) -> None:
-        """Called when the player switches to a new track."""
+        if not self.display:
+            self._needs_rebuild = True
+            self._pending_track = track_info
+            return
         self._load_for_current_track()
 
     def _on_position_change(self, position: float) -> None:
-        """Called on playback position updates; drives synced lyrics highlighting."""
+        if not self.display:
+            return
         if not self._is_synced or not self._synced_lines:
             return
-
-        # Determine which line should be current using binary search.
         idx = bisect.bisect_right(self._synced_timestamps, position)
         new_index = idx - 1
-
         if new_index != self.current_line_index:
             self.current_line_index = new_index
 
-    # ── Data loading ──────────────────────────────────────────────────
+    # ── Data loading ─────────────────────────────────────────────────
 
     def _load_for_current_track(self) -> None:
-        """Fetch lyrics for whatever track is currently playing."""
-        player = self.app.player  # type: ignore[attr-defined]
+        player = getattr(self.app, "player", None)
+        if not player:
+            self._show_status("No track playing.")
+            return
         track = player.current_track
         if not track:
             self._show_status("No track playing.")
@@ -189,37 +210,35 @@ class LyricsPage(Widget):
 
         video_id = track.get("video_id", "")
         if video_id == self._current_video_id:
-            return  # Already loaded for this track.
+            return
 
         self._current_video_id = video_id
         title = track.get("title", "Unknown")
         artist = track.get("artist", "Unknown")
 
         try:
-            title_label = self.query_one("#lyrics-title", Label)
-            title_label.update(f"{title}")
-            subtitle_label = self.query_one("#lyrics-subtitle", Label)
-            subtitle_label.update(artist)
-            subtitle_label.display = True
+            title_label = self.query_one("#ls-title", Label)
+            title_label.update(f"{title} \u2014 {artist}")
         except Exception:
-            logger.debug("Failed to update lyrics header labels", exc_info=True)
+            logger.debug("Failed to update lyrics sidebar header", exc_info=True)
 
         self.loading = True
         self._show_status("Loading lyrics...")
         self.run_worker(
             self._fetch_lyrics(video_id),
-            name="fetch_lyrics",
+            name="fetch_sidebar_lyrics",
             exclusive=True,
         )
 
     async def _fetch_lyrics(self, video_id: str) -> dict[str, Any] | None:
-        ytmusic = self.app.ytmusic  # type: ignore[attr-defined]
+        ytmusic = getattr(self.app, "ytmusic", None)
+        if not ytmusic:
+            return None
         return await ytmusic.get_lyrics(video_id)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-        if event.worker.name != "fetch_lyrics":
+        if event.worker.name != "fetch_sidebar_lyrics":
             return
-
         if event.state == WorkerState.SUCCESS:
             self.loading = False
             result = event.worker.result
@@ -232,13 +251,11 @@ class LyricsPage(Widget):
             self._show_status("Failed to load lyrics.")
 
     def _process_lyrics(self, data: dict[str, Any]) -> None:
-        """Parse lyrics data and build the line widgets."""
         lyrics_text = data.get("lyrics", "")
         if not lyrics_text:
             self._show_status("No lyrics available.")
             return
 
-        # Check if the lyrics contain timestamp markers (synced).
         synced = _parse_synced_lyrics(lyrics_text)
         if synced:
             self._is_synced = True
@@ -254,13 +271,11 @@ class LyricsPage(Widget):
             self._build_unsynced_view()
 
     def _build_synced_view(self) -> None:
-        """Build lyric line widgets for synced lyrics."""
         self._show_scroll()
-        scroll = self.query_one("#lyrics-scroll", VerticalScroll)
+        scroll = self.query_one("#ls-scroll", VerticalScroll)
         scroll.remove_children()
         self._lyric_widgets = []
         self.current_line_index = -1
-
         for _ts, text in self._synced_lines:
             display_text = text if text else ""
             widget = _LyricLine(display_text)
@@ -269,12 +284,10 @@ class LyricsPage(Widget):
             scroll.mount(widget)
 
     def _build_unsynced_view(self) -> None:
-        """Build lyric line widgets for unsynced (plain) lyrics."""
         self._show_scroll()
-        scroll = self.query_one("#lyrics-scroll", VerticalScroll)
+        scroll = self.query_one("#ls-scroll", VerticalScroll)
         scroll.remove_children()
         self._lyric_widgets = []
-
         for line in self._unsynced_lines:
             widget = _LyricLine(line)
             widget.add_class("lyrics-upcoming")
@@ -282,43 +295,36 @@ class LyricsPage(Widget):
             scroll.mount(widget)
 
     def _show_status(self, message: str) -> None:
-        """Show a status message and hide the scroll area."""
         try:
-            status = self.query_one("#lyrics-status", Label)
+            status = self.query_one("#ls-status", Label)
             status.update(message)
             status.display = True
-            self.query_one("#lyrics-scroll").display = False
+            self.query_one("#ls-scroll").display = False
         except Exception:
-            logger.debug("Failed to update lyrics status display", exc_info=True)
+            logger.debug("Failed to update lyrics sidebar status", exc_info=True)
 
     def _show_scroll(self) -> None:
-        """Show the scroll area and hide the status label."""
         try:
-            self.query_one("#lyrics-status").display = False
-            self.query_one("#lyrics-scroll").display = True
+            self.query_one("#ls-status").display = False
+            self.query_one("#ls-scroll").display = True
         except Exception:
-            logger.debug("Failed to toggle lyrics scroll visibility", exc_info=True)
+            logger.debug("Failed to toggle lyrics sidebar scroll visibility", exc_info=True)
 
-    # ── Reactive watchers ─────────────────────────────────────────────
+    # ── Reactive watchers ────────────────────────────────────────────
 
     def watch_current_line_index(self, new_index: int) -> None:
-        """Update line styling when the current synced line changes."""
         if not self._is_synced or not self._lyric_widgets:
             return
-
         old_index = getattr(self, "_prev_line_index", -1)
         self._prev_line_index = new_index
-
         if old_index == new_index:
             return
 
-        # Only update the widgets that actually changed.
         changed = set()
         if 0 <= old_index < len(self._lyric_widgets):
             changed.add(old_index)
         if 0 <= new_index < len(self._lyric_widgets):
             changed.add(new_index)
-        # The line between old and new also needs updating (played→current transition).
         if old_index >= 0 and new_index >= 0:
             for i in range(min(old_index, new_index), max(old_index, new_index) + 1):
                 if 0 <= i < len(self._lyric_widgets):
@@ -334,7 +340,6 @@ class LyricsPage(Widget):
             else:
                 w.add_class("lyrics-upcoming")
 
-        # Auto-scroll to the current line if enabled.
         now = time.monotonic()
         if not self._auto_scroll:
             if now - self._last_manual_scroll > _AUTO_SCROLL_RESUME_DELAY:
@@ -343,18 +348,15 @@ class LyricsPage(Widget):
         if self._auto_scroll and 0 <= new_index < len(self._lyric_widgets):
             widget = self._lyric_widgets[new_index]
             try:
-                scroll = self.query_one("#lyrics-scroll", VerticalScroll)
+                scroll = self.query_one("#ls-scroll", VerticalScroll)
                 scroll.scroll_visible(widget, animate=True)
             except Exception:
-                logger.debug("Failed to auto-scroll lyrics to current line", exc_info=True)
+                logger.debug("Failed to auto-scroll lyrics sidebar", exc_info=True)
 
-    # ── Action handling ───────────────────────────────────────────────
+    # ── Action handling ──────────────────────────────────────────────
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
-        """Process vim-style navigation and other actions."""
         match action:
-            case Action.GO_BACK:
-                await self.app.navigate_to("back")  # type: ignore[attr-defined]
             case Action.MOVE_DOWN:
                 self._manual_scroll(count)
             case Action.MOVE_UP:
@@ -369,11 +371,10 @@ class LyricsPage(Widget):
                 self._scroll_to_bottom()
 
     def _manual_scroll(self, lines: int) -> None:
-        """Manually scroll up or down, pausing auto-scroll."""
         self._auto_scroll = False
         self._last_manual_scroll = time.monotonic()
         try:
-            scroll = self.query_one("#lyrics-scroll", VerticalScroll)
+            scroll = self.query_one("#ls-scroll", VerticalScroll)
             if lines > 0:
                 for _ in range(abs(lines)):
                     scroll.action_scroll_down()
@@ -381,22 +382,22 @@ class LyricsPage(Widget):
                 for _ in range(abs(lines)):
                     scroll.action_scroll_up()
         except Exception:
-            logger.debug("Failed to manually scroll lyrics", exc_info=True)
+            logger.debug("Failed to manually scroll lyrics sidebar", exc_info=True)
 
     def _scroll_to_top(self) -> None:
         self._auto_scroll = False
         self._last_manual_scroll = time.monotonic()
         try:
-            scroll = self.query_one("#lyrics-scroll", VerticalScroll)
+            scroll = self.query_one("#ls-scroll", VerticalScroll)
             scroll.scroll_home(animate=False)
         except Exception:
-            logger.debug("Failed to scroll lyrics to top", exc_info=True)
+            logger.debug("Failed to scroll lyrics sidebar to top", exc_info=True)
 
     def _scroll_to_bottom(self) -> None:
         self._auto_scroll = False
         self._last_manual_scroll = time.monotonic()
         try:
-            scroll = self.query_one("#lyrics-scroll", VerticalScroll)
+            scroll = self.query_one("#ls-scroll", VerticalScroll)
             scroll.scroll_end(animate=False)
         except Exception:
-            logger.debug("Failed to scroll lyrics to bottom", exc_info=True)
+            logger.debug("Failed to scroll lyrics sidebar to bottom", exc_info=True)

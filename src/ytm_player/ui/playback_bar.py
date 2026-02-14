@@ -349,7 +349,6 @@ class _FooterButton(Widget):
                 | "search"
                 | "queue"
                 | "browse"
-                | "lyrics"
                 | "liked_songs"
                 | "recently_played"
             ):
@@ -391,7 +390,6 @@ class FooterBar(Widget):
         "search",
         "browse",
         "queue",
-        "lyrics",
         "help",
     }
 
@@ -406,7 +404,6 @@ class FooterBar(Widget):
             yield _FooterButton("Search", "search", id="footer-search")
             yield _FooterButton("Browse", "browse", id="footer-browse")
             yield _FooterButton("Queue", "queue", id="footer-queue")
-            yield _FooterButton("Lyrics", "lyrics", id="footer-lyrics")
             # Spotify import.
             yield _FooterButton("Import", "spotify_import")
             # Help pushed to far right.
@@ -422,11 +419,3 @@ class FooterBar(Widget):
                 logger.debug(
                     "Failed to update footer button for action '%s'", action, exc_info=True
                 )
-
-    def set_lyrics_available(self, available: bool) -> None:
-        """Dim or un-dim the Lyrics button."""
-        try:
-            btn = self.query_one("#footer-lyrics", _FooterButton)
-            btn.is_dimmed = not available
-        except Exception:
-            pass

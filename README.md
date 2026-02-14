@@ -7,7 +7,8 @@ A full-featured YouTube Music player for the terminal. Browse your library, sear
 ## Features
 
 - **Full playback control** — play, pause, seek, volume, shuffle, repeat via mpv with gapless audio
-- **9 pages** — Library, Search, Browse, Context (album/artist/playlist), Lyrics, Queue, Liked Songs, Recently Played, Help
+- **Persistent sidebars** — playlist sidebar (left) visible across all views, synced lyrics sidebar (right) with auto-scroll, both toggleable from header bar
+- **8 pages** — Library, Search, Browse, Context (album/artist/playlist), Queue, Liked Songs, Recently Played, Help
 - **Vim-style navigation** — `j`/`k` movement, multi-key sequences (`g l` for library, `g s` for search), count prefixes (`5j`)
 - **Predictive search** — debounced with 300ms delay, music-first mode with toggle to all results
 - **Spotify import** — import playlists from Spotify via API or URL scraping
@@ -182,7 +183,8 @@ ytm queue clear    # Clear queue
 | `g s` | Go to Search |
 | `g b` | Go to Browse |
 | `z` | Go to Queue |
-| `l` | Go to Lyrics |
+| `l` | Toggle lyrics sidebar |
+| `Ctrl+e` | Toggle playlist sidebar |
 | `g y` | Go to Liked Songs |
 | `g r` | Go to Recently Played |
 | `?` | Help (full keybinding reference) |
@@ -353,9 +355,11 @@ src/ytm_player/
 │   ├── lastfm.py       #   Last.fm scrobbling
 │   └── spotify_import.py  # Spotify playlist import
 ├── ui/
+│   ├── header_bar.py   # Top bar with sidebar toggle buttons
 │   ├── playback_bar.py # Persistent bottom bar (track info, progress, controls)
 │   ├── theme.py        # Theme system with CSS variable generation
-│   ├── pages/          # Library, Search, Browse, Context, Lyrics, Queue, Liked Songs, Recently Played, Help
+│   ├── sidebars/       # Persistent playlist sidebar (left) and lyrics sidebar (right)
+│   ├── pages/          # Library, Search, Browse, Context, Queue, Liked Songs, Recently Played, Help
 │   ├── popups/         # Actions menu, playlist picker, Spotify import
 │   └── widgets/        # TrackTable, PlaybackProgress, AlbumArt
 └── utils/              # Terminal detection, formatting helpers
@@ -436,6 +440,20 @@ max_size_mb = 512
 MIT — see [LICENSE](LICENSE).
 
 ## Changelog
+
+### v1.3.0 (2026-02-14)
+
+**Features**
+- Persistent playlist sidebar (left) — visible across all views, toggleable per-view with state memory (`Ctrl+e`)
+- Persistent lyrics sidebar (right) — synced lyrics with auto-scroll, replaces the old full-page Lyrics view (`l` to toggle)
+- Header bar with toggle buttons for both sidebars
+- Pinned navigation items (Liked Songs, Recently Played) in the playlist sidebar
+- Per-view sidebar state — sidebar visibility is remembered per page and restored on navigation
+- Lyrics sidebar registers player events lazily and skips updates when hidden for performance
+
+**Removed**
+- Lyrics page — replaced entirely by the lyrics sidebar
+- Lyrics button from footer bar — use header bar toggle or `l` key instead
 
 ### v1.2.1 (2026-02-14)
 

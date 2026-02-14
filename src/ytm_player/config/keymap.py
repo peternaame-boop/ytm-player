@@ -52,6 +52,9 @@ class Action(str, Enum):
     QUEUE = "queue"
     HELP = "help"
 
+    # Sidebars
+    TOGGLE_SIDEBAR = "toggle_sidebar"
+
     # Actions
     DELETE_ITEM = "delete_item"
     TRACK_ACTIONS = "track_actions"
@@ -117,6 +120,8 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "jump_to_current": ["g c"],
     "queue": ["z"],
     "help": ["?", "C-h"],
+    # Sidebars
+    "toggle_sidebar": ["C-e"],
     # Actions
     "delete_item": ["delete", "d d"],
     "track_actions": ["a"],

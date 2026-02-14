@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from textual.app import App, ComposeResult
-from textual.containers import Container
+from textual.containers import Container, Horizontal
 from textual.events import Key
 from textual.widget import Widget
 from textual.widgets import Static
@@ -27,9 +27,12 @@ from ytm_player.services.player import Player, PlayerEvent
 from ytm_player.services.queue import QueueManager, RepeatMode
 from ytm_player.services.stream import StreamResolver
 from ytm_player.services.ytmusic import YTMusicService
+from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.playback_bar import FooterBar, PlaybackBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.popups.playlist_picker import PlaylistPicker
+from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
+from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
 from ytm_player.ui.theme import ThemeColors, get_theme
 from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.formatting import copy_to_clipboard, get_video_id
@@ -42,7 +45,6 @@ PAGE_NAMES = (
     "search",
     "context",
     "browse",
-    "lyrics",
     "queue",
     "help",
     "liked_songs",
@@ -109,6 +111,11 @@ class YTMPlayerApp(App):
     ToastRack {
         dock: top;
         align-horizontal: right;
+    }
+
+    #app-body {
+        height: 1fr;
+        width: 1fr;
     }
 
     #main-content {
@@ -184,6 +191,12 @@ class YTMPlayerApp(App):
         # Clean exit flag: True when user quits via q/C-q (no resume on next start).
         self._clean_exit: bool = False
 
+        # Sidebar state: per-page playlist sidebar visibility and global lyrics toggle.
+        # Default True for all pages — user can toggle off per-view.
+        self._sidebar_default: bool = True
+        self._sidebar_per_page: dict[str, bool] = {}
+        self._lyrics_sidebar_open: bool = False
+
     def get_css_variables(self) -> dict[str, str]:
         """Inject theme colors as Textual CSS variables ($var-name)."""
         variables = super().get_css_variables()
@@ -220,9 +233,13 @@ class YTMPlayerApp(App):
     # ── Compose ──────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
+        yield HeaderBar(id="app-header")
         yield PlaybackBar(id="playback-bar")
-        yield Container(id="main-content")
         yield FooterBar(id="app-footer")
+        with Horizontal(id="app-body"):
+            yield PlaylistSidebar(id="playlist-sidebar")
+            yield Container(id="main-content")
+            yield LyricsSidebar(id="lyrics-sidebar", classes="hidden")
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -325,12 +342,19 @@ class YTMPlayerApp(App):
         # Poll playback position on a timer (avoids cross-thread issues).
         self._poll_timer = self.set_interval(_POSITION_POLL_INTERVAL, self._poll_position)
 
-        # Dim the Lyrics button until a track is playing.
+        # Dim the header lyrics toggle until a track is playing.
         try:
-            footer = self.query_one("#app-footer", FooterBar)
-            footer.set_lyrics_available(False)
+            header = self.query_one("#app-header", HeaderBar)
+            header.set_lyrics_dimmed(True)
         except Exception:
             pass
+
+        # Load playlist sidebar data.
+        try:
+            ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
+            await ps.ensure_loaded()
+        except Exception:
+            logger.debug("Failed to load playlist sidebar on mount", exc_info=True)
 
         # Navigate to startup page.
         startup = self.settings.general.startup_page
@@ -420,6 +444,12 @@ class YTMPlayerApp(App):
                 "Failed to update playback bar after restoring session state", exc_info=True
             )
 
+        # Restore sidebar state.
+        saved_sidebar = state.get("sidebar_per_page")
+        if saved_sidebar and isinstance(saved_sidebar, dict):
+            self._sidebar_per_page = saved_sidebar
+        self._lyrics_sidebar_open = state.get("lyrics_sidebar_open", False)
+
         # Auto-resume playback if the previous session exited uncleanly.
         resume = state.get("resume")
         if resume and isinstance(resume, dict):
@@ -482,6 +512,8 @@ class YTMPlayerApp(App):
             "queue_tracks": queue_tracks,
             "queue_index": queue_index,
             "resume": resume,
+            "sidebar_per_page": self._sidebar_per_page,
+            "lyrics_sidebar_open": self._lyrics_sidebar_open,
         }
         try:
             import os
@@ -591,6 +623,184 @@ class YTMPlayerApp(App):
 
         return key_map.get(key, key)
 
+    # ── Sidebar toggling ────────────────────────────────────────────
+
+    def _toggle_playlist_sidebar(self) -> None:
+        """Toggle the playlist sidebar for the current page."""
+        page = self._current_page or "library"
+        current = self._sidebar_per_page.get(page, self._sidebar_default)
+        new_state = not current
+        self._sidebar_per_page[page] = new_state
+        self._apply_playlist_sidebar(new_state)
+
+    def _toggle_lyrics_sidebar(self) -> None:
+        """Toggle the lyrics sidebar globally."""
+        self._lyrics_sidebar_open = not self._lyrics_sidebar_open
+        self._apply_lyrics_sidebar(self._lyrics_sidebar_open)
+
+    def _apply_playlist_sidebar(self, visible: bool) -> None:
+        """Set playlist sidebar visibility and update header bar state."""
+        try:
+            ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
+            if visible:
+                ps.remove_class("hidden")
+            else:
+                ps.add_class("hidden")
+        except Exception:
+            logger.debug("Failed to apply playlist sidebar visibility", exc_info=True)
+        try:
+            header = self.query_one("#app-header", HeaderBar)
+            header.set_playlist_state(visible)
+        except Exception:
+            pass
+
+    def _apply_lyrics_sidebar(self, visible: bool) -> None:
+        """Set lyrics sidebar visibility and update header bar state."""
+        try:
+            ls = self.query_one("#lyrics-sidebar", LyricsSidebar)
+            if visible:
+                ls.remove_class("hidden")
+                ls.activate()
+            else:
+                ls.add_class("hidden")
+        except Exception:
+            logger.debug("Failed to apply lyrics sidebar visibility", exc_info=True)
+        try:
+            header = self.query_one("#app-header", HeaderBar)
+            header.set_lyrics_state(visible)
+        except Exception:
+            pass
+
+    # ── Sidebar message handlers ─────────────────────────────────────
+
+    def on_header_bar_toggle_playlist_sidebar(
+        self, message: HeaderBar.TogglePlaylistSidebar
+    ) -> None:
+        self._toggle_playlist_sidebar()
+
+    def on_header_bar_toggle_lyrics_sidebar(self, message: HeaderBar.ToggleLyricsSidebar) -> None:
+        self._toggle_lyrics_sidebar()
+
+    async def on_playlist_sidebar_playlist_selected(
+        self, message: PlaylistSidebar.PlaylistSelected
+    ) -> None:
+        """Navigate to library with the selected playlist."""
+        item = message.item_data
+        playlist_id = item.get("playlistId") or item.get("browseId")
+        if playlist_id:
+            await self.navigate_to("library", playlist_id=playlist_id)
+
+    async def on_playlist_sidebar_playlist_double_clicked(
+        self, message: PlaylistSidebar.PlaylistDoubleClicked
+    ) -> None:
+        """Queue all tracks from double-clicked playlist and start playback."""
+        from ytm_player.utils.formatting import normalize_tracks
+
+        item = message.item_data
+        playlist_id = item.get("playlistId") or item.get("browseId")
+        if not playlist_id or not self.ytmusic:
+            return
+        try:
+            data = await self.ytmusic.get_playlist(playlist_id, order="recently_added")
+            tracks = normalize_tracks(data.get("tracks", []))
+            if not tracks:
+                self.notify("Playlist is empty", severity="warning")
+                return
+            self.queue.clear()
+            self.queue.add_multiple(tracks)
+            self.queue.jump_to(0)
+            self._active_library_playlist_id = playlist_id
+            await self.play_track(self.queue.current_track)
+        except Exception:
+            logger.exception("Failed to load playlist %s for playback", playlist_id)
+            self.notify("Failed to load playlist", severity="error")
+
+    def on_playlist_sidebar_playlist_right_clicked(
+        self, message: PlaylistSidebar.PlaylistRightClicked
+    ) -> None:
+        """Open context menu for right-clicked playlist."""
+        item = message.item_data
+        if item is not None:
+            self._open_playlist_context_menu(item)
+        else:
+            self._prompt_create_playlist()
+
+    async def on_playlist_sidebar_nav_item_clicked(
+        self, message: PlaylistSidebar.NavItemClicked
+    ) -> None:
+        """Navigate to liked_songs or recently_played from sidebar pinned nav."""
+        await self.navigate_to(message.nav_id)
+
+    def _open_playlist_context_menu(self, item: dict) -> None:
+        """Push ActionsPopup for a sidebar playlist item."""
+
+        def _handle_action(action_id: str | None) -> None:
+            if action_id is None:
+                return
+            if action_id in ("play_all", "shuffle_play"):
+                pid = item.get("playlistId") or item.get("browseId")
+                if pid:
+                    self.run_worker(self.navigate_to("library", playlist_id=pid))
+            elif action_id == "add_to_queue":
+                self.notify("Added to queue", timeout=2)
+            elif action_id == "delete":
+                self.run_worker(self._delete_sidebar_playlist(item))
+            elif action_id == "copy_link":
+                try:
+                    ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
+                    ps.copy_item_link(item)
+                except Exception:
+                    pass
+
+        self.push_screen(ActionsPopup(item, item_type="playlist"), _handle_action)
+
+    def _prompt_create_playlist(self) -> None:
+        """Show an input screen to create a new playlist."""
+        from ytm_player.ui.popups.input_popup import InputPopup
+
+        def _on_name(name: str | None) -> None:
+            if name and name.strip():
+                self.run_worker(self._create_sidebar_playlist(name.strip()))
+
+        self.push_screen(InputPopup("New Playlist", placeholder="Playlist name..."), _on_name)
+
+    async def _create_sidebar_playlist(self, name: str) -> None:
+        """Create a new playlist and refresh the sidebar."""
+        if not self.ytmusic:
+            return
+        try:
+            playlist_id = await self.ytmusic.create_playlist(name)
+            if playlist_id:
+                self.notify(f"Created '{name}'", timeout=2)
+                ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
+                await ps.refresh_playlists()
+            else:
+                self.notify("Failed to create playlist", severity="error", timeout=3)
+        except Exception:
+            logger.exception("Failed to create playlist %r", name)
+            self.notify("Failed to create playlist", severity="error", timeout=3)
+
+    async def _delete_sidebar_playlist(self, item: dict) -> None:
+        """Delete a playlist and refresh the sidebar."""
+        if not self.ytmusic:
+            return
+        playlist_id = item.get("playlistId") or item.get("browseId", "")
+        title = item.get("title", "playlist")
+        if not playlist_id:
+            self.notify("Cannot determine playlist ID", severity="error", timeout=3)
+            return
+        try:
+            success = await self.ytmusic.delete_playlist(playlist_id)
+            if success:
+                self.notify(f"Deleted '{title}'", timeout=2)
+                ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
+                await ps.refresh_playlists()
+            else:
+                self.notify("Failed to delete playlist", severity="error", timeout=3)
+        except Exception:
+            logger.exception("Failed to delete playlist %r", playlist_id)
+            self.notify("Failed to delete playlist", severity="error", timeout=3)
+
     # ── Action dispatch ──────────────────────────────────────────────
 
     async def _handle_action(self, action: Action | None, count: int = 1) -> None:
@@ -660,7 +870,9 @@ class YTMPlayerApp(App):
             case Action.QUEUE:
                 await self.navigate_to("queue")
             case Action.LYRICS:
-                await self.navigate_to("lyrics")
+                self._toggle_lyrics_sidebar()
+            case Action.TOGGLE_SIDEBAR:
+                self._toggle_playlist_sidebar()
             case Action.BROWSE:
                 await self.navigate_to("browse")
             case Action.HELP:
@@ -782,6 +994,13 @@ class YTMPlayerApp(App):
         except Exception:
             logger.debug("Failed to update footer active page indicator", exc_info=True)
 
+        # Apply per-page playlist sidebar visibility.
+        sidebar_visible = self._sidebar_per_page.get(page_name, self._sidebar_default)
+        self._apply_playlist_sidebar(sidebar_visible)
+
+        # Apply global lyrics sidebar visibility.
+        self._apply_lyrics_sidebar(self._lyrics_sidebar_open)
+
         logger.debug("Navigated to page: %s", page_name)
 
     def _create_page(self, page_name: str, **kwargs: Any) -> Widget:
@@ -791,7 +1010,6 @@ class YTMPlayerApp(App):
         from ytm_player.ui.pages.help import HelpPage
         from ytm_player.ui.pages.library import LibraryPage
         from ytm_player.ui.pages.liked_songs import LikedSongsPage
-        from ytm_player.ui.pages.lyrics import LyricsPage
         from ytm_player.ui.pages.queue import QueuePage
         from ytm_player.ui.pages.recently_played import RecentlyPlayedPage
         from ytm_player.ui.pages.search import SearchPage
@@ -801,7 +1019,6 @@ class YTMPlayerApp(App):
             "search": SearchPage,
             "context": ContextPage,
             "browse": BrowsePage,
-            "lyrics": LyricsPage,
             "queue": QueuePage,
             "help": HelpPage,
             "liked_songs": LikedSongsPage,
@@ -1038,10 +1255,10 @@ class YTMPlayerApp(App):
         except Exception:
             logger.debug("Failed to update playback bar on track change", exc_info=True)
 
-        # Un-dim the Lyrics button now that a track is playing.
+        # Un-dim the header lyrics toggle.
         try:
-            footer = self.query_one("#app-footer", FooterBar)
-            footer.set_lyrics_available(True)
+            header = self.query_one("#app-header", HeaderBar)
+            header.set_lyrics_dimmed(False)
         except Exception:
             pass
 
