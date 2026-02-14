@@ -288,12 +288,12 @@ class LyricsSidebar(Widget):
             self._show_status("No lyrics available.")
             return
 
-        # ytmusicapi with timestamps=True returns hasTimestamps + lyrics as list of dicts
+        # ytmusicapi with timestamps=True returns hasTimestamps + lyrics as list of LyricLine objects
         if data.get("hasTimestamps") and isinstance(lyrics_data, list):
             synced = [
-                (entry["start_time"] / 1000.0, entry.get("text", ""))
+                (entry.start_time / 1000.0, getattr(entry, "text", ""))
                 for entry in lyrics_data
-                if "start_time" in entry
+                if hasattr(entry, "start_time")
             ]
             if synced:
                 self._is_synced = True
