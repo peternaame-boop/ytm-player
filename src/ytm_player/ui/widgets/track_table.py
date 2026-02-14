@@ -97,6 +97,7 @@ class TrackTable(DataTable):
         self._resize_col: Column | None = None
         self._resize_start_x: int = 0
         self._resize_start_width: int = 0
+        self._header_click_x: int = -1
 
     @property
     def tracks(self) -> list[dict]:
@@ -250,14 +251,27 @@ class TrackTable(DataTable):
                 return col
         return None
 
+    def _column_at_x(self, x: int) -> Column | None:
+        """Return the Column whose body contains *x*, or None."""
+        edge = self._row_label_column_width
+        for col in self.ordered_columns:
+            w = col.get_render_width(self)
+            if edge <= x < edge + w:
+                return col
+            edge += w
+        return None
+
+    _SORTABLE_KEYS = {"title", "artist", "album", "duration"}
+
     def on_mouse_down(self, event: MouseDown) -> None:
-        """Start column resize if clicking near a header column border."""
+        """Start column resize or prepare for click-to-sort on header."""
         if event.button != 1:
             return
-        # Only trigger on the header row (y == 0 relative to the widget).
         if event.y != 0 or not self.show_header:
             return
-        col = self._column_at_edge(event.x + int(self.scroll_x))
+        scroll_x = event.x + int(self.scroll_x)
+        # Prefer resize if near a column edge.
+        col = self._column_at_edge(scroll_x)
         if col is not None:
             event.stop()
             event.prevent_default()
@@ -265,6 +279,11 @@ class TrackTable(DataTable):
             self._resize_start_x = event.screen_x
             self._resize_start_width = col.get_render_width(self)
             self.capture_mouse()
+            return
+        # Record click position for potential click-to-sort.
+        self._header_click_x = scroll_x
+        event.stop()
+        event.prevent_default()
 
     def on_mouse_move(self, event: MouseMove) -> None:
         """Resize column while dragging."""
@@ -281,10 +300,20 @@ class TrackTable(DataTable):
         self.refresh()
 
     def on_mouse_up(self, event: MouseUp) -> None:
-        """End column resize."""
+        """End column resize, or trigger click-to-sort."""
         if self._resize_col is not None:
             self._resize_col = None
             self.release_mouse()
+            event.stop()
+            return
+        # Click-to-sort: only if we recorded a header click position.
+        click_x = self._header_click_x
+        self._header_click_x = -1
+        if click_x < 0:
+            return
+        col = self._column_at_x(click_x)
+        if col is not None and str(col.key) in self._SORTABLE_KEYS:
+            self.sort_by(str(col.key))
             event.stop()
 
     def on_resize(self, event: object) -> None:
