@@ -104,10 +104,17 @@ def main(ctx: click.Context, compact_json: bool) -> None:
     ctx.obj["compact"] = compact_json
 
     if ctx.invoked_subcommand is None:
+        import traceback as _tb
+
         from ytm_player.app import YTMPlayerApp
 
         app = YTMPlayerApp()
-        app.run()
+        try:
+            app.run()
+        except Exception:
+            with open("/tmp/ytm-crash.log", "a") as _f:
+                _f.write(_tb.format_exc())
+            raise
 
 
 # ---------------------------------------------------------------------------
