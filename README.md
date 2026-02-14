@@ -441,22 +441,22 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
-### v1.3.1 (2026-02-14)
+### v1.2.1 (2026-02-14)
 
 **Features**
-- Synced (timestamped) lyrics — lyrics now highlight and auto-scroll with the song in real time
+- Synced (timestamped) lyrics — lyrics highlight and auto-scroll with the song in real time
 - Click-to-seek on lyrics — click any synced lyric line to jump to that part of the song
 - LRCLIB.net fallback — when YouTube Music doesn't provide synced lyrics, fetches them from LRCLIB.net (no API key needed)
 - Lyrics auto-center — current lyric line stays centered in the viewport as the song plays
 
 **Bug Fixes**
-- Fixed crash on song change with both sidebars open — Textual's `LoadingIndicator` timer raced with widget pruning during track transitions; removed `loading` reactive in favour of status label
-- Fixed crash from unhandled exceptions in player event callbacks — sync callbacks dispatched via `call_soon_threadsafe` are now wrapped in error handlers (matching the existing async callback pattern)
+- Fixed crash on song change with both sidebars open — Textual's `LoadingIndicator` timer raced with widget pruning during track transitions
+- Fixed crash from unhandled exceptions in player event callbacks — sync callbacks dispatched via `call_soon_threadsafe` now wrapped in error handlers
 - Wrapped `notify()` and `_prefetch_next_track()` in `_on_track_change` with try/except to prevent crashes during app transitions
 - Lyrics sidebar always starts closed on launch regardless of previous session state
-- Fixed synced lyrics not being requested — `timestamps=True` now passed to ytmusicapi with automatic fallback to plain text if timed lyrics unavailable
+- Fixed synced lyrics not being requested — `timestamps=True` now passed to ytmusicapi with automatic fallback to plain text
 
-### v1.3.0 (2026-02-14)
+### v1.2.0 (2026-02-14)
 
 **Features**
 - Persistent playlist sidebar (left) — visible across all views, toggleable per-view with state memory (`Ctrl+e`)
@@ -469,58 +469,6 @@ MIT — see [LICENSE](LICENSE).
 **Removed**
 - Lyrics page — replaced entirely by the lyrics sidebar
 - Lyrics button from footer bar — use header bar toggle or `l` key instead
-
-### v1.2.1 (2026-02-14)
-
-**Features**
-- Click column headers to sort — click any column header (Title, Artist, Album, Duration, #) to sort; click again to reverse
-- Drag-to-resize columns — drag column header borders to adjust widths; Title column auto-fills remaining space
-- Playlist sort order — requests "recently added" order from YouTube Music API when loading playlists
-- `#` column preserves original playlist position and can be clicked to reset sort order
-
-**Bug Fixes**
-- Fixed click-to-sort not working (ColumnKey.value vs str(ColumnKey) mismatch)
-- Fixed horizontal scroll position resetting when sorting
-- Fixed session restore with shuffle — queue is now populated before enabling shuffle so the saved index points at the correct track
-- Fixed `jump_to_real()` fallback when track not in shuffle order (was a silent no-op, now inserts into shuffle order)
-- Fixed crash on Python 3.14 from dbus-next annotation parsing (MPRIS gracefully disables)
-- Added `_invalidate_table()` helper wrapping `_clear_caches()` with virtual_size recalculation and hasattr guard
-- Added drag-state cleanup on widget blur
-- Pinned Textual dependency to `>=7.0,<8.0` to protect against internal API breakage
-
-### v1.2.0 (2026-02-14)
-
-**Features**
-- Shuffle-aware playlist playback — double-clicking a playlist with shuffle on now starts from a random track instead of always the first
-- Table sorting — sort any track list by Title (`s t`), Artist (`s a`), Album (`s A`), Duration (`s d`), or reverse (`s r`)
-- Session resume — on startup, restores last queue position and shows the track in the footer (without auto-playing)
-- Quit action (`q` / `Ctrl+Q`) — clean exit that clears resume state; unclean exits (terminal close/kill) preserve it
-
-**Bug Fixes**
-- Fixed queue position desync when selecting tracks with shuffle enabled (all pages: Library, Context, Liked Songs, Recently Played)
-- Fixed search mode toggle showing empty box due to Rich markup interpretation (`[Music]` → `Music`)
-
-### v1.1.1 (2026-02-13)
-
-**Features**
-- Always-visible Lyrics button in footer bar (dimmed when no track playing, active during playback)
-- Clicking the active footer page navigates back to the previous page
-- Library remembers selected playlist when navigating away and back
-- Library auto-opens the currently-playing playlist on return
-- Library restores cursor to last selected track row when navigating back (falls back to currently-playing track)
-- Click outside popups to dismiss — actions menu and Spotify import close when clicking the background
-
-**Bug Fixes**
-- Fixed right-click on track table triggering playback instead of only opening context menu
-- Fixed auto-advance bug: songs after the 2nd track would not play due to stale `_end_file_skip` counter
-- Fixed thread-safe skip counter — check+increment now atomic under lock
-- Fixed duplicate end-file events causing track skipping (debounce guard)
-- Fixed `player.play()` failure leaving stale `_current_track` state
-- Fixed unhandled exceptions in stream resolution crashing the playback chain
-- Fixed `player.play()` exceptions silently stopping all playback
-- Fixed Browse page crash from unawaited async mount operations
-- Fixed API error tracebacks polluting TUI with red stderr overlay
-- Reset skip counter on mpv crash recovery
 
 ### v1.1.0 (2026-02-12)
 
@@ -553,18 +501,61 @@ MIT — see [LICENSE](LICENSE).
 - Concurrent Spotify import matching with ThreadPoolExecutor
 - Stream URL expiry checks before playback
 
-**Bug Fixes & Code Quality**
-- Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
-- Fixed encapsulation break (cache private method called from app)
-- Removed dead code (`_download_multiple_tracks`, redundant imports)
-- API timeout now reads from settings at call time, not import time
-- Extracted `_init_mpv()` helper — DRY player initialization and crash recovery
-- Session state save failures now log at warning (was debug)
-- Human-readable error messages throughout
-
 **Testing & CI**
 - GitHub Actions CI pipeline (ruff lint + pytest with coverage)
 - 231 tests covering queue, IPC, stream resolver, cache, history, auth, downloads, Discord RPC, Last.fm, and settings
+
+### v1.0.3 (2026-02-14)
+
+**Features**
+- Click column headers to sort — click any column header (Title, Artist, Album, Duration, #) to sort; click again to reverse
+- Drag-to-resize columns — drag column header borders to adjust widths; Title column auto-fills remaining space
+- Playlist sort order — requests "recently added" order from YouTube Music API when loading playlists
+- `#` column preserves original playlist position and can be clicked to reset sort order
+
+**Bug Fixes**
+- Fixed click-to-sort not working (ColumnKey.value vs str(ColumnKey) mismatch)
+- Fixed horizontal scroll position resetting when sorting
+- Fixed session restore with shuffle — queue is now populated before enabling shuffle so the saved index points at the correct track
+- Fixed `jump_to_real()` fallback when track not in shuffle order (was a silent no-op, now inserts into shuffle order)
+- Fixed crash on Python 3.14 from dbus-next annotation parsing (MPRIS gracefully disables)
+- Pinned Textual dependency to `>=7.0,<8.0` to protect against internal API breakage
+
+### v1.0.2 (2026-02-14)
+
+**Features**
+- Shuffle-aware playlist playback — double-clicking a playlist with shuffle on now starts from a random track instead of always the first
+- Table sorting — sort any track list by Title (`s t`), Artist (`s a`), Album (`s A`), Duration (`s d`), or reverse (`s r`)
+- Session resume — on startup, restores last queue position and shows the track in the footer (without auto-playing)
+- Quit action (`q` / `Ctrl+Q`) — clean exit that clears resume state; unclean exits (terminal close/kill) preserve it
+
+**Bug Fixes**
+- Fixed queue position desync when selecting tracks with shuffle enabled (all pages: Library, Context, Liked Songs, Recently Played)
+- Fixed search mode toggle showing empty box due to Rich markup interpretation (`[Music]` → `Music`)
+
+### v1.0.1 (2026-02-13)
+
+**Features**
+- Always-visible Lyrics button in footer bar (dimmed when no track playing, active during playback)
+- Clicking the active footer page navigates back to the previous page
+- Library remembers selected playlist when navigating away and back
+- Library auto-opens the currently-playing playlist on return
+- Library restores cursor to last selected track row when navigating back (falls back to currently-playing track)
+- Click outside popups to dismiss — actions menu and Spotify import close when clicking the background
+
+**Bug Fixes**
+- Fixed right-click on track table triggering playback instead of only opening context menu
+- Fixed auto-advance bug: songs after the 2nd track would not play due to stale `_end_file_skip` counter
+- Fixed thread-safe skip counter — check+increment now atomic under lock
+- Fixed duplicate end-file events causing track skipping (debounce guard)
+- Fixed `player.play()` failure leaving stale `_current_track` state
+- Fixed unhandled exceptions in stream resolution crashing the playback chain
+- Fixed `player.play()` exceptions silently stopping all playback
+- Fixed Browse page crash from unawaited async mount operations
+- Fixed API error tracebacks polluting TUI with red stderr overlay
+- Reset skip counter on mpv crash recovery
+- Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
+- Fixed encapsulation break (cache private method called from app)
 
 ### v1.0.0 (2026-02-07)
 
