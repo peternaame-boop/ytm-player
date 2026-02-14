@@ -52,9 +52,17 @@ class _LyricLine(Static):
     }
     """
 
-    def __init__(self, text: str, **kwargs: Any) -> None:
+    def __init__(self, text: str, timestamp: float | None = None, **kwargs: Any) -> None:
         super().__init__(text, **kwargs)
         self._text = text
+        self._timestamp = timestamp
+
+    async def on_click(self) -> None:
+        if self._timestamp is None:
+            return
+        player = getattr(self.app, "player", None)
+        if player:
+            await player.seek_absolute(self._timestamp)
 
 
 class LyricsSidebar(Widget):
@@ -108,7 +116,6 @@ class LyricsSidebar(Widget):
     }
     """
 
-    loading: reactive[bool] = reactive(True)
     current_line_index: reactive[int] = reactive(-1)
 
     def __init__(self, **kwargs: Any) -> None:
@@ -228,7 +235,6 @@ class LyricsSidebar(Widget):
         except Exception:
             logger.debug("Failed to update lyrics sidebar header", exc_info=True)
 
-        self.loading = True
         self._show_status("Loading lyrics...")
         self.run_worker(
             self._fetch_lyrics(video_id),
@@ -240,24 +246,66 @@ class LyricsSidebar(Widget):
         ytmusic = getattr(self.app, "ytmusic", None)
         if not ytmusic:
             return None
-        return await ytmusic.get_lyrics(video_id)
+        data = await ytmusic.get_lyrics(video_id)
+
+        # If we got synced lyrics from YTM, return immediately
+        if data and data.get("hasTimestamps"):
+            return data
+
+        # Try LRCLIB fallback for synced lyrics
+        player = getattr(self.app, "player", None)
+        track = player.current_track if player else None
+        if track:
+            title = track.get("title", "")
+            artist = track.get("artist", "")
+            duration = track.get("duration_seconds") or track.get("duration")
+            if title and artist:
+                try:
+                    from ytm_player.services.lrclib import get_synced_lyrics
+
+                    lrc = await get_synced_lyrics(title, artist, duration)
+                    if lrc:
+                        return {"lyrics": lrc, "hasTimestamps": False}
+                except Exception:
+                    logger.debug("LRCLIB fallback failed", exc_info=True)
+
+        return data
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.name != "fetch_sidebar_lyrics":
             return
         if event.state == WorkerState.SUCCESS:
-            self.loading = False
             result = event.worker.result
             if result is None:
                 self._show_status("No lyrics available.")
                 return
             self._process_lyrics(result)
         elif event.state == WorkerState.ERROR:
-            self.loading = False
             self._show_status("Failed to load lyrics.")
 
     def _process_lyrics(self, data: dict[str, Any]) -> None:
-        lyrics_text = data.get("lyrics", "")
+        lyrics_data = data.get("lyrics")
+        if not lyrics_data:
+            self._show_status("No lyrics available.")
+            return
+
+        # ytmusicapi with timestamps=True returns hasTimestamps + lyrics as list of dicts
+        if data.get("hasTimestamps") and isinstance(lyrics_data, list):
+            synced = [
+                (entry["start_time"] / 1000.0, entry.get("text", ""))
+                for entry in lyrics_data
+                if "start_time" in entry
+            ]
+            if synced:
+                self._is_synced = True
+                self._synced_lines = synced
+                self._synced_timestamps = [ts for ts, _text in synced]
+                self._unsynced_lines = []
+                self._build_synced_view()
+                return
+
+        # Fall back to string lyrics (plain text or LRC format)
+        lyrics_text = lyrics_data if isinstance(lyrics_data, str) else ""
         if not lyrics_text:
             self._show_status("No lyrics available.")
             return
@@ -282,9 +330,9 @@ class LyricsSidebar(Widget):
         scroll.remove_children()
         self._lyric_widgets = []
         self.current_line_index = -1
-        for _ts, text in self._synced_lines:
+        for ts, text in self._synced_lines:
             display_text = text if text else ""
-            widget = _LyricLine(display_text)
+            widget = _LyricLine(display_text, timestamp=ts)
             widget.add_class("lyrics-upcoming")
             self._lyric_widgets.append(widget)
             scroll.mount(widget)
@@ -361,7 +409,12 @@ class LyricsSidebar(Widget):
             widget = self._lyric_widgets[new_index]
             try:
                 scroll = self.query_one("#ls-scroll", VerticalScroll)
-                scroll.scroll_visible(widget, animate=True)
+                widget_y = widget.virtual_region.y
+                widget_h = widget.virtual_region.height
+                viewport_h = scroll.scrollable_content_region.height
+                # Center the current line vertically in the viewport
+                target_y = widget_y - (viewport_h // 2) + (widget_h // 2)
+                scroll.scroll_to(y=max(0, target_y), animate=True)
             except Exception:
                 logger.debug("Failed to auto-scroll lyrics sidebar", exc_info=True)
 

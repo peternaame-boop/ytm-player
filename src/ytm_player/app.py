@@ -448,7 +448,8 @@ class YTMPlayerApp(App):
         saved_sidebar = state.get("sidebar_per_page")
         if saved_sidebar and isinstance(saved_sidebar, dict):
             self._sidebar_per_page = saved_sidebar
-        self._lyrics_sidebar_open = state.get("lyrics_sidebar_open", False)
+        # Always start with lyrics sidebar closed regardless of previous session.
+        self._lyrics_sidebar_open = False
 
         # Auto-resume playback if the previous session exited uncleanly.
         resume = state.get("resume")
@@ -1273,18 +1274,24 @@ class YTMPlayerApp(App):
             logger.debug("Failed to update playing indicator on track table", exc_info=True)
 
         # Show track change notification if enabled.
-        if self.settings.notifications.enabled:
-            title = track.get("title", "Unknown")
-            artist = track.get("artist", "Unknown")
-            fmt = self.settings.notifications.format
-            try:
-                msg = fmt.format(title=title, artist=artist, album=track.get("album", ""))
-            except (KeyError, ValueError):
-                msg = f"{title} — {artist}"
-            self.notify(msg, timeout=self.settings.notifications.timeout_seconds)
+        try:
+            if self.settings.notifications.enabled:
+                title = track.get("title", "Unknown")
+                artist = track.get("artist", "Unknown")
+                fmt = self.settings.notifications.format
+                try:
+                    msg = fmt.format(title=title, artist=artist, album=track.get("album", ""))
+                except (KeyError, ValueError):
+                    msg = f"{title} — {artist}"
+                self.notify(msg, timeout=self.settings.notifications.timeout_seconds)
+        except Exception:
+            logger.debug("Failed to show track change notification", exc_info=True)
 
         # Prefetch the next track's stream URL so "next" is instant.
-        self._prefetch_next_track()
+        try:
+            self._prefetch_next_track()
+        except Exception:
+            logger.debug("Failed to prefetch next track", exc_info=True)
 
     def _prefetch_next_track(self) -> None:
         """Prefetch the next track's stream URL in the background.
