@@ -392,9 +392,7 @@ class PlaylistSidebar(Widget):
             if isinstance(playlists, list):
                 # Filter out "Liked Music" — it's already a pinned nav item.
                 playlists = [
-                    p
-                    for p in playlists
-                    if (p.get("playlistId") or p.get("browseId", "")) != "LM"
+                    p for p in playlists if (p.get("playlistId") or p.get("browseId", "")) != "LM"
                 ]
                 panel.load_items(playlists)
             else:
