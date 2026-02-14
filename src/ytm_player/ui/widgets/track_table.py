@@ -225,6 +225,22 @@ class TrackTable(DataTable):
 
     # -- Column resize (drag header border) ------------------------------
 
+    def _fill_title_column(self) -> None:
+        """Expand the Title column to fill any remaining table width."""
+        try:
+            title_col = self.columns.get("title")
+        except Exception:
+            return
+        if title_col is None:
+            return
+
+        available = self.size.width - self._row_label_column_width
+        used = sum(col.get_render_width(self) for col in self.ordered_columns if col.key != "title")
+        remaining = available - used - 2 * self.cell_padding
+        if remaining > 10:
+            title_col.width = remaining
+            title_col.auto_width = False
+
     def _column_at_edge(self, x: int) -> Column | None:
         """Return the Column whose right edge is near *x*, or None."""
         edge = self._row_label_column_width
@@ -260,6 +276,7 @@ class TrackTable(DataTable):
         new_width = max(3, self._resize_start_width + delta - padding)
         self._resize_col.width = new_width
         self._resize_col.auto_width = False
+        self._fill_title_column()
         self._clear_caches()
         self.refresh()
 
@@ -269,6 +286,11 @@ class TrackTable(DataTable):
             self._resize_col = None
             self.release_mouse()
             event.stop()
+
+    def on_resize(self, event: object) -> None:
+        """Re-fill title column when widget is resized."""
+        self._fill_title_column()
+        self._clear_caches()
 
     # -- Event handlers ---------------------------------------------------
 
