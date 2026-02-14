@@ -1070,18 +1070,12 @@ class YTMPlayerApp(App):
         except Exception:
             logger.debug("Playback bar not ready during play_track", exc_info=True)
 
-        # Resolve the stream URL.  Only show "Loading..." if it takes > 0.5s
-        # (i.e. it wasn't prefetched).  This keeps the UX snappy for cache hits.
-        loading_timer = self.set_timer(
-            0.5,
-            lambda: self.notify(f"Loading: {track.get('title', video_id)}", timeout=3),
-        )
+        # Resolve the stream URL.
         try:
             stream_info = await self.stream_resolver.resolve(video_id)
         except Exception:
             logger.debug("Stream resolution raised for %s", video_id, exc_info=True)
             stream_info = None
-        loading_timer.stop()
 
         if stream_info is None:
             self._consecutive_failures += 1
