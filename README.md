@@ -470,6 +470,54 @@ MIT — see [LICENSE](LICENSE).
 - Lyrics page — replaced entirely by the lyrics sidebar
 - Lyrics button from footer bar — use header bar toggle or `l` key instead
 
+### v1.1.3 (2026-02-14)
+
+**Features**
+- Click column headers to sort — click any column header (Title, Artist, Album, Duration, #) to sort; click again to reverse
+- Drag-to-resize columns — drag column header borders to adjust widths; Title column auto-fills remaining space
+- Playlist sort order — requests "recently added" order from YouTube Music API when loading playlists
+- `#` column preserves original playlist position and can be clicked to reset sort order
+
+**Bug Fixes**
+- Fixed click-to-sort not working (ColumnKey.value vs str(ColumnKey) mismatch)
+- Fixed horizontal scroll position resetting when sorting
+- Fixed session restore with shuffle — queue is now populated before enabling shuffle so the saved index points at the correct track
+- Fixed `jump_to_real()` fallback when track not in shuffle order (was a silent no-op, now inserts into shuffle order)
+- Fixed crash on Python 3.14 from dbus-next annotation parsing (MPRIS gracefully disables)
+- Pinned Textual dependency to `>=7.0,<8.0` to protect against internal API breakage
+
+### v1.1.2 (2026-02-14)
+
+**Features**
+- Shuffle-aware playlist playback — double-clicking a playlist with shuffle on now starts from a random track instead of always the first
+- Table sorting — sort any track list by Title (`s t`), Artist (`s a`), Album (`s A`), Duration (`s d`), or reverse (`s r`)
+- Session resume — on startup, restores last queue position and shows the track in the footer (without auto-playing)
+- Quit action (`q` / `Ctrl+Q`) — clean exit that clears resume state; unclean exits (terminal close/kill) preserve it
+
+**Bug Fixes**
+- Fixed queue position desync when selecting tracks with shuffle enabled (all pages: Library, Context, Liked Songs, Recently Played)
+- Fixed search mode toggle showing empty box due to Rich markup interpretation (`[Music]` → `Music`)
+
+### v1.1.1 (2026-02-13)
+
+**Bug Fixes**
+- Fixed right-click on track table triggering playback instead of only opening context menu
+- Fixed auto-advance bug: songs after the 2nd track would not play due to stale `_end_file_skip` counter
+- Fixed thread-safe skip counter — check+increment now atomic under lock
+- Fixed duplicate end-file events causing track skipping (debounce guard)
+- Fixed `player.play()` failure leaving stale `_current_track` state
+- Fixed unhandled exceptions in stream resolution crashing the playback chain
+- Fixed `player.play()` exceptions silently stopping all playback
+- Fixed Browse page crash from unawaited async mount operations
+- Fixed API error tracebacks polluting TUI with red stderr overlay
+- Reset skip counter on mpv crash recovery
+- Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
+- Fixed encapsulation break (cache private method called from app)
+- Always-visible Lyrics button in footer bar (dimmed when no track playing, active during playback)
+- Clicking the active footer page navigates back to the previous page
+- Library remembers selected playlist when navigating away and back
+- Click outside popups to dismiss — actions menu and Spotify import close when clicking the background
+
 ### v1.1.0 (2026-02-12)
 
 **Features**
@@ -504,58 +552,6 @@ MIT — see [LICENSE](LICENSE).
 **Testing & CI**
 - GitHub Actions CI pipeline (ruff lint + pytest with coverage)
 - 231 tests covering queue, IPC, stream resolver, cache, history, auth, downloads, Discord RPC, Last.fm, and settings
-
-### v1.0.3 (2026-02-14)
-
-**Features**
-- Click column headers to sort — click any column header (Title, Artist, Album, Duration, #) to sort; click again to reverse
-- Drag-to-resize columns — drag column header borders to adjust widths; Title column auto-fills remaining space
-- Playlist sort order — requests "recently added" order from YouTube Music API when loading playlists
-- `#` column preserves original playlist position and can be clicked to reset sort order
-
-**Bug Fixes**
-- Fixed click-to-sort not working (ColumnKey.value vs str(ColumnKey) mismatch)
-- Fixed horizontal scroll position resetting when sorting
-- Fixed session restore with shuffle — queue is now populated before enabling shuffle so the saved index points at the correct track
-- Fixed `jump_to_real()` fallback when track not in shuffle order (was a silent no-op, now inserts into shuffle order)
-- Fixed crash on Python 3.14 from dbus-next annotation parsing (MPRIS gracefully disables)
-- Pinned Textual dependency to `>=7.0,<8.0` to protect against internal API breakage
-
-### v1.0.2 (2026-02-14)
-
-**Features**
-- Shuffle-aware playlist playback — double-clicking a playlist with shuffle on now starts from a random track instead of always the first
-- Table sorting — sort any track list by Title (`s t`), Artist (`s a`), Album (`s A`), Duration (`s d`), or reverse (`s r`)
-- Session resume — on startup, restores last queue position and shows the track in the footer (without auto-playing)
-- Quit action (`q` / `Ctrl+Q`) — clean exit that clears resume state; unclean exits (terminal close/kill) preserve it
-
-**Bug Fixes**
-- Fixed queue position desync when selecting tracks with shuffle enabled (all pages: Library, Context, Liked Songs, Recently Played)
-- Fixed search mode toggle showing empty box due to Rich markup interpretation (`[Music]` → `Music`)
-
-### v1.0.1 (2026-02-13)
-
-**Features**
-- Always-visible Lyrics button in footer bar (dimmed when no track playing, active during playback)
-- Clicking the active footer page navigates back to the previous page
-- Library remembers selected playlist when navigating away and back
-- Library auto-opens the currently-playing playlist on return
-- Library restores cursor to last selected track row when navigating back (falls back to currently-playing track)
-- Click outside popups to dismiss — actions menu and Spotify import close when clicking the background
-
-**Bug Fixes**
-- Fixed right-click on track table triggering playback instead of only opening context menu
-- Fixed auto-advance bug: songs after the 2nd track would not play due to stale `_end_file_skip` counter
-- Fixed thread-safe skip counter — check+increment now atomic under lock
-- Fixed duplicate end-file events causing track skipping (debounce guard)
-- Fixed `player.play()` failure leaving stale `_current_track` state
-- Fixed unhandled exceptions in stream resolution crashing the playback chain
-- Fixed `player.play()` exceptions silently stopping all playback
-- Fixed Browse page crash from unawaited async mount operations
-- Fixed API error tracebacks polluting TUI with red stderr overlay
-- Reset skip counter on mpv crash recovery
-- Fixed terminal image protocol detection (`TERM_FEATURES` returning wrong protocol)
-- Fixed encapsulation break (cache private method called from app)
 
 ### v1.0.0 (2026-02-07)
 
