@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from textual.events import Click
+from textual.events import Click, MouseDown, MouseMove, MouseUp
 from textual.message import Message
 from textual.widgets import DataTable
-from textual.widgets.data_table import RowKey
+from textual.widgets.data_table import Column, RowKey
 
 from ytm_player.config import Action
 from ytm_player.config.settings import get_settings
@@ -93,6 +93,10 @@ class TrackTable(DataTable):
         self._right_clicked: bool = False
         self._sort_column: str | None = None
         self._sort_reverse: bool = False
+        # Column resize drag state.
+        self._resize_col: Column | None = None
+        self._resize_start_x: int = 0
+        self._resize_start_width: int = 0
 
     @property
     def tracks(self) -> list[dict]:
@@ -218,6 +222,53 @@ class TrackTable(DataTable):
                 )
 
         self._playing_index = new_index
+
+    # -- Column resize (drag header border) ------------------------------
+
+    def _column_at_edge(self, x: int) -> Column | None:
+        """Return the Column whose right edge is near *x*, or None."""
+        edge = self._row_label_column_width
+        for col in self.ordered_columns:
+            edge += col.get_render_width(self)
+            if abs(x - edge) <= 1:
+                return col
+        return None
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        """Start column resize if clicking near a header column border."""
+        if event.button != 1:
+            return
+        # Only trigger on the header row (y == 0 relative to the widget).
+        if event.y != 0 or not self.show_header:
+            return
+        col = self._column_at_edge(event.x + int(self.scroll_x))
+        if col is not None:
+            event.stop()
+            event.prevent_default()
+            self._resize_col = col
+            self._resize_start_x = event.screen_x
+            self._resize_start_width = col.get_render_width(self)
+            self.capture_mouse()
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        """Resize column while dragging."""
+        if self._resize_col is None:
+            return
+        event.stop()
+        delta = event.screen_x - self._resize_start_x
+        padding = 2 * self.cell_padding
+        new_width = max(3, self._resize_start_width + delta - padding)
+        self._resize_col.width = new_width
+        self._resize_col.auto_width = False
+        self._clear_caches()
+        self.refresh()
+
+    def on_mouse_up(self, event: MouseUp) -> None:
+        """End column resize."""
+        if self._resize_col is not None:
+            self._resize_col = None
+            self.release_mouse()
+            event.stop()
 
     # -- Event handlers ---------------------------------------------------
 
