@@ -246,12 +246,21 @@ class YTMusicService:
 
         Requires the *browseId* for the lyrics tab. We first fetch the watch
         playlist to obtain it, then request the actual lyrics.
+        Tries timestamped (mobile) first, falls back to plain text.
         """
         try:
             watch = await self._call(self.client.get_watch_playlist, video_id)
             lyrics_browse_id = watch.get("lyrics")
             if not lyrics_browse_id:
                 return None
+            # Try timed lyrics first (uses mobile client internally)
+            try:
+                result = await self._call(self.client.get_lyrics, lyrics_browse_id, timestamps=True)
+                if result is not None:
+                    return result
+            except Exception:
+                logger.debug("Timed lyrics request failed for %r, trying plain", video_id)
+            # Fall back to plain lyrics
             return await self._call(self.client.get_lyrics, lyrics_browse_id)
         except Exception:
             logger.debug("get_lyrics failed for %r", video_id)

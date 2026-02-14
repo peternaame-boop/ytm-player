@@ -174,13 +174,20 @@ class Player:
 
             asyncio.create_task(_safe_wrapper())
 
+        def _safe_sync(sync_fn: Any, call_args: tuple) -> None:
+            """Run a sync callback with error handling on the event loop."""
+            try:
+                sync_fn(*call_args)
+            except Exception:
+                logger.debug("Sync callback error for %s", event, exc_info=True)
+
         for cb in list(self._callbacks[event]):
             try:
                 if loop is not None and not loop.is_closed():
                     if asyncio.iscoroutinefunction(cb):
                         loop.call_soon_threadsafe(_schedule_async, cb, args)
                     else:
-                        loop.call_soon_threadsafe(cb, *args)
+                        loop.call_soon_threadsafe(_safe_sync, cb, args)
                 else:
                     # No loop: only sync callbacks can run; skip async ones.
                     if asyncio.iscoroutinefunction(cb):

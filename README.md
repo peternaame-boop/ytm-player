@@ -441,6 +441,21 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.3.1 (2026-02-14)
+
+**Features**
+- Synced (timestamped) lyrics — lyrics now highlight and auto-scroll with the song in real time
+- Click-to-seek on lyrics — click any synced lyric line to jump to that part of the song
+- LRCLIB.net fallback — when YouTube Music doesn't provide synced lyrics, fetches them from LRCLIB.net (no API key needed)
+- Lyrics auto-center — current lyric line stays centered in the viewport as the song plays
+
+**Bug Fixes**
+- Fixed crash on song change with both sidebars open — Textual's `LoadingIndicator` timer raced with widget pruning during track transitions; removed `loading` reactive in favour of status label
+- Fixed crash from unhandled exceptions in player event callbacks — sync callbacks dispatched via `call_soon_threadsafe` are now wrapped in error handlers (matching the existing async callback pattern)
+- Wrapped `notify()` and `_prefetch_next_track()` in `_on_track_change` with try/except to prevent crashes during app transitions
+- Lyrics sidebar always starts closed on launch regardless of previous session state
+- Fixed synced lyrics not being requested — `timestamps=True` now passed to ytmusicapi with automatic fallback to plain text if timed lyrics unavailable
+
 ### v1.3.0 (2026-02-14)
 
 **Features**
