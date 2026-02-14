@@ -139,9 +139,16 @@ class TrackTable(DataTable):
     def load_tracks(self, tracks: list[dict]) -> None:
         """Replace the table contents with a new list of tracks."""
         self.clear()
-        self._tracks = list(tracks)
+        # Stamp each track with its original playlist position.
+        self._tracks = []
+        for i, track in enumerate(tracks):
+            t = dict(track)
+            t["_original_index"] = i
+            self._tracks.append(t)
         self._row_keys = []
         self._playing_index = None
+        self._sort_column = None
+        self._sort_reverse = False
 
         for i, track in enumerate(self._tracks):
             row_key = self._add_track_row(i, track)
@@ -152,9 +159,11 @@ class TrackTable(DataTable):
     def append_tracks(self, tracks: list[dict]) -> None:
         """Append additional tracks without clearing existing ones."""
         start_idx = len(self._tracks)
-        self._tracks.extend(tracks)
         for i, track in enumerate(tracks, start=start_idx):
-            row_key = self._add_track_row(i, track)
+            t = dict(track)
+            t["_original_index"] = i
+            self._tracks.append(t)
+            row_key = self._add_track_row(i, t)
             self._row_keys.append(row_key)
 
     def _add_track_row(self, index: int, track: dict) -> RowKey:
@@ -166,7 +175,9 @@ class TrackTable(DataTable):
 
         cells: list[str | int] = []
         if self._show_index:
-            cells.append(str(index + 1))
+            # Always show original playlist position, not current row number.
+            orig = track.get("_original_index", index)
+            cells.append(str(orig + 1))
         cells.append(title)
         cells.append(artist)
         if self._show_album:
@@ -206,10 +217,11 @@ class TrackTable(DataTable):
         if old_index == new_index:
             return
 
-        # Restore the old row's number indicator.
+        # Restore the old row's original playlist number.
         if old_index is not None and old_index < len(self._row_keys):
             try:
-                self.update_cell(self._row_keys[old_index], "index", str(old_index + 1))
+                orig = self._tracks[old_index].get("_original_index", old_index) + 1
+                self.update_cell(self._row_keys[old_index], "index", str(orig))
             except Exception:
                 logger.debug("Failed to restore row number for index %d", old_index, exc_info=True)
 
@@ -261,7 +273,7 @@ class TrackTable(DataTable):
             edge += w
         return None
 
-    _SORTABLE_KEYS = {"title", "artist", "album", "duration"}
+    _SORTABLE_KEYS = {"index", "title", "artist", "album", "duration"}
 
     def on_mouse_down(self, event: MouseDown) -> None:
         """Start column resize or prepare for click-to-sort on header."""
@@ -361,6 +373,7 @@ class TrackTable(DataTable):
             self._sort_reverse = False
 
         key_funcs = {
+            "index": lambda t: t.get("_original_index", 0),
             "title": lambda t: (t.get("title") or "").lower(),
             "artist": lambda t: extract_artist(t).lower(),
             "album": lambda t: (t.get("album") or "").lower(),
