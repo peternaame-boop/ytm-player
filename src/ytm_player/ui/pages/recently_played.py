@@ -143,7 +143,7 @@ class RecentlyPlayedPage(Widget):
             track = self._tracks[idx]
             queue = self.app.queue  # type: ignore[attr-defined]
             queue.add(track)
-            queue.jump_to(queue.length - 1)
+            queue.jump_to_real(queue.length - 1)
             await self.app.play_track(track)  # type: ignore[attr-defined]
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
@@ -171,7 +171,7 @@ class RecentlyPlayedPage(Widget):
                     track = self._tracks[table.cursor_row]
                     queue = self.app.queue  # type: ignore[attr-defined]
                     queue.add(track)
-                    queue.jump_to(queue.length - 1)
+                    queue.jump_to_real(queue.length - 1)
                     await self.app.play_track(track)  # type: ignore[attr-defined]
             case Action.ADD_TO_QUEUE:
                 if table.cursor_row is not None and 0 <= table.cursor_row < len(self._tracks):

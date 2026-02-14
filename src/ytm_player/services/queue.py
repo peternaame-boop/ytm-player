@@ -452,3 +452,26 @@ class QueueManager:
             if 0 <= real < len(self._tracks):
                 return self._tracks[real]
             return None
+
+    def jump_to_real(self, real_index: int) -> dict | None:
+        """Jump to a track by its index in the internal track list.
+
+        Unlike :meth:`jump_to` (which interprets *index* as a position in
+        the current playback order — i.e. shuffle order when shuffled),
+        this always resolves *real_index* as a position in ``_tracks``.
+        """
+        with self._lock:
+            if not 0 <= real_index < len(self._tracks):
+                return None
+            if self._shuffle:
+                try:
+                    pos = self._shuffle_order.index(real_index)
+                    self._shuffle_position = pos
+                except ValueError:
+                    self._current_index = real_index
+            else:
+                self._current_index = real_index
+            real = self._real_index()
+            if 0 <= real < len(self._tracks):
+                return self._tracks[real]
+            return None

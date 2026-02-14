@@ -377,7 +377,7 @@ class SearchPage(Widget):
                     placeholder="Search YouTube Music...",
                     id="search-input",
                 )
-                yield Static("[Music]", id="search-mode")
+                yield Static("Music", id="search-mode")
             yield SuggestionList(id="suggestion-overlay")
             yield Static("", id="loading-msg", classes="loading-indicator")
             with Horizontal(id="search-results"):
@@ -633,7 +633,7 @@ class SearchPage(Widget):
 
         # Update the mode indicator.
         mode_label = self.query_one("#search-mode", Static)
-        display = "[Music]" if self.search_mode == "music" else "[All]"
+        display = "Music" if self.search_mode == "music" else "All"
         mode_label.update(display)
 
         # Re-run the last search with the new mode if we have a query.

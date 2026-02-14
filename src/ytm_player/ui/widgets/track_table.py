@@ -91,6 +91,8 @@ class TrackTable(DataTable):
         self._playing_video_id: str | None = None
         self._playing_index: int | None = None
         self._right_clicked: bool = False
+        self._sort_column: str | None = None
+        self._sort_reverse: bool = False
 
     @property
     def tracks(self) -> list[dict]:
@@ -243,6 +245,50 @@ class TrackTable(DataTable):
             if row_idx is not None and 0 <= row_idx < len(self._tracks):
                 self.post_message(self.TrackRightClicked(self._tracks[row_idx], row_idx))
 
+    # -- Sorting ----------------------------------------------------------
+
+    def sort_by(self, column: str) -> None:
+        """Sort tracks by column. Toggles direction if the same column is sorted again."""
+        if not self._tracks:
+            return
+
+        if self._sort_column == column:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_column = column
+            self._sort_reverse = False
+
+        key_funcs = {
+            "title": lambda t: (t.get("title") or "").lower(),
+            "artist": lambda t: extract_artist(t).lower(),
+            "album": lambda t: (t.get("album") or "").lower(),
+            "duration": lambda t: extract_duration(t),
+        }
+        key_fn = key_funcs.get(column)
+        if key_fn is None:
+            return
+
+        current_track = self.selected_track
+        self._tracks.sort(key=key_fn, reverse=self._sort_reverse)
+        self._reload_sorted()
+
+        if current_track:
+            vid = current_track.get("video_id")
+            for i, t in enumerate(self._tracks):
+                if t.get("video_id") == vid:
+                    self.move_cursor(row=i)
+                    break
+
+    def _reload_sorted(self) -> None:
+        """Rebuild table rows from the current _tracks order."""
+        self.clear()
+        self._row_keys = []
+        self._playing_index = None
+        for i, track in enumerate(self._tracks):
+            row_key = self._add_track_row(i, track)
+            self._row_keys.append(row_key)
+        self._highlight_playing()
+
     # -- Vim-style navigation ---------------------------------------------
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
@@ -269,3 +315,23 @@ class TrackTable(DataTable):
                     self.post_message(
                         self.TrackSelected(self._tracks[self.cursor_row], self.cursor_row)
                     )
+            case Action.SORT_TITLE:
+                self.sort_by("title")
+            case Action.SORT_ARTIST:
+                self.sort_by("artist")
+            case Action.SORT_ALBUM:
+                self.sort_by("album")
+            case Action.SORT_DURATION:
+                self.sort_by("duration")
+            case Action.REVERSE_SORT:
+                if self._sort_column and self._tracks:
+                    self._sort_reverse = not self._sort_reverse
+                    current_track = self.selected_track
+                    self._tracks.reverse()
+                    self._reload_sorted()
+                    if current_track:
+                        vid = current_track.get("video_id")
+                        for i, t in enumerate(self._tracks):
+                            if t.get("video_id") == vid:
+                                self.move_cursor(row=i)
+                                break

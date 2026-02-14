@@ -332,7 +332,7 @@ class ContextPage(Widget):
         # Load all tracks into the queue starting from the selected one.
         self.app.queue.clear()  # type: ignore[attr-defined]
         self.app.queue.add_multiple(tracks)  # type: ignore[attr-defined]
-        self.app.queue.jump_to(idx)  # type: ignore[attr-defined]
+        self.app.queue.jump_to_real(idx)  # type: ignore[attr-defined]
 
         # Play selected track.
         await self.app.play_track(event.track)  # type: ignore[attr-defined]

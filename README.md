@@ -437,6 +437,18 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.0 (2026-02-14)
+
+**Features**
+- Shuffle-aware playlist playback — double-clicking a playlist with shuffle on now starts from a random track instead of always the first
+- Table sorting — sort any track list by Title (`s t`), Artist (`s a`), Album (`s A`), Duration (`s d`), or reverse (`s r`)
+- Session resume — on startup, restores last queue position and shows the track in the footer (without auto-playing)
+- Quit action (`q` / `Ctrl+Q`) — clean exit that clears resume state; unclean exits (terminal close/kill) preserve it
+
+**Bug Fixes**
+- Fixed queue position desync when selecting tracks with shuffle enabled (all pages: Library, Context, Liked Songs, Recently Played)
+- Fixed search mode toggle showing empty box due to Rich markup interpretation (`[Music]` → `Music`)
+
 ### v1.1.1 (2026-02-13)
 
 **Features**

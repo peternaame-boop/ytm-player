@@ -181,6 +181,9 @@ class YTMPlayerApp(App):
         # IPC server for CLI command channel.
         self._ipc_server: IPCServer | None = None
 
+        # Clean exit flag: True when user quits via q/C-q (no resume on next start).
+        self._clean_exit: bool = False
+
     def get_css_variables(self) -> dict[str, str]:
         """Inject theme colors as Textual CSS variables ($var-name)."""
         variables = super().get_css_variables()
@@ -416,6 +419,34 @@ class YTMPlayerApp(App):
                 "Failed to update playback bar after restoring session state", exc_info=True
             )
 
+        # Auto-resume playback if the previous session exited uncleanly.
+        resume = state.get("resume")
+        if resume and isinstance(resume, dict):
+            video_id = resume.get("video_id", "")
+            if video_id:
+                self._active_library_playlist_id = resume.get("playlist_id")
+                # Find the track in the restored queue and jump to it.
+                resumed = False
+                for i, t in enumerate(self.queue.tracks):
+                    if t.get("video_id") == video_id:
+                        self.queue.jump_to(i)
+                        resumed = True
+                        break
+
+                if resumed:
+                    track = self.queue.current_track
+                    if track:
+                        # Show the track in the UI without starting playback.
+                        try:
+                            bar = self.query_one("#playback-bar", PlaybackBar)
+                            bar.update_track(track)
+                            bar.update_playback_state(is_playing=False, is_paused=False)
+                        except Exception:
+                            logger.debug(
+                                "Playback bar not ready during resume restore",
+                                exc_info=True,
+                            )
+
     def _save_session_state(self) -> None:
         """Persist volume, shuffle, and repeat to disk."""
         from ytm_player.config.paths import SESSION_STATE_FILE
@@ -431,12 +462,25 @@ class YTMPlayerApp(App):
         queue_tracks = list(self.queue.tracks)[:500]
         queue_index = self.queue.current_index
 
+        # Build resume data: save current track + position on unclean exit,
+        # explicitly clear on clean exit (q / C-q).
+        resume = None
+        if not self._clean_exit and self.player and self.player.current_track:
+            video_id = self.player.current_track.get("video_id", "")
+            if video_id:
+                resume = {
+                    "video_id": video_id,
+                    "position": self.player.position,
+                    "playlist_id": self._active_library_playlist_id,
+                }
+
         state = {
             "volume": volume,
             "repeat": self.queue.repeat_mode.value,
             "shuffle": self.queue.shuffle_enabled,
             "queue_tracks": queue_tracks,
             "queue_index": queue_index,
+            "resume": resume,
         }
         try:
             import os
@@ -633,6 +677,10 @@ class YTMPlayerApp(App):
             case Action.CLOSE_POPUP:
                 # Dismiss active popup if any; otherwise ignore.
                 pass
+
+            case Action.QUIT:
+                self._clean_exit = True
+                self.exit()
 
             # -- Add to playlist (quick shortcut for current track) --
             case Action.ADD_TO_PLAYLIST:
@@ -1158,7 +1206,7 @@ class YTMPlayerApp(App):
         index = message.index
 
         # Set the queue position and play.
-        self.queue.jump_to(index)
+        self.queue.jump_to_real(index)
         await self.play_track(track)
 
     # ── Add-to-playlist / Track-actions wiring ──────────────────────

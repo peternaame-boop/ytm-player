@@ -658,7 +658,7 @@ class LibraryPage(Widget):
             self.app.queue.add_multiple(tracks)
             self.app.queue.jump_to(0)
             self.app._active_library_playlist_id = playlist_id  # type: ignore[attr-defined]
-            await self.app.play_track(tracks[0])
+            await self.app.play_track(self.app.queue.current_track)
         except Exception:
             logger.exception("Failed to load playlist %s for playback", playlist_id)
             self.app.notify("Failed to load playlist", severity="error")
@@ -676,7 +676,7 @@ class LibraryPage(Widget):
 
         self.app.queue.clear()
         self.app.queue.add_multiple(tracks)
-        self.app.queue.jump_to(idx)
+        self.app.queue.jump_to_real(idx)
         if self._active_playlist_id:
             self.app._active_library_playlist_id = self._active_playlist_id  # type: ignore[attr-defined]
         await self.app.play_track(event.track)

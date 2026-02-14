@@ -149,7 +149,7 @@ class LikedSongsPage(Widget):
             queue = self.app.queue  # type: ignore[attr-defined]
             queue.clear()
             queue.add_multiple(self._tracks)
-            queue.jump_to(idx)
+            queue.jump_to_real(idx)
             await self.app.play_track(self._tracks[idx])  # type: ignore[attr-defined]
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
@@ -177,7 +177,7 @@ class LikedSongsPage(Widget):
                     queue = self.app.queue  # type: ignore[attr-defined]
                     queue.clear()
                     queue.add_multiple(self._tracks)
-                    queue.jump_to(table.cursor_row)
+                    queue.jump_to_real(table.cursor_row)
                     await self.app.play_track(self._tracks[table.cursor_row])  # type: ignore[attr-defined]
             case Action.ADD_TO_QUEUE:
                 if table.cursor_row is not None and 0 <= table.cursor_row < len(self._tracks):
