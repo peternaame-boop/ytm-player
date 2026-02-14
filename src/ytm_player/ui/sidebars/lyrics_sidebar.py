@@ -153,10 +153,9 @@ class LyricsSidebar(Widget):
         """Called by the app when the sidebar is toggled visible.
 
         Registers player events (lazy, since player isn't ready at mount
-        time) and loads lyrics for the current track.
+        time) and loads lyrics for the current track if it changed.
         """
         self._ensure_player_events()
-        self._current_video_id = None  # Force reload
         self._load_for_current_track()
 
     # ── Player event integration ─────────────────────────────────────
