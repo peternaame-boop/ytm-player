@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from textual.events import Click, MouseDown, MouseMove, MouseUp
+from textual.geometry import Size
 from textual.message import Message
 from textual.widgets import DataTable
 from textual.widgets.data_table import Column, RowKey
@@ -97,7 +98,6 @@ class TrackTable(DataTable):
         self._resize_col: Column | None = None
         self._resize_start_x: int = 0
         self._resize_start_width: int = 0
-        self._header_click_x: int = -1
 
     @property
     def tracks(self) -> list[dict]:
@@ -238,8 +238,27 @@ class TrackTable(DataTable):
 
     # -- Column resize (drag header border) ------------------------------
 
+    def _invalidate_table(self) -> None:
+        """Clear render caches and update virtual size after column changes."""
+        if hasattr(self, "_clear_caches"):
+            self._clear_caches()
+        # Recalculate virtual_size so the scrollbar reflects new widths.
+        try:
+            data_width = sum(col.get_render_width(self) for col in self.columns.values())
+            label_w = (
+                self._row_label_column_width if hasattr(self, "_row_label_column_width") else 0
+            )
+            total_width = data_width + label_w
+            header_h = self.header_height if self.show_header else 0
+            self.virtual_size = Size(total_width, self._total_row_height + header_h)
+        except Exception:
+            pass
+        self.refresh()
+
     def _fill_title_column(self) -> None:
         """Expand the Title column to fill any remaining table width."""
+        if self.size.width == 0:
+            return
         try:
             title_col = self.columns.get("title")
         except Exception:
@@ -276,13 +295,12 @@ class TrackTable(DataTable):
     _SORTABLE_KEYS = {"index", "title", "artist", "album", "duration"}
 
     def on_mouse_down(self, event: MouseDown) -> None:
-        """Start column resize or prepare for click-to-sort on header."""
+        """Start column resize on header edge drag."""
         if event.button != 1:
             return
         if event.y != 0 or not self.show_header:
             return
         scroll_x = event.x + int(self.scroll_x)
-        # Prefer resize if near a column edge.
         col = self._column_at_edge(scroll_x)
         if col is not None:
             event.stop()
@@ -291,11 +309,6 @@ class TrackTable(DataTable):
             self._resize_start_x = event.screen_x
             self._resize_start_width = col.get_render_width(self)
             self.capture_mouse()
-            return
-        # Record click position for potential click-to-sort.
-        self._header_click_x = scroll_x
-        event.stop()
-        event.prevent_default()
 
     def on_mouse_move(self, event: MouseMove) -> None:
         """Resize column while dragging."""
@@ -308,30 +321,25 @@ class TrackTable(DataTable):
         self._resize_col.width = new_width
         self._resize_col.auto_width = False
         self._fill_title_column()
-        self._clear_caches()
-        self.refresh()
+        self._invalidate_table()
 
     def on_mouse_up(self, event: MouseUp) -> None:
-        """End column resize, or trigger click-to-sort."""
+        """End column resize."""
         if self._resize_col is not None:
             self._resize_col = None
             self.release_mouse()
-            event.stop()
-            return
-        # Click-to-sort: only if we recorded a header click position.
-        click_x = self._header_click_x
-        self._header_click_x = -1
-        if click_x < 0:
-            return
-        col = self._column_at_x(click_x)
-        if col is not None and str(col.key) in self._SORTABLE_KEYS:
-            self.sort_by(str(col.key))
             event.stop()
 
     def on_resize(self, event: object) -> None:
         """Re-fill title column when widget is resized."""
         self._fill_title_column()
-        self._clear_caches()
+        self._invalidate_table()
+
+    def on_blur(self) -> None:
+        """Clean up drag state if widget loses focus."""
+        if self._resize_col is not None:
+            self._resize_col = None
+            self.release_mouse()
 
     # -- Event handlers ---------------------------------------------------
 
@@ -358,6 +366,13 @@ class TrackTable(DataTable):
             row_idx = self.cursor_row
             if row_idx is not None and 0 <= row_idx < len(self._tracks):
                 self.post_message(self.TrackRightClicked(self._tracks[row_idx], row_idx))
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Sort by the clicked column header."""
+        event.stop()
+        key = event.column_key.value
+        if key in self._SORTABLE_KEYS:
+            self.sort_by(key)
 
     # -- Sorting ----------------------------------------------------------
 
@@ -396,6 +411,7 @@ class TrackTable(DataTable):
 
     def _reload_sorted(self) -> None:
         """Rebuild table rows from the current _tracks order."""
+        saved_scroll_x = self.scroll_x
         self.clear()
         self._row_keys = []
         self._playing_index = None
@@ -403,6 +419,7 @@ class TrackTable(DataTable):
             row_key = self._add_track_row(i, track)
             self._row_keys.append(row_key)
         self._highlight_playing()
+        self.scroll_x = saved_scroll_x
 
     # -- Vim-style navigation ---------------------------------------------
 

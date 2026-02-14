@@ -9,7 +9,7 @@ description = "A full-featured YouTube Music TUI client for the terminal"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
-    "textual>=1.0.0",
+    "textual>=7.0,<8.0",
     "ytmusicapi>=1.11.0",
     "yt-dlp>=2025.1.0",
     "python-mpv>=1.0.0",

@@ -18,7 +18,7 @@ try:
     from dbus_next.service import PropertyAccess, ServiceInterface, dbus_property, method, signal
 
     _DBUS_AVAILABLE = True
-except ImportError:
+except (ImportError, ValueError):
     _DBUS_AVAILABLE = False
 
 BUS_NAME = "org.mpris.MediaPlayer2.ytm_player"
@@ -40,7 +40,10 @@ def _empty_metadata() -> dict[str, Variant]:
     }
 
 
-if _DBUS_AVAILABLE:
+try:
+    if not _DBUS_AVAILABLE:
+        raise ImportError("dbus-next not available")
+
     # ------------------------------------------------------------------ #
     #  org.mpris.MediaPlayer2  (root interface)
     # ------------------------------------------------------------------ #
@@ -243,6 +246,10 @@ if _DBUS_AVAILABLE:
 
         def set_position(self, position_us: int) -> None:
             self._position_us = position_us
+
+except (ImportError, ValueError):
+    _DBUS_AVAILABLE = False
+    logger.debug("MPRIS D-Bus interfaces unavailable (dbus-next incompatible)", exc_info=True)
 
 
 class MPRISService:

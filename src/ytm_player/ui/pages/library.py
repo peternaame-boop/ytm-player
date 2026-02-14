@@ -598,7 +598,7 @@ class LibraryPage(Widget):
         loading.display = True
 
         try:
-            data = await self.app.ytmusic.get_playlist(playlist_id)
+            data = await self.app.ytmusic.get_playlist(playlist_id, order="recently_added")
 
             # If user selected a different playlist while we were loading, discard.
             if self._active_playlist_id != playlist_id:
@@ -648,7 +648,7 @@ class LibraryPage(Widget):
             return
 
         try:
-            data = await self.app.ytmusic.get_playlist(playlist_id)
+            data = await self.app.ytmusic.get_playlist(playlist_id, order="recently_added")
             tracks = normalize_tracks(data.get("tracks", []))
             if not tracks:
                 self.app.notify("Playlist is empty", severity="warning")

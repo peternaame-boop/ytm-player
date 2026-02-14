@@ -437,6 +437,24 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.1 (2026-02-14)
+
+**Features**
+- Click column headers to sort — click any column header (Title, Artist, Album, Duration, #) to sort; click again to reverse
+- Drag-to-resize columns — drag column header borders to adjust widths; Title column auto-fills remaining space
+- Playlist sort order — requests "recently added" order from YouTube Music API when loading playlists
+- `#` column preserves original playlist position and can be clicked to reset sort order
+
+**Bug Fixes**
+- Fixed click-to-sort not working (ColumnKey.value vs str(ColumnKey) mismatch)
+- Fixed horizontal scroll position resetting when sorting
+- Fixed session restore with shuffle — queue is now populated before enabling shuffle so the saved index points at the correct track
+- Fixed `jump_to_real()` fallback when track not in shuffle order (was a silent no-op, now inserts into shuffle order)
+- Fixed crash on Python 3.14 from dbus-next annotation parsing (MPRIS gracefully disables)
+- Added `_invalidate_table()` helper wrapping `_clear_caches()` with virtual_size recalculation and hasattr guard
+- Added drag-state cleanup on widget blur
+- Pinned Textual dependency to `>=7.0,<8.0` to protect against internal API breakage
+
 ### v1.2.0 (2026-02-14)
 
 **Features**

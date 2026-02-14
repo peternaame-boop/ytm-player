@@ -468,7 +468,11 @@ class QueueManager:
                     pos = self._shuffle_order.index(real_index)
                     self._shuffle_position = pos
                 except ValueError:
-                    self._current_index = real_index
+                    # Track not in shuffle order — insert it right after the
+                    # current position so playback can continue from here.
+                    insert_pos = self._shuffle_position + 1
+                    self._shuffle_order.insert(insert_pos, real_index)
+                    self._shuffle_position = insert_pos
             else:
                 self._current_index = real_index
             real = self._real_index()

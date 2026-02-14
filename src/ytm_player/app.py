@@ -397,16 +397,17 @@ class YTMPlayerApp(App):
             mode = RepeatMode.OFF
         self.queue.set_repeat(mode)
 
-        if state.get("shuffle", False):
-            self.queue.toggle_shuffle()
-
-        # Restore queue from last session.
+        # Restore queue from last session (before enabling shuffle so the
+        # shuffle order is built from a populated queue).
         saved_tracks = state.get("queue_tracks", [])
         if saved_tracks and isinstance(saved_tracks, list):
             self.queue.add_multiple(saved_tracks)
             saved_index = state.get("queue_index", 0)
             if isinstance(saved_index, int) and 0 <= saved_index < len(saved_tracks):
                 self.queue.jump_to(saved_index)
+
+        if state.get("shuffle", False):
+            self.queue.toggle_shuffle()
 
         # Update the playback bar to reflect restored state.
         try:

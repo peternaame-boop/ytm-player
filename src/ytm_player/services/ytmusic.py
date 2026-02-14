@@ -193,9 +193,41 @@ class YTMusicService:
             logger.debug("get_artist failed for %r", artist_id)
             return {}
 
-    async def get_playlist(self, playlist_id: str, limit: int = 100) -> dict[str, Any]:
-        """Return playlist metadata and tracks."""
+    _ORDER_PARAMS = {
+        "a_to_z": "ggMGKgQIARAA",
+        "z_to_a": "ggMGKgQIARAB",
+        "recently_added": "ggMGKgQIABAB",
+    }
+
+    async def get_playlist(
+        self, playlist_id: str, limit: int = 100, order: str | None = None
+    ) -> dict[str, Any]:
+        """Return playlist metadata and tracks.
+
+        Args:
+            playlist_id: Playlist ID.
+            limit: Max tracks to return.
+            order: Sort order — ``"a_to_z"``, ``"z_to_a"``, or
+                ``"recently_added"``.  ``None`` uses the playlist's
+                server-side default.
+        """
         try:
+            params = self._ORDER_PARAMS.get(order or "")
+            if params:
+                # Temporarily inject sort params into the browse request.
+                client = self.client
+                original_send = client._send_request
+
+                def _patched_send(endpoint: str, body: dict, *a: Any, **kw: Any) -> Any:
+                    if endpoint == "browse" and isinstance(body, dict):
+                        body["params"] = params
+                    return original_send(endpoint, body, *a, **kw)
+
+                try:
+                    client._send_request = _patched_send
+                    return await self._call(client.get_playlist, playlist_id, limit=limit)
+                finally:
+                    client._send_request = original_send
             return await self._call(self.client.get_playlist, playlist_id, limit=limit)
         except Exception:
             logger.debug("get_playlist failed for %r", playlist_id)
