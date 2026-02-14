@@ -180,21 +180,27 @@ class LyricsSidebar(Widget):
             logger.debug("Failed to unregister player events in lyrics sidebar", exc_info=True)
 
     def _on_track_change(self, track_info: dict) -> None:
-        if not self.display:
-            self._needs_rebuild = True
-            self._pending_track = track_info
-            return
-        self._load_for_current_track()
+        try:
+            if not self.display:
+                self._needs_rebuild = True
+                self._pending_track = track_info
+                return
+            self._load_for_current_track()
+        except Exception:
+            logger.debug("Error in lyrics sidebar track change handler", exc_info=True)
 
     def _on_position_change(self, position: float) -> None:
-        if not self.display:
-            return
-        if not self._is_synced or not self._synced_lines:
-            return
-        idx = bisect.bisect_right(self._synced_timestamps, position)
-        new_index = idx - 1
-        if new_index != self.current_line_index:
-            self.current_line_index = new_index
+        try:
+            if not self.display:
+                return
+            if not self._is_synced or not self._synced_lines:
+                return
+            idx = bisect.bisect_right(self._synced_timestamps, position)
+            new_index = idx - 1
+            if new_index != self.current_line_index:
+                self.current_line_index = new_index
+        except Exception:
+            logger.debug("Error in lyrics sidebar position handler", exc_info=True)
 
     # ── Data loading ─────────────────────────────────────────────────
 
@@ -313,6 +319,12 @@ class LyricsSidebar(Widget):
     # ── Reactive watchers ────────────────────────────────────────────
 
     def watch_current_line_index(self, new_index: int) -> None:
+        try:
+            self._apply_line_highlight(new_index)
+        except Exception:
+            logger.debug("Error updating lyrics line highlight", exc_info=True)
+
+    def _apply_line_highlight(self, new_index: int) -> None:
         if not self._is_synced or not self._lyric_widgets:
             return
         old_index = getattr(self, "_prev_line_index", -1)
