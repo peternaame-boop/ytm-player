@@ -441,6 +441,15 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.2 (2026-02-15)
+
+**Bug Fixes**
+- Fixed play/pause doing nothing after session restore — player had no stream loaded so toggling pause was a no-op; now starts playback from the restored queue position
+- Fixed MPRIS play/pause also being a no-op after session restore (same root cause)
+
+**Features**
+- Right-click on playback bar (album art or track info) now opens the track actions popup, matching right-click behavior on track tables
+
 ### v1.2.1 (2026-02-14)
 
 **Features**

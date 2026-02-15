@@ -8,6 +8,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.events import Click, MouseScrollDown, MouseScrollUp
+from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
 
@@ -203,6 +204,13 @@ class PlaybackBar(Widget):
         Line 2: [art]  1:23 [===========>---------] 4:56
     """
 
+    class TrackRightClicked(Message):
+        """Emitted when the playback bar area is right-clicked."""
+
+        def __init__(self, track: dict) -> None:
+            super().__init__()
+            self.track = track
+
     DEFAULT_CSS = """
     PlaybackBar {
         dock: bottom;
@@ -257,6 +265,19 @@ class PlaybackBar(Widget):
                         time_color=_t.secondary,
                         id="pb-progress",
                     )
+
+    def on_click(self, event: Click) -> None:
+        """Right-click on the playback bar opens track actions."""
+        if event.button != 3:
+            return
+        app = self.app
+        track = None
+        if hasattr(app, "player") and app.player and app.player.current_track:
+            track = app.player.current_track
+        elif hasattr(app, "queue") and app.queue.current_track:
+            track = app.queue.current_track
+        if track:
+            self.post_message(self.TrackRightClicked(track))
 
     # ── Public update methods ────────────────────────────────────────
 
@@ -354,8 +375,8 @@ class _FooterButton(Widget):
             ):
                 await app.navigate_to(self._action)  # type: ignore[attr-defined]
             case "play_pause":
-                if hasattr(app, "player") and app.player:
-                    await app.player.toggle_pause()
+                if hasattr(app, "_toggle_play_pause"):
+                    await app._toggle_play_pause()
             case "prev":
                 await app._play_previous()  # type: ignore[attr-defined]
             case "next":
