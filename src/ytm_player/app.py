@@ -812,8 +812,7 @@ class YTMPlayerApp(App):
         match action:
             # -- Playback controls --
             case Action.PLAY_PAUSE:
-                if self.player:
-                    await self.player.toggle_pause()
+                await self._toggle_play_pause()
 
             case Action.NEXT_TRACK:
                 await self._play_next()
@@ -1144,6 +1143,13 @@ class YTMPlayerApp(App):
             )
             await self.mpris.update_playback_status("Playing")
 
+    async def _toggle_play_pause(self) -> None:
+        """Toggle play/pause, starting playback from queue if player is idle."""
+        if self.player and self.player.current_track is None and self.queue.current_track:
+            await self.play_track(self.queue.current_track)
+        elif self.player:
+            await self.player.toggle_pause()
+
     async def _play_next(self) -> None:
         """Advance to the next track in the queue and play it."""
         track = self.queue.next_track()
@@ -1393,8 +1399,7 @@ class YTMPlayerApp(App):
             await self.player.pause()
 
     async def _mpris_play_pause(self) -> None:
-        if self.player:
-            await self.player.toggle_pause()
+        await self._toggle_play_pause()
 
     async def _mpris_stop(self) -> None:
         if self.player:
@@ -1552,6 +1557,12 @@ class YTMPlayerApp(App):
 
     def on_track_table_track_right_clicked(self, message: TrackTable.TrackRightClicked) -> None:
         """Handle right-click on any TrackTable — open actions popup."""
+        self._open_actions_for_track(message.track)
+
+    def on_playback_bar_track_right_clicked(
+        self, message: PlaybackBar.TrackRightClicked
+    ) -> None:
+        """Handle right-click on the playback bar — open actions popup."""
         self._open_actions_for_track(message.track)
 
     async def _start_radio_for(self, track: dict) -> None:
