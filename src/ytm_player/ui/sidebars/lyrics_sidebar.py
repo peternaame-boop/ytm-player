@@ -17,6 +17,7 @@ from textual.worker import Worker, WorkerState
 
 from ytm_player.config.keymap import Action
 from ytm_player.services.player import PlayerEvent
+from ytm_player.utils.bidi import has_rtl, reorder_rtl_line
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,10 @@ class LyricsSidebar(Widget):
 
     LyricsSidebar .lyrics-upcoming {
         color: $text;
+    }
+
+    LyricsSidebar .lyrics-rtl {
+        text-align: right;
     }
     """
 
@@ -330,9 +335,11 @@ class LyricsSidebar(Widget):
         self._lyric_widgets = []
         self.current_line_index = -1
         for ts, text in self._synced_lines:
-            display_text = text if text else ""
+            display_text = reorder_rtl_line(text) if text else ""
             widget = _LyricLine(display_text, timestamp=ts)
             widget.add_class("lyrics-upcoming")
+            if text and has_rtl(text):
+                widget.add_class("lyrics-rtl")
             self._lyric_widgets.append(widget)
             scroll.mount(widget)
 
@@ -342,8 +349,10 @@ class LyricsSidebar(Widget):
         scroll.remove_children()
         self._lyric_widgets = []
         for line in self._unsynced_lines:
-            widget = _LyricLine(line)
+            widget = _LyricLine(reorder_rtl_line(line))
             widget.add_class("lyrics-upcoming")
+            if line and has_rtl(line):
+                widget.add_class("lyrics-rtl")
             self._lyric_widgets.append(widget)
             scroll.mount(widget)
 
