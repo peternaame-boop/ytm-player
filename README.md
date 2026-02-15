@@ -446,6 +446,9 @@ MIT — see [LICENSE](LICENSE).
 **Bug Fixes**
 - Fixed play/pause doing nothing after session restore — player had no stream loaded so toggling pause was a no-op; now starts playback from the restored queue position
 - Fixed MPRIS play/pause also being a no-op after session restore (same root cause)
+- Fixed RTL (Hebrew, Arabic, etc.) lyrics displaying in wrong order — segment-level reordering now renders bidirectional text correctly
+- Fixed lyrics sidebar crash from dict-style access on LyricLine objects — switched to attribute access
+- Fixed lyrics sidebar unnecessarily reloading when reopened for the same track
 
 **Features**
 - Right-click on playback bar (album art or track info) now opens the track actions popup, matching right-click behavior on track tables
