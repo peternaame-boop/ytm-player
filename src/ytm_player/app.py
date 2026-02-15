@@ -1559,9 +1559,7 @@ class YTMPlayerApp(App):
         """Handle right-click on any TrackTable — open actions popup."""
         self._open_actions_for_track(message.track)
 
-    def on_playback_bar_track_right_clicked(
-        self, message: PlaybackBar.TrackRightClicked
-    ) -> None:
+    def on_playback_bar_track_right_clicked(self, message: PlaybackBar.TrackRightClicked) -> None:
         """Handle right-click on the playback bar — open actions popup."""
         self._open_actions_for_track(message.track)
 
