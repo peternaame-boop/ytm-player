@@ -447,6 +447,7 @@ MIT — see [LICENSE](LICENSE).
 - Fixed play/pause doing nothing after session restore — player had no stream loaded so toggling pause was a no-op; now starts playback from the restored queue position
 - Fixed MPRIS play/pause also being a no-op after session restore (same root cause)
 - Fixed RTL (Hebrew, Arabic, etc.) lyrics displaying in wrong order — segment-level reordering now renders bidirectional text correctly
+- Fixed RTL lyrics line-wrap reading bottom-to-top — long lines are now pre-wrapped in logical order before reordering, so sentence start is on top
 - Fixed lyrics sidebar crash from dict-style access on LyricLine objects — switched to attribute access
 - Fixed lyrics sidebar unnecessarily reloading when reopened for the same track
 

@@ -17,7 +17,7 @@ from textual.worker import Worker, WorkerState
 
 from ytm_player.config.keymap import Action
 from ytm_player.services.player import PlayerEvent
-from ytm_player.utils.bidi import has_rtl, reorder_rtl_line
+from ytm_player.utils.bidi import has_rtl, wrap_rtl_line
 
 logger = logging.getLogger(__name__)
 
@@ -328,14 +328,28 @@ class LyricsSidebar(Widget):
             self._unsynced_lines = lyrics_text.splitlines()
             self._build_unsynced_view()
 
+    def _get_rtl_wrap_width(self) -> int:
+        """Compute available text width for RTL pre-wrapping."""
+        try:
+            scroll = self.query_one("#ls-scroll", VerticalScroll)
+            region_w = scroll.scrollable_content_region.width
+            if region_w > 0:
+                # Subtract _LyricLine padding (0 2 = 2 left + 2 right)
+                return max(region_w - 4, 10)
+        except Exception:
+            pass
+        # Fallback: 40 sidebar - 1 border - 4 padding
+        return 35
+
     def _build_synced_view(self) -> None:
         self._show_scroll()
         scroll = self.query_one("#ls-scroll", VerticalScroll)
         scroll.remove_children()
         self._lyric_widgets = []
         self.current_line_index = -1
+        wrap_width = self._get_rtl_wrap_width()
         for ts, text in self._synced_lines:
-            display_text = reorder_rtl_line(text) if text else ""
+            display_text = wrap_rtl_line(text, wrap_width) if text else ""
             widget = _LyricLine(display_text, timestamp=ts)
             widget.add_class("lyrics-upcoming")
             if text and has_rtl(text):
@@ -348,8 +362,9 @@ class LyricsSidebar(Widget):
         scroll = self.query_one("#ls-scroll", VerticalScroll)
         scroll.remove_children()
         self._lyric_widgets = []
+        wrap_width = self._get_rtl_wrap_width()
         for line in self._unsynced_lines:
-            widget = _LyricLine(reorder_rtl_line(line))
+            widget = _LyricLine(wrap_rtl_line(line, wrap_width))
             widget.add_class("lyrics-upcoming")
             if line and has_rtl(line):
                 widget.add_class("lyrics-rtl")

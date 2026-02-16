@@ -71,3 +71,46 @@ def reorder_rtl_line(text: str) -> str:
         parts.extend(seg_words)
 
     return " ".join(parts)
+
+
+def wrap_rtl_line(text: str, width: int) -> str:
+    """Pre-wrap and reorder RTL text for correct multi-line terminal display.
+
+    Terminals wrap text left-to-right, which reverses the line order when a
+    reordered RTL string exceeds the display width.  This wraps the text in
+    *logical* (reading) order first, then reorders each wrapped segment
+    independently so that visual line 1 = start of sentence, line 2 =
+    continuation, etc.
+
+    Pure LTR or short text passes through to ``reorder_rtl_line`` directly.
+    """
+    if not text or not has_rtl(text):
+        return text
+
+    if len(text) <= width or width <= 0:
+        return reorder_rtl_line(text)
+
+    words = text.split()
+    if not words:
+        return text
+
+    lines: list[str] = []
+    current_words: list[str] = []
+    current_len = 0
+
+    for word in words:
+        word_len = len(word)
+        needed = word_len if not current_words else current_len + 1 + word_len
+        if needed <= width:
+            current_words.append(word)
+            current_len = needed
+        else:
+            if current_words:
+                lines.append(" ".join(current_words))
+            current_words = [word]
+            current_len = word_len
+
+    if current_words:
+        lines.append(" ".join(current_words))
+
+    return "\n".join(reorder_rtl_line(line) for line in lines)
