@@ -441,16 +441,20 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.3 (2026-02-17)
+
+**Bug Fixes**
+- Fixed MPRIS silently disabled on Python 3.14 — `from __future__ import annotations` caused dbus-next to reject `-> None` return types, disabling media keys and desktop player widgets
+- Fixed RTL lyrics line-wrap reading bottom-to-top — long lines are now pre-wrapped in logical order before reordering, so sentence start is on top
+
 ### v1.2.2 (2026-02-15)
 
 **Bug Fixes**
 - Fixed play/pause doing nothing after session restore — player had no stream loaded so toggling pause was a no-op; now starts playback from the restored queue position
 - Fixed MPRIS play/pause also being a no-op after session restore (same root cause)
 - Fixed RTL (Hebrew, Arabic, etc.) lyrics displaying in wrong order — segment-level reordering now renders bidirectional text correctly
-- Fixed RTL lyrics line-wrap reading bottom-to-top — long lines are now pre-wrapped in logical order before reordering, so sentence start is on top
 - Fixed lyrics sidebar crash from dict-style access on LyricLine objects — switched to attribute access
 - Fixed lyrics sidebar unnecessarily reloading when reopened for the same track
-- Fixed MPRIS silently disabled on Python 3.14 — `from __future__ import annotations` caused dbus-next to reject `-> None` return types, disabling media keys and desktop player widgets
 
 **Features**
 - Right-click on playback bar (album art or track info) now opens the track actions popup, matching right-click behavior on track tables
