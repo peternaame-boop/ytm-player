@@ -84,13 +84,13 @@ try:
             return []
 
         @method()
-        async def Quit(self) -> None:
+        async def Quit(self):  # noqa: N802
             cb = self._callbacks.get("quit")
             if cb:
                 await cb()
 
         @method()
-        async def Raise(self) -> None:
+        async def Raise(self):  # noqa: N802
             pass  # TUI cannot raise a window.
 
     # ------------------------------------------------------------------ #
@@ -123,7 +123,7 @@ try:
             return self._volume
 
         @Volume.setter  # type: ignore[attr-defined]
-        def Volume(self, value: "d") -> None:  # type: ignore[override]
+        def Volume(self, value: "d"):  # type: ignore[override]
             self._volume = max(0.0, min(1.0, value))
 
         @dbus_property(access=PropertyAccess.READ)
@@ -169,49 +169,49 @@ try:
         # --- Methods ---------------------------------------------------
 
         @method()
-        async def Play(self) -> None:
+        async def Play(self):  # noqa: N802
             cb = self._callbacks.get("play")
             if cb:
                 await cb()
 
         @method()
-        async def Pause(self) -> None:
+        async def Pause(self):  # noqa: N802
             cb = self._callbacks.get("pause")
             if cb:
                 await cb()
 
         @method()
-        async def PlayPause(self) -> None:
+        async def PlayPause(self):  # noqa: N802
             cb = self._callbacks.get("play_pause")
             if cb:
                 await cb()
 
         @method()
-        async def Stop(self) -> None:
+        async def Stop(self):  # noqa: N802
             cb = self._callbacks.get("stop")
             if cb:
                 await cb()
 
         @method()
-        async def Next(self) -> None:
+        async def Next(self):  # noqa: N802
             cb = self._callbacks.get("next")
             if cb:
                 await cb()
 
         @method()
-        async def Previous(self) -> None:
+        async def Previous(self):  # noqa: N802
             cb = self._callbacks.get("previous")
             if cb:
                 await cb()
 
         @method()
-        async def Seek(self, offset: "x") -> None:
+        async def Seek(self, offset: "x"):  # noqa: N802
             cb = self._callbacks.get("seek")
             if cb:
                 await cb(offset)
 
         @method()
-        async def SetPosition(self, track_id: "o", position: "x") -> None:
+        async def SetPosition(self, track_id: "o", position: "x"):  # noqa: N802
             cb = self._callbacks.get("set_position")
             if cb:
                 await cb(position)
