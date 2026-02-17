@@ -1093,7 +1093,9 @@ class YTMPlayerApp(App):
                 # Likely a systemic issue (stale session, network) — reset
                 # the yt-dlp instance so the next attempt gets a fresh one.
                 self.stream_resolver.clear_cache()
-                logger.warning("Reset yt-dlp after %d consecutive stream failures", self._consecutive_failures)
+                logger.warning(
+                    "Reset yt-dlp after %d consecutive stream failures", self._consecutive_failures
+                )
                 self.notify(
                     "Multiple tracks failed — stream resolver reset. Try playing again.",
                     severity="error",
@@ -1116,7 +1118,9 @@ class YTMPlayerApp(App):
                     self.call_later(lambda: self.run_worker(self.play_track(next_track)))
             else:
                 self.stream_resolver.clear_cache()
-                logger.warning("Reset yt-dlp after %d consecutive play failures", self._consecutive_failures)
+                logger.warning(
+                    "Reset yt-dlp after %d consecutive play failures", self._consecutive_failures
+                )
                 self.notify(
                     "Multiple tracks failed — stream resolver reset. Try playing again.",
                     severity="error",
