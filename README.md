@@ -450,6 +450,7 @@ MIT — see [LICENSE](LICENSE).
 - Fixed RTL lyrics line-wrap reading bottom-to-top — long lines are now pre-wrapped in logical order before reordering, so sentence start is on top
 - Fixed lyrics sidebar crash from dict-style access on LyricLine objects — switched to attribute access
 - Fixed lyrics sidebar unnecessarily reloading when reopened for the same track
+- Fixed MPRIS silently disabled on Python 3.14 — `from __future__ import annotations` caused dbus-next to reject `-> None` return types, disabling media keys and desktop player widgets
 
 **Features**
 - Right-click on playback bar (album art or track info) now opens the track actions popup, matching right-click behavior on track tables
