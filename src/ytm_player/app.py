@@ -1090,8 +1090,12 @@ class YTMPlayerApp(App):
                 if next_track:
                     self.call_later(lambda: self.run_worker(self.play_track(next_track)))
             else:
+                # Likely a systemic issue (stale session, network) — reset
+                # the yt-dlp instance so the next attempt gets a fresh one.
+                self.stream_resolver.clear_cache()
+                logger.warning("Reset yt-dlp after %d consecutive stream failures", self._consecutive_failures)
                 self.notify(
-                    "Multiple tracks failed in a row. Check your internet connection or try again later.",
+                    "Multiple tracks failed — stream resolver reset. Try playing again.",
                     severity="error",
                     timeout=6,
                 )
@@ -1110,6 +1114,15 @@ class YTMPlayerApp(App):
                 next_track = self.queue.next_track()
                 if next_track:
                     self.call_later(lambda: self.run_worker(self.play_track(next_track)))
+            else:
+                self.stream_resolver.clear_cache()
+                logger.warning("Reset yt-dlp after %d consecutive play failures", self._consecutive_failures)
+                self.notify(
+                    "Multiple tracks failed — stream resolver reset. Try playing again.",
+                    severity="error",
+                    timeout=6,
+                )
+                self._consecutive_failures = 0
             return
         self._track_start_position = 0.0
 
@@ -1159,7 +1172,7 @@ class YTMPlayerApp(App):
             # Fetch radio/autoplay suggestions.
             await self._fetch_and_play_radio()
         else:
-            self.notify("Queue is empty.", timeout=2)
+            self.notify("End of queue.", timeout=2)
 
     async def _play_previous(self) -> None:
         """Go back to the previous track in the queue."""

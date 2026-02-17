@@ -441,6 +441,13 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.4 (2026-02-17)
+
+**Bug Fixes**
+- Fixed intermittent playback stopping mid-queue — consecutive stream failures (stale yt-dlp session, network hiccup) now reset the stream resolver automatically, preventing the queue index from advancing past all remaining tracks
+- Fixed playlists appearing empty after prolonged use — YTMusic API client now auto-reinitializes after 3 consecutive failures (handles expired sessions/cookies)
+- Fixed misleading "Queue is empty" message when queue has tracks but playback index reached the end — now says "End of queue"
+
 ### v1.2.3 (2026-02-17)
 
 **Bug Fixes**

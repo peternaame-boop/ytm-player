@@ -15,6 +15,10 @@ from ytm_player.services.auth import AuthManager
 
 logger = logging.getLogger(__name__)
 
+# After this many consecutive API failures, re-create the YTMusic client
+# in case the session has gone stale (expired cookies, broken connection).
+_MAX_API_FAILURES_BEFORE_REINIT = 3
+
 
 class YTMusicService:
     """Async wrapper around ytmusicapi.YTMusic.
@@ -29,6 +33,7 @@ class YTMusicService:
         self._auth_path = auth_path
         self._auth_manager = auth_manager
         self._ytm: YTMusic | None = None
+        self._consecutive_api_failures: int = 0
 
     @property
     def client(self) -> YTMusic:
@@ -43,10 +48,23 @@ class YTMusicService:
     async def _call(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """Run a sync ytmusicapi method in a thread with timeout."""
         timeout = get_settings().playback.api_timeout
-        return await asyncio.wait_for(
-            asyncio.to_thread(func, *args, **kwargs),
-            timeout=timeout,
-        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(func, *args, **kwargs),
+                timeout=timeout,
+            )
+            self._consecutive_api_failures = 0
+            return result
+        except Exception:
+            self._consecutive_api_failures += 1
+            if self._consecutive_api_failures >= _MAX_API_FAILURES_BEFORE_REINIT:
+                logger.warning(
+                    "Re-initializing YTMusic client after %d consecutive API failures",
+                    self._consecutive_api_failures,
+                )
+                self._ytm = None
+                self._consecutive_api_failures = 0
+            raise
 
     # ------------------------------------------------------------------
     # Search
