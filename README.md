@@ -45,6 +45,9 @@ sudo apt install mpv
 # Fedora
 sudo dnf install mpv
 
+# NixOS (add to configuration.nix systemPackages)
+# mpv
+
 # macOS (Homebrew)
 brew install mpv
 
@@ -63,6 +66,20 @@ cd ytm-player
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
+```
+
+#### NixOS note
+
+NixOS doesn't expose `libmpv.so` in standard library paths. Add this to your shell config:
+
+```fish
+# Fish (~/.config/fish/config.fish)
+set -gx LD_LIBRARY_PATH /run/current-system/sw/lib $LD_LIBRARY_PATH
+```
+
+```bash
+# Bash/Zsh (~/.bashrc or ~/.zshrc)
+export LD_LIBRARY_PATH="/run/current-system/sw/lib:$LD_LIBRARY_PATH"
 ```
 
 #### Optional extras
