@@ -46,7 +46,7 @@ sudo apt install mpv
 sudo dnf install mpv
 
 # NixOS (add to configuration.nix systemPackages)
-# mpv
+mpv
 
 # macOS (Homebrew)
 brew install mpv
