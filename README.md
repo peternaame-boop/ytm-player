@@ -263,8 +263,8 @@ prefetch_next = true
 
 [yt_dlp]
 cookies_file = ""            # Optional: path to yt-dlp Netscape cookies.txt
-remote_components = ""       # Optional: same as yt-dlp --remote-components
-js_runtimes = ""             # Optional: e.g. "bun"
+remote_components = ["ejs:github"]  # Optional: same as repeated --remote-components
+js_runtimes = ["bun"]              # Optional: converted to yt-dlp js_runtimes dict
 
 [ui]
 album_art = true

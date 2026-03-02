@@ -23,6 +23,7 @@ from ytm_player.config.paths import (
     SECURE_FILE_MODE,
 )
 from ytm_player.config.settings import get_settings
+from ytm_player.services.yt_dlp_options import normalize_cookiefile
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ class AuthManager:
         Called when the app detects an auth failure at runtime. Returns
         True if fresh cookies were extracted and validation passed.
         """
-        cookies_file = get_settings().yt_dlp.cookies_file.strip()
+        cookies_file = normalize_cookiefile(get_settings().yt_dlp.cookies_file)
         if cookies_file and self._extract_and_save_from_cookies_file(Path(cookies_file)):
             return self.validate()
 
@@ -175,7 +176,7 @@ class AuthManager:
         print("=" * 60)
         print()
 
-        cookies_file = get_settings().yt_dlp.cookies_file.strip()
+        cookies_file = normalize_cookiefile(get_settings().yt_dlp.cookies_file)
         if cookies_file:
             print(f"  Trying cookies file: {cookies_file}")
             if self._extract_and_save_from_cookies_file(Path(cookies_file)):
