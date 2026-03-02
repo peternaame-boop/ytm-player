@@ -1167,14 +1167,19 @@ class YTMPlayerApp(App):
         elif self.player:
             await self.player.toggle_pause()
 
-    async def _play_next(self) -> None:
+    async def _play_next(self, *, ended_track: dict | None = None) -> None:
         """Advance to the next track in the queue and play it."""
         track = self.queue.next_track()
         if track:
             await self.play_track(track)
-        elif self.settings.playback.autoplay and self.player and self.player.current_track:
-            # Fetch radio/autoplay suggestions.
-            await self._fetch_and_play_radio()
+        elif self.settings.playback.autoplay:
+            # Use the ended track for radio seed when player.current_track
+            # is already None (cleared by _on_end_file before we get here).
+            seed = ended_track or (self.player.current_track if self.player else None)
+            if seed:
+                await self._fetch_and_play_radio(seed_track=seed)
+            else:
+                self.notify("End of queue.", timeout=2)
         else:
             self.notify("End of queue.", timeout=2)
 
@@ -1189,12 +1194,20 @@ class YTMPlayerApp(App):
         if track:
             await self.play_track(track)
 
-    async def _fetch_and_play_radio(self) -> None:
-        """Fetch radio suggestions for the current track and continue playback."""
-        if not self.ytmusic or not self.player or not self.player.current_track:
+    async def _fetch_and_play_radio(self, seed_track: dict | None = None) -> None:
+        """Fetch radio suggestions and continue playback.
+
+        *seed_track* is used as the radio seed.  Falls back to the player's
+        current track if not provided.
+        """
+        if not self.ytmusic:
             return
 
-        video_id = self.player.current_track.get("video_id", "")
+        track = seed_track or (self.player.current_track if self.player else None)
+        if not track:
+            return
+
+        video_id = track.get("video_id", "")
         if not video_id:
             return
 
@@ -1218,7 +1231,8 @@ class YTMPlayerApp(App):
         """Handle track ending -- advance to next.
 
         Uses ``_advancing`` flag to prevent duplicate end-file events
-        from advancing the queue twice.
+        from advancing the queue twice.  The *event* dict may contain a
+        ``track`` key with the ended track's info (for history logging).
         """
         if self._advancing:
             logger.debug("Ignoring duplicate track-end while already advancing")
@@ -1226,7 +1240,13 @@ class YTMPlayerApp(App):
         self._advancing = True
         logger.debug("Track ended (event=%s), advancing to next", event)
         try:
-            await self._play_next()
+            # Log listen time using the ended track passed in the event,
+            # since player.current_track is already None by the time this
+            # callback runs.
+            ended_track = event.get("track") if isinstance(event, dict) else None
+            if ended_track:
+                await self._log_listen_for(ended_track)
+            await self._play_next(ended_track=ended_track)
         except Exception:
             logger.debug("Error in _on_track_end", exc_info=True)
         finally:
@@ -1385,6 +1405,26 @@ class YTMPlayerApp(App):
             try:
                 await self.history.log_play(
                     track=self.player.current_track,
+                    listened_seconds=listened,
+                    source="tui",
+                )
+            except Exception:
+                logger.exception("Failed to log play history")
+
+    async def _log_listen_for(self, track: dict) -> None:
+        """Log listen duration for an explicit track dict.
+
+        Used by ``_on_track_end`` where ``player.current_track`` has
+        already been cleared by the time the callback executes.
+        """
+        if not self.history or not self.player:
+            return
+
+        listened = int(self.player.position - self._track_start_position)
+        if listened > 0:
+            try:
+                await self.history.log_play(
+                    track=track,
                     listened_seconds=listened,
                     source="tui",
                 )

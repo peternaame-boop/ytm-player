@@ -64,6 +64,9 @@ class Player:
         self._end_file_skip: int = 0
         self._skip_lock = threading.Lock()
         self._last_position_dispatch: float = 0.0
+        # Strong references to dispatched async tasks so they aren't GC'd
+        # before execution (the classic asyncio.create_task footgun).
+        self._background_tasks: set[asyncio.Task] = set()
 
         self._mpv = self._init_mpv()
 
@@ -111,15 +114,25 @@ class Player:
 
         @instance.event_callback("end-file")
         def _on_end_file(event: Any) -> None:
+            reason = getattr(event, "reason", None) if event else None
             with self._skip_lock:
                 if self._end_file_skip > 0:
                     self._end_file_skip -= 1
                     return
-                # Track ended naturally — clear so play() won't
-                # increment _end_file_skip for an already-idle mpv.
+                if self._current_track is None:
+                    return  # Already idle, nothing to do.
+                # Capture track info before clearing — the app needs it
+                # for history logging and autoplay decisions.
+                ended_track = self._current_track
+                # Clear so play() won't increment _end_file_skip for
+                # an already-idle mpv.
                 self._current_track = None
-            reason = getattr(event, "reason", None) if event else None
-            self._dispatch(PlayerEvent.TRACK_END, {"reason": reason})
+            # Only auto-advance on natural EOF.  Errors are dispatched
+            # separately; stop/redirect/quit are intentional.
+            if reason == "error":
+                self._dispatch(PlayerEvent.ERROR, "stream error")
+            elif reason is None or reason == "eof":
+                self._dispatch(PlayerEvent.TRACK_END, {"reason": reason, "track": ended_track})
 
         return instance
 
@@ -172,7 +185,9 @@ class Player:
                 except Exception:
                     logger.debug("Async callback error for %s", event, exc_info=True)
 
-            asyncio.create_task(_safe_wrapper())
+            task = asyncio.create_task(_safe_wrapper())
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
         def _safe_sync(sync_fn: Any, call_args: tuple) -> None:
             """Run a sync callback with error handling on the event loop."""

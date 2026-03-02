@@ -161,18 +161,23 @@ class QueueManager:
             return
 
         with self._lock:
+            was_empty = len(self._tracks) == 0
             start_idx = len(self._tracks)
             self._tracks.extend(tracks)
             new_indices = list(range(start_idx, start_idx + len(tracks)))
 
             if self._shuffle:
-                # Insert all new indices at random future positions in shuffle order.
-                insert_after = self._shuffle_position + 1 if self._shuffle_position >= 0 else 0
-                # Collect future positions and shuffle new indices into them.
-                random.shuffle(new_indices)
-                for new_idx in new_indices:
-                    pos = random.randint(insert_after, len(self._shuffle_order))
-                    self._shuffle_order.insert(pos, new_idx)
+                if was_empty:
+                    # Fresh queue after clear() — do a full shuffle build
+                    # instead of piecemeal insertion into an empty list.
+                    self._rebuild_shuffle(keep_current=False)
+                else:
+                    # Insert new indices at random future positions.
+                    insert_after = self._shuffle_position + 1 if self._shuffle_position >= 0 else 0
+                    random.shuffle(new_indices)
+                    for new_idx in new_indices:
+                        pos = random.randint(insert_after, len(self._shuffle_order))
+                        self._shuffle_order.insert(pos, new_idx)
 
     def remove(self, index: int) -> None:
         """Remove the track at the given index (in visible/playback order)."""
@@ -200,7 +205,13 @@ class QueueManager:
                         self._current_index = len(self._tracks) - 1
 
     def clear(self) -> None:
-        """Remove all tracks from the queue."""
+        """Remove all tracks from the queue.
+
+        Resets shuffle state so that the next ``add_multiple`` + ``jump_to``
+        sequence starts from a clean slate.  The user-visible shuffle
+        *preference* (on/off) is preserved — the internal ordering is rebuilt
+        automatically when new tracks are added.
+        """
         with self._lock:
             self._tracks.clear()
             self._current_index = -1
@@ -442,11 +453,15 @@ class QueueManager:
     def jump_to(self, index: int) -> dict | None:
         """Jump to a specific index in the visible order and return the track."""
         with self._lock:
-            if not 0 <= index < len(self._tracks):
-                return None
             if self._shuffle:
+                if not 0 <= index < len(self._shuffle_order):
+                    return None
                 self._shuffle_position = index
+                # Keep _current_index in sync as a safety fallback.
+                self._current_index = self._shuffle_order[index]
             else:
+                if not 0 <= index < len(self._tracks):
+                    return None
                 self._current_index = index
             real = self._real_index()
             if 0 <= real < len(self._tracks):
