@@ -115,9 +115,9 @@ ytm setup
 
 The setup wizard has two modes:
 
-**Automatic (preferred):** It scans your installed browsers (Helium, Chrome, Chromium, Brave, Firefox, Edge, Vivaldi, Opera) for YouTube Music cookies. If found, credentials are extracted automatically — no manual steps needed. Just make sure you're logged into [music.youtube.com](https://music.youtube.com) in at least one browser.
+**Automatic (preferred):** If `[yt_dlp].cookies_file` is set, setup first tries that Netscape cookies file (same format as `yt-dlp --cookies FILE`). If not configured or invalid, it scans installed browsers (Helium, Chrome, Chromium, Brave, Firefox, Edge, Vivaldi, Opera) for YouTube Music cookies.
 
-**Manual fallback:** If auto-detection fails (e.g. cookies are encrypted or browser isn't supported), the wizard walks you through pasting raw request headers:
+**Manual fallback:** If cookie-file + auto-detection fail (e.g. expired cookies, unsupported browser), the wizard walks you through pasting raw request headers:
 
 1. Open [music.youtube.com](https://music.youtube.com) in your browser
 2. Open DevTools (F12) → Network tab
@@ -260,6 +260,11 @@ seek_step = 5                # seconds per seek
 enabled = true
 max_size_mb = 1024           # 1GB default
 prefetch_next = true
+
+[yt_dlp]
+cookies_file = ""            # Optional: path to yt-dlp Netscape cookies.txt
+remote_components = ""       # Optional: same as yt-dlp --remote-components
+js_runtimes = ""             # Optional: e.g. "bun"
 
 [ui]
 album_art = true

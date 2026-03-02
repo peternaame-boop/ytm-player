@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 
 import requests.exceptions
@@ -21,6 +22,7 @@ from ytm_player.config.paths import (
     CONFIG_DIR,
     SECURE_FILE_MODE,
 )
+from ytm_player.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +146,15 @@ class AuthManager:
     # ── Auto-refresh ──────────────────────────────────────────────────
 
     def try_auto_refresh(self) -> bool:
-        """Attempt to silently refresh auth from the browser.
+        """Attempt to silently refresh auth from cookies/browser.
 
         Called when the app detects an auth failure at runtime. Returns
         True if fresh cookies were extracted and validation passed.
         """
+        cookies_file = get_settings().yt_dlp.cookies_file.strip()
+        if cookies_file and self._extract_and_save_from_cookies_file(Path(cookies_file)):
+            return self.validate()
+
         browser = self._detect_browser()
         if browser is None:
             return False
@@ -168,6 +174,14 @@ class AuthManager:
         print("  YouTube Music Authentication")
         print("=" * 60)
         print()
+
+        cookies_file = get_settings().yt_dlp.cookies_file.strip()
+        if cookies_file:
+            print(f"  Trying cookies file: {cookies_file}")
+            if self._extract_and_save_from_cookies_file(Path(cookies_file)):
+                return True
+            print("  Cookies file extraction failed. Falling back to browser/manual setup.")
+            print()
 
         browser = self._detect_browser()
         if browser:
@@ -208,6 +222,29 @@ class AuthManager:
                 continue
         return None
 
+    def _extract_and_save_from_cookies_file(self, cookies_file: Path) -> bool:
+        """Extract YouTube cookies from a Netscape cookies.txt file and write auth.json."""
+        if not cookies_file.exists():
+            logger.warning("Cookies file does not exist: %s", cookies_file)
+            return False
+
+        jar = MozillaCookieJar(str(cookies_file))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except Exception as exc:
+            logger.warning("Failed to load cookies file %s: %s", cookies_file, exc)
+            return False
+
+        yt_cookies = [c for c in jar if c.domain.endswith("youtube.com")]
+        if not yt_cookies:
+            logger.warning("No youtube.com cookies found in %s", cookies_file)
+            return False
+
+        if self._save_youtube_cookies(yt_cookies):
+            print(f"  Cookies extracted from file and saved: {cookies_file}")
+            return True
+        return False
+
     def _extract_and_save(self, browser: str) -> bool:
         """Extract YouTube cookies from *browser* and write auth.json."""
         try:
@@ -226,7 +263,13 @@ class AuthManager:
             logger.warning("No .youtube.com cookies found in %s", browser)
             return False
 
-        cookie_str = "; ".join(f"{c.name}={c.value}" for c in yt_cookies)
+        if self._save_youtube_cookies(yt_cookies):
+            print(f"  Cookies extracted from {browser} and saved.")
+            return True
+        return False
+
+    def _save_youtube_cookies(self, cookies: list) -> bool:
+        cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
 
         # Verify we have the critical SAPISID cookie.
         try:
@@ -249,8 +292,6 @@ class AuthManager:
         fd = os.open(str(self._auth_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SECURE_FILE_MODE)
         with os.fdopen(fd, "w") as f:
             json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
-
-        print(f"  Cookies extracted from {browser} and saved.")
         return True
 
     # ── Manual header paste (fallback) ───────────────────────────────

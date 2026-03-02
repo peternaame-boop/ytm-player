@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 
+from ytm_player.config.settings import get_settings
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,8 @@ class StreamResolver:
 
     def _build_ydl_opts(self) -> dict:
         """Build yt-dlp options for audio extraction."""
-        return {
+        settings = get_settings().yt_dlp
+        opts = {
             "format": QUALITY_FORMATS.get(self._quality, QUALITY_FORMATS["high"]),
             "quiet": True,
             "no_warnings": True,
@@ -81,6 +83,13 @@ class StreamResolver:
             "writeinfojson": False,
             "writethumbnail": False,
         }
+        if settings.cookies_file:
+            opts["cookiefile"] = settings.cookies_file
+        if settings.remote_components:
+            opts["remote_components"] = settings.remote_components
+        if settings.js_runtimes:
+            opts["js_runtimes"] = settings.js_runtimes
+        return opts
 
     def _get_ydl(self):  # noqa: ANN201
         """Return a reusable YoutubeDL instance, creating it lazily."""

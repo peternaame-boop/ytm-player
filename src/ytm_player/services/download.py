@@ -44,7 +44,8 @@ class DownloadService:
         self._download_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_opts(self, output_path: str) -> dict:
-        return {
+        yt_dlp_settings = get_settings().yt_dlp
+        opts = {
             "format": _DOWNLOAD_FORMAT,
             "outtmpl": output_path,
             "quiet": True,
@@ -61,6 +62,13 @@ class DownloadService:
                 }
             ],
         }
+        if yt_dlp_settings.cookies_file:
+            opts["cookiefile"] = yt_dlp_settings.cookies_file
+        if yt_dlp_settings.remote_components:
+            opts["remote_components"] = yt_dlp_settings.remote_components
+        if yt_dlp_settings.js_runtimes:
+            opts["js_runtimes"] = yt_dlp_settings.js_runtimes
+        return opts
 
     def _download_sync(self, video_id: str) -> DownloadResult:
         """Synchronous download (runs in a thread)."""
