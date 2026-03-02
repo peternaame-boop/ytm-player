@@ -12,6 +12,7 @@ from textual.widgets.data_table import Column, RowKey
 
 from ytm_player.config import Action
 from ytm_player.config.settings import get_settings
+from ytm_player.utils.bidi import reorder_rtl_line
 from ytm_player.utils.formatting import extract_artist, extract_duration, format_duration
 
 logger = logging.getLogger(__name__)
@@ -169,9 +170,9 @@ class TrackTable(DataTable):
 
     def _add_track_row(self, index: int, track: dict) -> RowKey:
         """Add a single track as a row in the table."""
-        title = track.get("title", "Unknown")
-        artist = extract_artist(track)
-        album = track.get("album") or ""
+        title = reorder_rtl_line(track.get("title", "Unknown"))
+        artist = reorder_rtl_line(extract_artist(track))
+        album = reorder_rtl_line(track.get("album") or "")
         duration = extract_duration(track)
 
         cells: list[str | int] = []

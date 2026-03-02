@@ -1247,6 +1247,8 @@ class YTMPlayerApp(App):
             if ended_track:
                 await self._log_listen_for(ended_track)
             await self._play_next(ended_track=ended_track)
+        except asyncio.CancelledError:
+            logger.debug("_on_track_end task was cancelled")
         except Exception:
             logger.debug("Error in _on_track_end", exc_info=True)
         finally:

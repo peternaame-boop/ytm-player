@@ -114,7 +114,11 @@ class Player:
 
         @instance.event_callback("end-file")
         def _on_end_file(event: Any) -> None:
-            reason = getattr(event, "reason", None) if event else None
+            # The reason code lives on event.data (MpvEventEndFile), not
+            # on the MpvEvent itself.  Extract the integer reason:
+            #   0 = EOF, 1 = RESTARTED, 2 = ABORTED, 3 = QUIT, 4 = ERROR, 5 = REDIRECT
+            data = getattr(event, "data", None) if event else None
+            reason = getattr(data, "reason", None) if data else None
             with self._skip_lock:
                 if self._end_file_skip > 0:
                     self._end_file_skip -= 1
@@ -127,23 +131,28 @@ class Player:
                 # Clear so play() won't increment _end_file_skip for
                 # an already-idle mpv.
                 self._current_track = None
-            # Only auto-advance on natural EOF.  Errors are dispatched
-            # separately; stop/redirect/quit are intentional.
-            if reason == "error":
+            # Only auto-advance on natural EOF (0).  Errors (4) are
+            # dispatched separately.  Everything else (stop, redirect,
+            # quit, restart) is intentional — ignore.
+            if reason == 4:  # ERROR
                 self._dispatch(PlayerEvent.ERROR, "stream error")
-            elif reason is None or reason == "eof":
+            elif reason is None or reason == 0:  # EOF
                 self._dispatch(PlayerEvent.TRACK_END, {"reason": reason, "track": ended_track})
 
         return instance
 
     def _get_loop(self) -> asyncio.AbstractEventLoop | None:
-        """Get the event loop, caching the reference."""
-        if self._loop is None or self._loop.is_closed():
-            try:
-                self._loop = asyncio.get_running_loop()
-            except RuntimeError:
-                self._loop = None
-        return self._loop
+        """Get the event loop, using the cached reference.
+
+        Only ``set_event_loop()`` should write ``self._loop``.  If the
+        cached loop is closed we return None but never clobber the field
+        — otherwise a transient closed-loop check from mpv's callback
+        thread would permanently destroy the reference.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return None
+        return loop
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Explicitly set the asyncio event loop for callback dispatch."""

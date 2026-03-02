@@ -16,6 +16,7 @@ from ytm_player.services.queue import RepeatMode
 from ytm_player.ui.theme import get_theme
 from ytm_player.ui.widgets.album_art import AlbumArt
 from ytm_player.ui.widgets.progress_bar import PlaybackProgress
+from ytm_player.utils.bidi import reorder_rtl_line
 from ytm_player.utils.formatting import extract_artist, truncate
 
 logger = logging.getLogger(__name__)
@@ -72,13 +73,17 @@ class _TrackInfo(Widget):
             artist_w = min(len(self.artist), max_w // 3)
             album_w = max_w - title_w - artist_w - 8
 
-            result.append(truncate(self.title, title_w), style=f"bold {theme.foreground}")
-            if self.artist:
+            title = reorder_rtl_line(self.title)
+            artist = reorder_rtl_line(self.artist)
+            album = reorder_rtl_line(self.album)
+
+            result.append(truncate(title, title_w), style=f"bold {theme.foreground}")
+            if artist:
                 result.append(" \u2014 ", style=theme.muted_text)
-                result.append(truncate(self.artist, artist_w), style=theme.secondary)
-            if self.album:
+                result.append(truncate(artist, artist_w), style=theme.secondary)
+            if album:
                 result.append(" \u2014 ", style=theme.muted_text)
-                result.append(truncate(self.album, max(0, album_w)), style=theme.muted_text)
+                result.append(truncate(album, max(0, album_w)), style=theme.muted_text)
         else:
             result.append("No track playing", style=theme.muted_text)
 
