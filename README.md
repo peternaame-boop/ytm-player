@@ -480,13 +480,18 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.8 (2026-03-02)
+
+**Bug Fixes**
+- Fixed RTL text (Arabic/Hebrew) display — removed manual word-reordering that double-reversed text on terminals with native BiDi support (Konsole, foot, WezTerm); the terminal's own Unicode BiDi algorithm now handles word order correctly
+- Fixed RTL titles in playback bar pulling volume/repeat/shuffle widgets into the RTL context — track info text is now wrapped in a Unicode Left-to-Right Isolate (U+2066...U+2069) to contain the directional effect
+
 ### v1.2.7 (2026-03-02)
 
 **Bug Fixes**
 - Fixed auto-advance stopping after song ends — `_on_end_file` was reading the `reason` field from the wrong mpv event object (always `None`), causing stream errors to silently trigger advance instead of being handled; now correctly reads from `event.data` and compares integer reason codes
 - Fixed event loop reference permanently lost under race condition — `_get_loop()` could clobber `self._loop` with `None` when called from mpv's callback thread, silently dropping all future player events forever; now returns `None` without overwriting the cached reference
 - Fixed `CancelledError` not caught in track-end handler — `asyncio.CancelledError` is a `BaseException` since Python 3.9 and was invisible to `except Exception`, silently losing the advance call
-- Fixed RTL text (Arabic/Hebrew) displaying with wrong word order in track tables and playback bar — applied existing `reorder_rtl_line()` to title, artist, and album fields
 
 ### v1.2.6 (2026-03-02)
 
