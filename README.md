@@ -2,7 +2,7 @@
 
 A full-featured YouTube Music player for the terminal. Browse your library, search, queue tracks, and control playback — all from a TUI with vim-style keybindings. Runs on Linux, macOS, and Windows.
 
-![ytm-player screenshot](screenshot-v4.png)
+![ytm-player screenshot](https://raw.githubusercontent.com/peternaame-boop/ytm-player/master/screenshot-v4.png)
 
 ## Features
 
@@ -335,7 +335,7 @@ playback_bar_bg = "#1a1a1a"
 
 Import your Spotify playlists into YouTube Music — from the TUI or CLI.
 
-![Spotify import popup](screenshot-spotify-import.png)
+![Spotify import popup](https://raw.githubusercontent.com/peternaame-boop/ytm-player/master/screenshot-spotify-import.png)
 
 ### How it works
 
@@ -480,38 +480,16 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
-### v1.2.8 (2026-03-02)
-
-**Bug Fixes**
-- Fixed RTL text (Arabic/Hebrew) display — removed manual word-reordering that double-reversed text on terminals with native BiDi support (Konsole, foot, WezTerm); the terminal's own Unicode BiDi algorithm now handles word order correctly
-- Fixed RTL titles in playback bar pulling volume/repeat/shuffle widgets into the RTL context — track info text is now wrapped in a Unicode Left-to-Right Isolate (U+2066...U+2069) to contain the directional effect
-
-### v1.2.7 (2026-03-02)
-
-**Bug Fixes**
-- Fixed auto-advance stopping after song ends — `_on_end_file` was reading the `reason` field from the wrong mpv event object (always `None`), causing stream errors to silently trigger advance instead of being handled; now correctly reads from `event.data` and compares integer reason codes
-- Fixed event loop reference permanently lost under race condition — `_get_loop()` could clobber `self._loop` with `None` when called from mpv's callback thread, silently dropping all future player events forever; now returns `None` without overwriting the cached reference
-- Fixed `CancelledError` not caught in track-end handler — `asyncio.CancelledError` is a `BaseException` since Python 3.9 and was invisible to `except Exception`, silently losing the advance call
-
-### v1.2.6 (2026-03-02)
+### v1.2.9 (2026-03-02)
 
 **New**
 - Published to PyPI — install with `pip install ytm-player` or `pipx install ytm-player`
 
 **Bug Fixes**
-- Fixed column resize triggering sort — dragging a column edge to resize now correctly suppresses the click event that would otherwise fire a sort via `HeaderSelected`; uses Textual's `suppress_click()` to prevent click generation entirely during resize drags
-- Fixed Title column not resizable — the auto-fill logic (`_fill_title_column()`) immediately reclaimed any space after dragging; now skips auto-fill during active drag and preserves user-set width until the next window resize
-
-### v1.2.5 (2026-03-02)
-
-**Bug Fixes**
-- Fixed track auto-advance failing after first song ends — async tasks dispatched from mpv's end-file callback could be garbage-collected before executing (the classic `asyncio.create_task` footgun); player now holds strong references to all dispatched tasks
-- Fixed end-file reason not being filtered — stream errors (expired URLs, network drops) were treated as natural track endings, causing unexpected auto-advance; only EOF now triggers queue advancement, errors dispatch separately
-- Fixed duplicate end-file dispatch when `_current_track` was already None — added guard to prevent spurious TRACK_END events on an idle player
-- Fixed autoplay/radio never triggering at end of queue — `_on_end_file` cleared `player.current_track` before the callback ran, so the autoplay branch always saw None; ended track info is now passed through the event
-- Fixed listen history not logged for naturally ended tracks (same `current_track = None` race)
-- Fixed shuffle state corrupting queue after clear — `clear()` reset `_shuffle_order` but left `_shuffle = True`, causing `add_multiple()` to do piecemeal random insertion into an empty list instead of a proper full shuffle build
-- Fixed `jump_to()` not syncing `_current_index` fallback when shuffle is on — if `_shuffle_position` ever went out of range, `_real_index()` fell back to `-1`, returning None for all queue operations
+- Fixed track auto-advance stopping after song ends — three root causes: mpv end-file reason read from wrong event object, event loop reference permanently lost under thread race condition, and `CancelledError` not caught in track-end handler
+- Fixed RTL text (Arabic/Hebrew) display — removed manual word-reordering that double-reversed text on terminals with native BiDi support; added Unicode directional isolation to prevent RTL titles from displacing playback bar controls
+- Fixed shuffle state corrupting queue after clear, and `jump_to()` desyncing the current index when shuffle is on
+- Fixed column resize triggering sort, and Title column not staying at user-set width
 
 ### v1.2.4 (2026-02-17)
 
