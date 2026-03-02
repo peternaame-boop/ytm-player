@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ytm_player.config.paths import SECURE_FILE_MODE
 from ytm_player.config.settings import get_settings
+from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -62,13 +63,7 @@ class DownloadService:
                 }
             ],
         }
-        if yt_dlp_settings.cookies_file:
-            opts["cookiefile"] = yt_dlp_settings.cookies_file
-        if yt_dlp_settings.remote_components:
-            opts["remote_components"] = yt_dlp_settings.remote_components
-        if yt_dlp_settings.js_runtimes:
-            opts["js_runtimes"] = yt_dlp_settings.js_runtimes
-        return opts
+        return apply_configured_yt_dlp_options(opts, yt_dlp_settings)
 
     def _download_sync(self, video_id: str) -> DownloadResult:
         """Synchronous download (runs in a thread)."""

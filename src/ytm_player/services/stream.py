@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 
 from ytm_player.config.settings import get_settings
+from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -83,13 +84,7 @@ class StreamResolver:
             "writeinfojson": False,
             "writethumbnail": False,
         }
-        if settings.cookies_file:
-            opts["cookiefile"] = settings.cookies_file
-        if settings.remote_components:
-            opts["remote_components"] = settings.remote_components
-        if settings.js_runtimes:
-            opts["js_runtimes"] = settings.js_runtimes
-        return opts
+        return apply_configured_yt_dlp_options(opts, settings)
 
     def _get_ydl(self):  # noqa: ANN201
         """Return a reusable YoutubeDL instance, creating it lazily."""
