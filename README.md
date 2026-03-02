@@ -458,6 +458,17 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.5 (2026-03-02)
+
+**Bug Fixes**
+- Fixed track auto-advance failing after first song ends — async tasks dispatched from mpv's end-file callback could be garbage-collected before executing (the classic `asyncio.create_task` footgun); player now holds strong references to all dispatched tasks
+- Fixed end-file reason not being filtered — stream errors (expired URLs, network drops) were treated as natural track endings, causing unexpected auto-advance; only EOF now triggers queue advancement, errors dispatch separately
+- Fixed duplicate end-file dispatch when `_current_track` was already None — added guard to prevent spurious TRACK_END events on an idle player
+- Fixed autoplay/radio never triggering at end of queue — `_on_end_file` cleared `player.current_track` before the callback ran, so the autoplay branch always saw None; ended track info is now passed through the event
+- Fixed listen history not logged for naturally ended tracks (same `current_track = None` race)
+- Fixed shuffle state corrupting queue after clear — `clear()` reset `_shuffle_order` but left `_shuffle = True`, causing `add_multiple()` to do piecemeal random insertion into an empty list instead of a proper full shuffle build
+- Fixed `jump_to()` not syncing `_current_index` fallback when shuffle is on — if `_shuffle_position` ever went out of range, `_real_index()` fell back to `-1`, returning None for all queue operations
+
 ### v1.2.4 (2026-02-17)
 
 **Bug Fixes**
