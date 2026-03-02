@@ -28,6 +28,13 @@ class PlaybackSettings:
 
 
 @dataclass
+class YtDlpSettings:
+    cookies_file: str = ""
+    remote_components: str = ""
+    js_runtimes: str = ""
+
+
+@dataclass
 class SearchSettings:
     default_mode: str = "music"
     max_history: int = 500
@@ -85,6 +92,7 @@ class LastFMSettings:
 SECTION_MAP: dict[str, type] = {
     "general": GeneralSettings,
     "playback": PlaybackSettings,
+    "yt_dlp": YtDlpSettings,
     "search": SearchSettings,
     "cache": CacheSettings,
     "ui": UISettings,
@@ -99,6 +107,7 @@ SECTION_MAP: dict[str, type] = {
 class Settings:
     general: GeneralSettings = field(default_factory=GeneralSettings)
     playback: PlaybackSettings = field(default_factory=PlaybackSettings)
+    yt_dlp: YtDlpSettings = field(default_factory=YtDlpSettings)
     search: SearchSettings = field(default_factory=SearchSettings)
     cache: CacheSettings = field(default_factory=CacheSettings)
     ui: UISettings = field(default_factory=UISettings)

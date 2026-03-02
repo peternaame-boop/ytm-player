@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ytm_player.config.paths import SECURE_FILE_MODE
 from ytm_player.config.settings import get_settings
+from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,8 @@ class DownloadService:
         self._download_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_opts(self, output_path: str) -> dict:
-        return {
+        yt_dlp_settings = get_settings().yt_dlp
+        opts = {
             "format": _DOWNLOAD_FORMAT,
             "outtmpl": output_path,
             "quiet": True,
@@ -61,6 +63,7 @@ class DownloadService:
                 }
             ],
         }
+        return apply_configured_yt_dlp_options(opts, yt_dlp_settings)
 
     def _download_sync(self, video_id: str) -> DownloadResult:
         """Synchronous download (runs in a thread)."""
