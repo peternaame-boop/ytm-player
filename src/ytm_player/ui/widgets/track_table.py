@@ -98,6 +98,7 @@ class TrackTable(DataTable):
         self._resize_col: Column | None = None
         self._resize_start_x: int = 0
         self._resize_start_width: int = 0
+        self._title_manual_width: bool = False
 
     @property
     def tracks(self) -> list[dict]:
@@ -257,6 +258,8 @@ class TrackTable(DataTable):
 
     def _fill_title_column(self) -> None:
         """Expand the Title column to fill any remaining table width."""
+        if self._resize_col is not None or self._title_manual_width:
+            return
         if self.size.width == 0:
             return
         try:
@@ -315,6 +318,7 @@ class TrackTable(DataTable):
         if self._resize_col is None:
             return
         event.stop()
+        self.suppress_click()
         delta = event.screen_x - self._resize_start_x
         padding = 2 * self.cell_padding
         new_width = max(3, self._resize_start_width + delta - padding)
@@ -326,12 +330,19 @@ class TrackTable(DataTable):
     def on_mouse_up(self, event: MouseUp) -> None:
         """End column resize."""
         if self._resize_col is not None:
+            col_key = getattr(self._resize_col.key, "value", self._resize_col.key)
+            if col_key == "title":
+                self._title_manual_width = True
             self._resize_col = None
             self.release_mouse()
+            self.suppress_click()
             event.stop()
+            self._fill_title_column()
+            self._invalidate_table()
 
     def on_resize(self, event: object) -> None:
         """Re-fill title column when widget is resized."""
+        self._title_manual_width = False
         self._fill_title_column()
         self._invalidate_table()
 

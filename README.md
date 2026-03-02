@@ -458,6 +458,12 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.6 (2026-03-02)
+
+**Bug Fixes**
+- Fixed column resize triggering sort — dragging a column edge to resize now correctly suppresses the click event that would otherwise fire a sort via `HeaderSelected`; uses Textual's `suppress_click()` to prevent click generation entirely during resize drags
+- Fixed Title column not resizable — the auto-fill logic (`_fill_title_column()`) immediately reclaimed any space after dragging; now skips auto-fill during active drag and preserves user-set width until the next window resize
+
 ### v1.2.5 (2026-03-02)
 
 **Bug Fixes**
