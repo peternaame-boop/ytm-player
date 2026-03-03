@@ -32,6 +32,7 @@ from ytm_player.config.paths import (
     HISTORY_DB,
     ensure_dirs,
 )
+from ytm_player.config.settings import get_settings
 from ytm_player.ipc import ipc_request, is_tui_running
 from ytm_player.services.auth import AuthManager
 
@@ -68,7 +69,7 @@ def _ipc(command: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def _require_auth() -> Path:
     """Return the auth file path, or exit if not authenticated."""
-    auth = AuthManager()
+    auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
     if not auth.is_authenticated():
         _error("Not authenticated. Run `ytm setup` to configure YouTube Music credentials.")
     return auth.auth_file
@@ -125,7 +126,7 @@ def main(ctx: click.Context, compact_json: bool) -> None:
 @main.command()
 def setup() -> None:
     """Interactive authentication wizard for YouTube Music."""
-    auth = AuthManager()
+    auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
 
     if auth.is_authenticated():
         click.echo("Existing authentication found.")
@@ -268,7 +269,7 @@ def search(query: tuple[str, ...], filter_type: str | None, limit: int, compact_
     _require_auth()
     search_query = " ".join(query)
 
-    auth = AuthManager()
+    auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
     try:
         ytm = auth.create_ytmusic_client()
         results = ytm.search(search_query, filter=filter_type, limit=limit)

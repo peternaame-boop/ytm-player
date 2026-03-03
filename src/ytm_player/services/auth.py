@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 
 import requests.exceptions
@@ -21,6 +22,7 @@ from ytm_player.config.paths import (
     CONFIG_DIR,
     SECURE_FILE_MODE,
 )
+from ytm_player.services.yt_dlp_options import normalize_cookiefile
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +81,15 @@ def _patch_yt_dlp_browsers() -> None:
 class AuthManager:
     """Manages YouTube Music authentication via browser cookie extraction."""
 
-    def __init__(self, config_dir: Path = CONFIG_DIR, auth_file: Path = AUTH_FILE) -> None:
+    def __init__(
+        self,
+        config_dir: Path = CONFIG_DIR,
+        auth_file: Path = AUTH_FILE,
+        cookies_file: str | None = None,
+    ) -> None:
         self._config_dir = config_dir
         self._auth_file = auth_file
+        self._cookies_file = normalize_cookiefile(cookies_file)
 
     @property
     def auth_file(self) -> Path:
@@ -144,11 +152,14 @@ class AuthManager:
     # ── Auto-refresh ──────────────────────────────────────────────────
 
     def try_auto_refresh(self) -> bool:
-        """Attempt to silently refresh auth from the browser.
+        """Attempt to silently refresh auth from cookies/browser.
 
         Called when the app detects an auth failure at runtime. Returns
         True if fresh cookies were extracted and validation passed.
         """
+        if self._cookies_file and self._refresh_from_cookies_file(Path(self._cookies_file)):
+            return True
+
         browser = self._detect_browser()
         if browser is None:
             return False
@@ -168,6 +179,13 @@ class AuthManager:
         print("  YouTube Music Authentication")
         print("=" * 60)
         print()
+
+        if self._cookies_file:
+            print(f"  Trying cookies file: {self._cookies_file}")
+            if self._refresh_from_cookies_file(Path(self._cookies_file)):
+                return True
+            print("  Cookies file extraction failed. Falling back to browser/manual setup.")
+            print()
 
         browser = self._detect_browser()
         if browser:
@@ -208,6 +226,68 @@ class AuthManager:
                 continue
         return None
 
+    def _refresh_from_cookies_file(self, cookies_file: Path) -> bool:
+        """Refresh auth from cookies file without losing working credentials."""
+        backup: bytes | None = None
+        if self._auth_file.exists():
+            try:
+                backup = self._auth_file.read_bytes()
+            except OSError:
+                logger.debug("Could not backup existing auth file", exc_info=True)
+
+        if not self._extract_and_save_from_cookies_file(cookies_file):
+            return False
+
+        if self.validate():
+            return True
+
+        if backup is not None:
+            try:
+                self._auth_file.write_bytes(backup)
+                os.chmod(self._auth_file, SECURE_FILE_MODE)
+                logger.info("Restored previous auth after cookies file validation failure")
+            except OSError:
+                logger.warning("Failed to restore previous auth file", exc_info=True)
+        return False
+
+    def _extract_and_save_from_cookies_file(self, cookies_file: Path) -> bool:
+        """Extract YouTube cookies from a Netscape cookies.txt file and write auth.json."""
+        if not cookies_file.exists():
+            logger.warning("Cookies file does not exist: %s", cookies_file)
+            return False
+
+        jar = MozillaCookieJar(str(cookies_file))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except Exception as exc:
+            logger.warning("Failed to load cookies file %s: %s", cookies_file, exc)
+            return False
+
+
+        try:
+            mode = cookies_file.stat().st_mode
+            if mode & 0o077:
+                logger.warning(
+                    "Cookies file has broad permissions (%o): %s",
+                    mode & 0o777,
+                    cookies_file,
+                )
+        except OSError:
+            logger.debug("Could not stat cookies file permissions: %s", cookies_file, exc_info=True)
+        yt_cookies = [
+            c
+            for c in jar
+            if c.domain == ".youtube.com" or c.domain.endswith(".youtube.com")
+        ]
+        if not yt_cookies:
+            logger.warning("No youtube.com cookies found in %s", cookies_file)
+            return False
+
+        if self._save_youtube_cookies(yt_cookies):
+            print(f"  Cookies extracted from file and saved: {cookies_file}")
+            return True
+        return False
+
     def _extract_and_save(self, browser: str) -> bool:
         """Extract YouTube cookies from *browser* and write auth.json."""
         try:
@@ -226,7 +306,14 @@ class AuthManager:
             logger.warning("No .youtube.com cookies found in %s", browser)
             return False
 
-        cookie_str = "; ".join(f"{c.name}={c.value}" for c in yt_cookies)
+        if self._save_youtube_cookies(yt_cookies):
+            print(f"  Cookies extracted from {browser} and saved.")
+            return True
+        return False
+
+    def _save_youtube_cookies(self, cookies: list) -> bool:
+        """Persist YouTube cookie headers into auth.json."""
+        cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
 
         # Verify we have the critical SAPISID cookie.
         try:
@@ -249,8 +336,6 @@ class AuthManager:
         fd = os.open(str(self._auth_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SECURE_FILE_MODE)
         with os.fdopen(fd, "w") as f:
             json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
-
-        print(f"  Cookies extracted from {browser} and saved.")
         return True
 
     # ── Manual header paste (fallback) ───────────────────────────────
@@ -361,6 +446,6 @@ def _normalize_raw_headers(raw: str) -> str:
     return "\n".join(result)
 
 
-def get_auth_manager() -> AuthManager:
+def get_auth_manager(cookies_file: str | None = None) -> AuthManager:
     """Return a module-level AuthManager instance."""
-    return AuthManager()
+    return AuthManager(cookies_file=cookies_file)
