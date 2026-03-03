@@ -1,3 +1,5 @@
+import logging
+
 from ytm_player.config.settings import YtDlpSettings
 from ytm_player.services.yt_dlp_options import (
     apply_configured_yt_dlp_options,
@@ -66,6 +68,15 @@ def test_apply_configured_options_converts_all_fields():
     assert opts["cookiefile"].endswith("/cookies.txt")
     assert opts["remote_components"] == ["ejs:github"]
     assert opts["js_runtimes"] == {"bun": {"path": "/tmp/bun"}}
+
+
+def test_apply_configured_options_warns_when_remote_components_enabled(caplog):
+    settings = YtDlpSettings(remote_components="ejs:github")
+    with caplog.at_level(logging.WARNING):
+        opts = apply_configured_yt_dlp_options({"quiet": True}, settings)
+
+    assert opts["remote_components"] == ["ejs:github"]
+    assert "remote_components is enabled" in caplog.text
 
 
 def test_apply_configured_options_skips_unset_fields():

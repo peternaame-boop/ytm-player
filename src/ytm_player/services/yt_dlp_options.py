@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ytm_player.config.settings import YtDlpSettings
+
+
+logger = logging.getLogger(__name__)
 
 
 def _split_csv_or_space(value: str) -> list[str]:
@@ -91,6 +95,10 @@ def apply_configured_yt_dlp_options(opts: dict, yt_dlp_settings: YtDlpSettings) 
 
     remote_components = normalize_remote_components(yt_dlp_settings.remote_components)
     if remote_components:
+        logger.warning(
+            "yt-dlp remote_components is enabled; this allows remote JavaScript component downloads: %s",
+            ", ".join(remote_components),
+        )
         opts["remote_components"] = remote_components
 
     js_runtimes = normalize_js_runtimes(yt_dlp_settings.js_runtimes)

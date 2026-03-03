@@ -259,7 +259,7 @@ class AuthManager:
         jar = MozillaCookieJar(str(cookies_file))
         try:
             jar.load(ignore_discard=True, ignore_expires=True)
-        except Exception as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             logger.warning("Failed to load cookies file %s: %s", cookies_file, exc)
             return False
 
