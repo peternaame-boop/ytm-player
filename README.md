@@ -487,6 +487,11 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.11 (2026-03-03)
+
+**New**
+- yt-dlp configuration support: `cookies.txt` auth, `remote_components`, `js_runtimes` via `[yt_dlp]` config section (thanks @gitiy1, PR #1)
+
 ### v1.2.10 (2026-03-03)
 
 **Bug Fixes**
