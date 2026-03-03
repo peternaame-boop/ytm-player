@@ -1,4 +1,5 @@
 import logging
+
 from ytm_player.config.settings import YtDlpSettings
 from ytm_player.services.yt_dlp_options import (
     apply_configured_yt_dlp_options,
