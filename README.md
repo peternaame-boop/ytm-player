@@ -480,6 +480,11 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.2.10 (2026-03-03)
+
+**Bug Fixes**
+- Fixed RTL text (Arabic/Hebrew) in track table columns — added BiDi isolation (LRI/PDI) so RTL album/artist names don't bleed into adjacent columns
+
 ### v1.2.9 (2026-03-02)
 
 **New**

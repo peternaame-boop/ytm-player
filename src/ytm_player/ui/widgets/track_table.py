@@ -174,15 +174,20 @@ class TrackTable(DataTable):
         album = track.get("album") or ""
         duration = extract_duration(track)
 
+        # Wrap text cells in LRI/PDI (U+2066/U+2069) so RTL content
+        # doesn't pull adjacent columns into the RTL BiDi context.
+        lri = "\u2066"
+        pdi = "\u2069"
+
         cells: list[str | int] = []
         if self._show_index:
             # Always show original playlist position, not current row number.
             orig = track.get("_original_index", index)
             cells.append(str(orig + 1))
-        cells.append(title)
-        cells.append(artist)
+        cells.append(f"{lri}{title}{pdi}")
+        cells.append(f"{lri}{artist}{pdi}")
         if self._show_album:
-            cells.append(album)
+            cells.append(f"{lri}{album}{pdi}")
         cells.append(format_duration(duration) if duration else "--:--")
 
         video_id = track.get("video_id", f"row_{index}")
