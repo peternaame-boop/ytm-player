@@ -83,8 +83,10 @@ class Player:
         # mpv segfaults if LC_NUMERIC is not C.  Textual's async runtime
         # resets locale, so we must force it immediately before mpv init.
         import ctypes
+        import sys
 
-        _libc = ctypes.CDLL("libc.so.6")
+        _lib_name = "libSystem.B.dylib" if sys.platform == "darwin" else "libc.so.6"
+        _libc = ctypes.CDLL(_lib_name)
         _libc.setlocale.restype = ctypes.c_char_p
         _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
         _libc.setlocale(locale.LC_NUMERIC, b"C")
