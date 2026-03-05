@@ -68,19 +68,25 @@ yay -S ytm-player-git
 
 Or with any other AUR helper. Package: [ytm-player-git](https://aur.archlinux.org/packages/ytm-player-git)
 
-#### PyPI (all platforms)
+#### PyPI (Linux / macOS)
 
 ```bash
 pip install ytm-player
 ```
 
-Or with [pipx](https://pipx.pypa.io/) for isolated installs (recommended on Windows — handles PATH automatically):
+#### Windows
 
-```bash
-pipx install ytm-player
+```powershell
+pip install ytm-player
 ```
 
-> **Windows users:** If `ytm` is not recognized after `pip install`, Python's Scripts directory isn't on your PATH. Either use `pipx` instead (recommended), or run via `python -m ytm_player`.
+Then run with:
+
+```powershell
+py -m ytm_player
+```
+
+> `pip install` on Windows does not add the `ytm` command to PATH. Use `py -m ytm_player` to launch — this always works. Alternatively, install with [pipx](https://pipx.pypa.io/) which handles PATH automatically: `pipx install ytm-player`
 
 #### From source
 
@@ -134,7 +140,8 @@ pip install -e ".[dev]"
 ### 3. Authenticate
 
 ```bash
-ytm setup
+ytm setup          # Linux / macOS
+py -m ytm_player setup   # Windows
 ```
 
 The setup wizard has two modes:
@@ -161,8 +168,8 @@ Credentials are stored in `~/.config/ytm-player/headers_auth.json` with `0o600` 
 ### TUI (interactive)
 
 ```bash
-# Launch the player
-ytm
+ytm                # Linux / macOS
+py -m ytm_player   # Windows
 ```
 
 ### CLI (headless)
