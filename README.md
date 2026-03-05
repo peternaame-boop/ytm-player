@@ -487,6 +487,25 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.3.0 (2026-03-05)
+
+**New**
+- `ytm setup --manual` — skip browser detection, paste request headers directly (thanks @uhs-robert, [#10](https://github.com/peternaame-boop/ytm-player/issues/10))
+- `ytm setup --browser <name>` — extract cookies from a specific browser (chrome, firefox, brave, etc.)
+- Theme variables `$surface` and `$text` now properly defined — fixes unstyled popups, sidebars, and scrollbars (thanks @ahloiscreamo, [#6](https://github.com/peternaame-boop/ytm-player/issues/6))
+- NixOS packaging — `flake.nix` with `ytm-player` and `ytm-player-full` packages, dev shell, and overlay
+- Free-tier support — tracks without a video ID (Premium-only) are now filtered from playlists/albums/search with an "unavailable tracks hidden" notice, instead of silently failing on click
+
+**Bug Fixes**
+- Fixed MPRIS crash (`SignatureBodyMismatchError`) when track metadata contains None values (thanks @markvincze, [#9](https://github.com/peternaame-boop/ytm-player/issues/9))
+- Fixed large playlists only loading 200-300 songs — now fetches all tracks via ytmusicapi pagination (thanks @bananarne, [#5](https://github.com/peternaame-boop/ytm-player/issues/5))
+- Fixed search results missing `video_id` — songs from search couldn't play (thanks @firedev, PR [#4](https://github.com/peternaame-boop/ytm-player/pull/4))
+- Fixed browse/charts page same missing normalization bug
+- Fixed macOS `Player` init crash — hardcoded `libc.so.6` replaced with platform-aware detection (thanks @hanandewa5, PR [#2](https://github.com/peternaame-boop/ytm-player/pull/2))
+- Fixed auth validation crashing with raw tracebacks on network errors — now shows friendly message with recovery suggestion (thanks @CarterSnich [#7](https://github.com/peternaame-boop/ytm-player/issues/7), @Tohbuu [#11](https://github.com/peternaame-boop/ytm-player/issues/11))
+- Rewrote auth validation to use `get_account_info()` instead of monkey-patching — more reliable across platforms and ytmusicapi versions
+- Unplayable tracks (no video ID) now auto-skip to the next track instead of stopping playback dead
+
 ### v1.2.11 (2026-03-03)
 
 **New**

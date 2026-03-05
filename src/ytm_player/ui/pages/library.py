@@ -147,8 +147,9 @@ class LibraryPage(Widget):
             title = data.get("title", "Unknown Playlist")
             author = data.get("author", {})
             owner = author.get("name", "Unknown") if isinstance(author, dict) else str(author)
-            tracks = data.get("tracks", [])
-            track_count = data.get("trackCount", len(tracks))
+            raw_tracks = data.get("tracks", [])
+            tracks = normalize_tracks(raw_tracks)
+            track_count = len(tracks)
 
             # Update header.
             header = self.query_one("#content-header", Vertical)
@@ -157,12 +158,17 @@ class LibraryPage(Widget):
             await header.mount(Label(title, classes="content-title"))
             subtitle = f"{owner} \u00b7 {track_count} track{'s' if track_count != 1 else ''}"
             await header.mount(Label(subtitle, classes="content-subtitle"))
+            unavailable = len(raw_tracks) - track_count
+            if unavailable:
+                await header.mount(
+                    Label(f"{unavailable} unavailable tracks hidden", classes="content-subtitle")
+                )
 
             # Load tracks into the table.
             loading.display = False
             table = self.query_one("#library-tracks", TrackTable)
             table.display = True
-            table.load_tracks(normalize_tracks(tracks))
+            table.load_tracks(tracks)
 
             # Restore cursor position or scroll to the currently-playing track.
             self._restore_track_cursor(table)

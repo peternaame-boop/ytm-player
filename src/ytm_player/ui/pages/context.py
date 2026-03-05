@@ -219,7 +219,8 @@ class ContextPage(Widget):
         title = data.get("title", "Unknown Album")
         artist_name = extract_artist(data)
         year = data.get("year", "")
-        tracks = data.get("tracks", [])
+        raw_tracks = data.get("tracks", [])
+        tracks = normalize_tracks(raw_tracks)
         track_count = len(tracks)
 
         subtitle_parts = [artist_name]
@@ -232,18 +233,24 @@ class ContextPage(Widget):
         header.mount(Label("[b]Album[/b]", markup=True))
         header.mount(Label(title, classes="context-title"))
         header.mount(Label(" \u00b7 ".join(subtitle_parts), classes="context-subtitle"))
+        unavailable = len(raw_tracks) - track_count
+        if unavailable:
+            header.mount(
+                Label(f"{unavailable} unavailable tracks hidden", classes="context-subtitle")
+            )
 
         table = TrackTable(show_album=False, id="context-tracks")
         container.mount(table)
-        table.load_tracks(normalize_tracks(tracks))
+        table.load_tracks(tracks)
 
     def _build_playlist(self, container: Vertical) -> None:
         data = self._data
         title = data.get("title", "Unknown Playlist")
         author = data.get("author", {})
         owner = author.get("name", "Unknown") if isinstance(author, dict) else str(author)
-        tracks = data.get("tracks", [])
-        track_count = data.get("trackCount", len(tracks))
+        raw_tracks = data.get("tracks", [])
+        tracks = normalize_tracks(raw_tracks)
+        track_count = len(tracks)
 
         subtitle = f"{owner} \u00b7 {track_count} track{'s' if track_count != 1 else ''}"
 
@@ -252,10 +259,15 @@ class ContextPage(Widget):
         header.mount(Label("[b]Playlist[/b]", markup=True))
         header.mount(Label(title, classes="context-title"))
         header.mount(Label(subtitle, classes="context-subtitle"))
+        unavailable = len(raw_tracks) - track_count
+        if unavailable:
+            header.mount(
+                Label(f"{unavailable} unavailable tracks hidden", classes="context-subtitle")
+            )
 
         table = TrackTable(show_album=True, id="context-tracks")
         container.mount(table)
-        table.load_tracks(normalize_tracks(tracks))
+        table.load_tracks(tracks)
 
     def _build_artist(self, container: Vertical) -> None:
         data = self._data

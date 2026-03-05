@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import click
+import requests.exceptions
 
 from ytm_player import __version__
 from ytm_player.config.paths import (
@@ -124,7 +125,14 @@ def main(ctx: click.Context, compact_json: bool) -> None:
 
 
 @main.command()
-def setup() -> None:
+@click.option("--manual", is_flag=True, help="Skip browser detection, paste headers manually.")
+@click.option(
+    "--browser",
+    type=str,
+    default=None,
+    help="Extract cookies from a specific browser (chrome, firefox, brave, edge, etc.).",
+)
+def setup(manual: bool, browser: str | None) -> None:
     """Interactive authentication wizard for YouTube Music."""
     auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
 
@@ -134,18 +142,26 @@ def setup() -> None:
             click.echo("Setup cancelled.")
             return
 
-    success = auth.setup_interactive()
+    success = auth.setup_interactive(manual=manual, browser=browser)
     if not success:
         _error("Authentication setup failed.")
 
     click.echo("\nValidating credentials...")
-    if auth.validate():
-        click.echo("Authentication is valid. You're all set!")
-    else:
+    try:
+        if auth.validate():
+            click.echo("Authentication is valid. You're all set!")
+        else:
+            click.echo(
+                "Warning: Could not validate authentication. "
+                "Try launching `ytm` anyway — cookies were saved and may still work.\n"
+                "If it doesn't work, run `ytm setup --manual` to paste headers directly.",
+                err=True,
+            )
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
         click.echo(
-            "Warning: Could not validate authentication. "
-            "The headers may be incomplete or expired. "
-            "Try running `ytm setup` again.",
+            "Warning: Could not reach YouTube Music servers to validate.\n"
+            "Your credentials were saved but could not be verified. "
+            "They may still work — try launching `ytm`.",
             err=True,
         )
 

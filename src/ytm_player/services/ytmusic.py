@@ -132,7 +132,7 @@ class YTMusicService:
             logger.debug("get_library_artists failed")
             return []
 
-    async def get_liked_songs(self, limit: int = 100) -> list[dict[str, Any]]:
+    async def get_liked_songs(self, limit: int | None = None) -> list[dict[str, Any]]:
         """Return tracks from the user's Liked Music playlist."""
         try:
             playlist = await self._call(self.client.get_liked_songs, limit=limit)
@@ -218,13 +218,13 @@ class YTMusicService:
     }
 
     async def get_playlist(
-        self, playlist_id: str, limit: int = 100, order: str | None = None
+        self, playlist_id: str, limit: int | None = None, order: str | None = None
     ) -> dict[str, Any]:
         """Return playlist metadata and tracks.
 
         Args:
             playlist_id: Playlist ID.
-            limit: Max tracks to return.
+            limit: Max tracks to return.  ``None`` retrieves all.
             order: Sort order — ``"a_to_z"``, ``"z_to_a"``, or
                 ``"recently_added"``.  ``None`` uses the playlist's
                 server-side default.

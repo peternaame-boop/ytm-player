@@ -222,6 +222,8 @@ class YTMPlayerApp(App):
                 "lyrics-upcoming": tc.lyrics_upcoming,
                 "border": tc.border,
                 "text-muted": tc.muted_text,
+                "surface": tc.surface,
+                "text": tc.text,
             }
         )
         return variables
@@ -1055,7 +1057,24 @@ class YTMPlayerApp(App):
 
         video_id = track.get("video_id", "")
         if not video_id:
-            self.notify("This track can't be played (missing ID).", severity="error")
+            self._consecutive_failures += 1
+            title = track.get("title", "Unknown")
+            self.notify(
+                f'Skipping "{title}" — no video ID (may require Premium).',
+                severity="warning",
+                timeout=3,
+            )
+            if self._consecutive_failures < _MAX_CONSECUTIVE_FAILURES:
+                next_track = self.queue.next_track()
+                if next_track:
+                    self.call_later(lambda: self.run_worker(self.play_track(next_track)))
+            else:
+                self.notify(
+                    "Multiple tracks unplayable — check if your account has access.",
+                    severity="error",
+                    timeout=6,
+                )
+                self._consecutive_failures = 0
             return
 
         # Log listen time for the previous track.
@@ -1133,29 +1152,29 @@ class YTMPlayerApp(App):
         # Update Discord Rich Presence.
         if self.discord and self.discord.is_connected:
             await self.discord.update(
-                title=track.get("title", ""),
-                artist=track.get("artist", ""),
-                album=track.get("album", ""),
+                title=track.get("title") or "",
+                artist=track.get("artist") or "",
+                album=track.get("album") or "",
                 duration=stream_info.duration,
             )
 
         # Send Last.fm "Now Playing".
         if self.lastfm and self.lastfm.is_connected:
             await self.lastfm.now_playing(
-                title=track.get("title", ""),
-                artist=track.get("artist", ""),
-                album=track.get("album", ""),
+                title=track.get("title") or "",
+                artist=track.get("artist") or "",
+                album=track.get("album") or "",
                 duration=stream_info.duration,
             )
 
         # Update MPRIS metadata.
         if self.mpris:
-            duration_us = int(stream_info.duration * 1_000_000)
+            duration_us = int((stream_info.duration or 0) * 1_000_000)
             await self.mpris.update_metadata(
-                title=track.get("title", ""),
-                artist=track.get("artist", ""),
-                album=track.get("album", ""),
-                art_url=track.get("thumbnail_url", ""),
+                title=track.get("title") or "",
+                artist=track.get("artist") or "",
+                album=track.get("album") or "",
+                art_url=track.get("thumbnail_url") or "",
                 length_us=duration_us,
             )
             await self.mpris.update_playback_status("Playing")

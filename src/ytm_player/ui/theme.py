@@ -31,6 +31,8 @@ class ThemeColors:
     lyrics_upcoming: str = "#aaaaaa"
     border: str = "#333333"
     muted_text: str = "#999999"
+    surface: str = "#1a1a1a"
+    text: str = "#ffffff"
 
     @classmethod
     def load(cls, path: Path = THEME_FILE) -> Self:
@@ -81,6 +83,8 @@ class ThemeColors:
                 f"    --lyrics-upcoming: {self.lyrics_upcoming};",
                 f"    --border: {self.border};",
                 f"    --muted-text: {self.muted_text};",
+                f"    --surface: {self.surface};",
+                f"    --text: {self.text};",
                 "}",
                 "",
                 "Screen {",

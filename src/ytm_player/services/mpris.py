@@ -232,13 +232,17 @@ try:
             art_url: str,
             length_us: int,
         ) -> None:
+            # Sanitize: dbus-next crashes on None values in Variant().
+            # Track dicts can have explicit None (e.g. "album": None),
+            # and dict.get("key", "") returns None when key exists with
+            # None value — so we must guard here.
             self._metadata = {
                 "mpris:trackid": Variant("o", "/org/mpris/MediaPlayer2/TrackList/CurrentTrack"),
-                "xesam:title": Variant("s", title),
-                "xesam:artist": Variant("as", [artist]),
-                "xesam:album": Variant("s", album),
-                "mpris:artUrl": Variant("s", art_url),
-                "mpris:length": Variant("x", length_us),
+                "xesam:title": Variant("s", title or ""),
+                "xesam:artist": Variant("as", [artist or ""]),
+                "xesam:album": Variant("s", album or ""),
+                "mpris:artUrl": Variant("s", art_url or ""),
+                "mpris:length": Variant("x", length_us or 0),
             }
 
         def set_playback_status(self, status: str) -> None:

@@ -113,40 +113,20 @@ class AuthManager:
     def validate(self) -> bool:
         """Verify that the auth credentials actually work.
 
-        Makes a real API call and checks the server's ``logged_in`` flag.
+        Calls the account menu endpoint which is inherently auth-bound —
+        it returns the logged-in user's name or fails clearly.
         """
         if not self.is_authenticated():
             return False
         try:
             ytm = self.create_ytmusic_client()
-            raw_response = None
-            orig_post = ytm._session.post
-
-            def _capture_post(*args, **kwargs):
-                nonlocal raw_response
-                resp = orig_post(*args, **kwargs)
-                if resp.status_code == 200 and "browse" in str(args[0]):
-                    raw_response = resp.json()
-                return resp
-
-            ytm._session.post = _capture_post
-            try:
-                ytm.get_library_playlists(limit=1)
-            finally:
-                ytm._session.post = orig_post
-
-            if raw_response:
-                for stp in raw_response.get("responseContext", {}).get("serviceTrackingParams", []):
-                    for param in stp.get("params", []):
-                        if param.get("key") == "logged_in" and param.get("value") == "0":
-                            logger.warning("Auth validation: server says logged_in=0")
-                            return False
-            return True
+            account = ytm.get_account_info()
+            return bool(account.get("accountName"))
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
-            logger.warning("Auth validation failed — network error: %s", exc)
+            logger.debug("Auth validation failed — network error: %s", exc)
             raise
         except Exception:
-            logger.warning("Auth validation failed — credentials may be expired.")
+            logger.debug("Auth validation failed — credentials may be expired.", exc_info=True)
             return False
 
     # ── Auto-refresh ──────────────────────────────────────────────────
@@ -172,27 +152,47 @@ class AuthManager:
 
     # ── Setup entry point ────────────────────────────────────────────
 
-    def setup_interactive(self) -> bool:
-        """Interactive setup — auto-extract from browser, manual paste as fallback."""
+    def setup_interactive(self, manual: bool = False, browser: str | None = None) -> bool:
+        """Interactive setup — auto-extract from browser, manual paste as fallback.
+
+        Args:
+            manual: Skip browser detection, go straight to manual header paste.
+            browser: Extract from a specific browser instead of auto-detecting.
+        """
         print()
         print("=" * 60)
         print("  YouTube Music Authentication")
         print("=" * 60)
         print()
 
-        if self._cookies_file:
+        if manual:
+            return self._setup_manual()
+
+        # Try cookies file first (unless a specific browser was requested).
+        if self._cookies_file and not browser:
             print(f"  Trying cookies file: {self._cookies_file}")
             if self._refresh_from_cookies_file(Path(self._cookies_file)):
                 return True
             print("  Cookies file extraction failed. Falling back to browser/manual setup.")
             print()
 
-        browser = self._detect_browser()
         if browser:
-            print(f"  Found YouTube cookies in {browser}.")
-            print("  Extracting automatically...")
+            # User specified a browser explicitly.
+            print(f"  Trying browser: {browser}")
             print()
             if self._extract_and_save(browser):
+                return True
+            print(f"  Could not extract from {browser}. Falling back to manual setup.")
+            print()
+            return self._setup_manual()
+
+        # Auto-detect browser.
+        detected = self._detect_browser()
+        if detected:
+            print(f"  Found YouTube cookies in {detected}.")
+            print("  Extracting automatically...")
+            print()
+            if self._extract_and_save(detected):
                 return True
             print("  Auto-extraction failed. Falling back to manual setup.")
             print()
@@ -238,8 +238,11 @@ class AuthManager:
         if not self._extract_and_save_from_cookies_file(cookies_file):
             return False
 
-        if self.validate():
-            return True
+        try:
+            if self.validate():
+                return True
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            logger.warning("Network error during cookies-file validation; restoring backup")
 
         if backup is not None:
             try:
@@ -339,8 +342,7 @@ class AuthManager:
 
     def _setup_manual(self) -> bool:
         """Walk the user through extracting browser headers manually."""
-        print("  No browser with YouTube cookies detected.")
-        print("  Falling back to manual header paste.")
+        print("  Manual header paste mode.")
         print()
         print("  Steps:")
         print("  1. Open https://music.youtube.com in your browser")

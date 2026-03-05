@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 # Shared regex for validating YouTube video IDs.
 VALID_VIDEO_ID = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -94,10 +97,15 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
 
     ytmusicapi returns slightly different shapes for album tracks,
     playlist tracks, and search results.  This normalizes them.
+    Tracks without a video_id are dropped (unplayable).
     """
     normalized: list[dict] = []
+    skipped = 0
     for t in raw_tracks:
         video_id = t.get("videoId") or t.get("video_id", "")
+        if not video_id:
+            skipped += 1
+            continue
         title = t.get("title", "Unknown")
         artist = extract_artist(t)
         album_info = t.get("album")
@@ -127,6 +135,8 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
                 "is_video": t.get("isVideo", t.get("is_video", False)),
             }
         )
+    if skipped:
+        logger.debug("normalize_tracks: dropped %d tracks without video_id", skipped)
     return normalized
 
 

@@ -107,7 +107,7 @@ class LikedSongsPage(Widget):
             return
 
         try:
-            raw_tracks = await ytmusic.get_liked_songs(limit=200)
+            raw_tracks = await ytmusic.get_liked_songs()
             self._tracks = normalize_tracks(raw_tracks)
         except Exception:
             logger.exception("Failed to load liked songs")

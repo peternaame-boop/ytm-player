@@ -204,37 +204,53 @@ class TestNormalizeTracks:
     def test_empty_list(self):
         assert normalize_tracks([]) == []
 
-    def test_missing_fields(self):
-        result = normalize_tracks([{}])
+    def test_missing_fields_with_video_id(self):
+        result = normalize_tracks([{"videoId": "abc123"}])
         assert len(result) == 1
-        assert result[0]["video_id"] == ""
+        assert result[0]["video_id"] == "abc123"
         assert result[0]["title"] == "Unknown"
         assert result[0]["artist"] == "Unknown"
         assert result[0]["duration"] is None
 
+    def test_tracks_without_video_id_are_dropped(self):
+        result = normalize_tracks([{}, {"videoId": None}, {"videoId": ""}])
+        assert result == []
+
+    def test_mixed_playable_and_unplayable(self):
+        result = normalize_tracks(
+            [
+                {"videoId": "abc", "title": "Good"},
+                {"title": "No ID"},
+                {"videoId": "def", "title": "Also Good"},
+            ]
+        )
+        assert len(result) == 2
+        assert result[0]["title"] == "Good"
+        assert result[1]["title"] == "Also Good"
+
     def test_string_duration_converted_to_int(self):
-        result = normalize_tracks([{"duration": "3:45"}])
+        result = normalize_tracks([{"videoId": "x", "duration": "3:45"}])
         assert result[0]["duration"] == 225
 
     def test_duration_seconds_zero(self):
-        result = normalize_tracks([{"duration_seconds": 0}])
+        result = normalize_tracks([{"videoId": "x", "duration_seconds": 0}])
         assert result[0]["duration"] == 0
 
     def test_album_as_string(self):
-        result = normalize_tracks([{"album": "My Album"}])
+        result = normalize_tracks([{"videoId": "x", "album": "My Album"}])
         assert result[0]["album"] == "My Album"
         assert result[0]["album_id"] is None
 
     def test_album_none(self):
-        result = normalize_tracks([{"album": None}])
+        result = normalize_tracks([{"videoId": "x", "album": None}])
         assert result[0]["album"] == ""
 
     def test_is_video_true(self):
-        result = normalize_tracks([{"isVideo": True}])
+        result = normalize_tracks([{"videoId": "x", "isVideo": True}])
         assert result[0]["is_video"] is True
 
     def test_is_video_snake_case(self):
-        result = normalize_tracks([{"is_video": True}])
+        result = normalize_tracks([{"videoId": "x", "is_video": True}])
         assert result[0]["is_video"] is True
 
     def test_video_id_snake_case_key(self):
@@ -242,12 +258,12 @@ class TestNormalizeTracks:
         assert result[0]["video_id"] == "xyz"
 
     def test_empty_thumbnails_list(self):
-        result = normalize_tracks([{"thumbnails": []}])
+        result = normalize_tracks([{"videoId": "x", "thumbnails": []}])
         assert result[0]["thumbnail_url"] is None
 
     def test_artists_passthrough(self):
         artists = [{"name": "A", "id": "1"}, {"name": "B", "id": "2"}]
-        result = normalize_tracks([{"artists": artists}])
+        result = normalize_tracks([{"videoId": "x", "artists": artists}])
         assert result[0]["artists"] == artists
 
     def test_multiple_tracks(self):

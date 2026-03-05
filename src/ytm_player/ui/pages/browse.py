@@ -15,7 +15,7 @@ from textual.widgets import Label, ListItem, ListView, Static
 
 from ytm_player.config.keymap import Action
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import extract_artist, get_video_id, truncate
+from ytm_player.utils.formatting import extract_artist, get_video_id, normalize_tracks, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -448,7 +448,7 @@ class ChartsSection(Widget):
             tracks = []
 
         table = self.query_one("#charts-table", TrackTable)
-        table.load_tracks(tracks)
+        table.load_tracks(normalize_tracks(tracks))
 
     def _show_error(self, message: str) -> None:
         loading = self.query_one("#charts-loading", Static)

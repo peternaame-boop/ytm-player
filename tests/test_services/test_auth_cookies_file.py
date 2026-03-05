@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import requests.exceptions
+
 from ytm_player.services.auth import AuthManager
 
 
@@ -41,6 +43,26 @@ def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
     auth = AuthManager(auth_file=auth_file)
 
     monkeypatch.setattr(auth, "validate", lambda: False)
+
+    assert auth._refresh_from_cookies_file(cookies_file) is False
+    assert auth_file.read_text() == original
+
+
+def test_refresh_from_cookies_file_restores_backup_on_network_error(tmp_path, monkeypatch):
+    """If validate() raises a network error, backup should still be restored."""
+    cookies_file = tmp_path / "cookies.txt"
+    _write_netscape_cookie_file(cookies_file)
+
+    auth_file = tmp_path / "headers_auth.json"
+    original = '{"cookie": "old=1"}'
+    auth_file.write_text(original)
+
+    auth = AuthManager(auth_file=auth_file)
+
+    def _raise_network_error():
+        raise requests.exceptions.ConnectionError("connection reset")
+
+    monkeypatch.setattr(auth, "validate", _raise_network_error)
 
     assert auth._refresh_from_cookies_file(cookies_file) is False
     assert auth_file.read_text() == original
