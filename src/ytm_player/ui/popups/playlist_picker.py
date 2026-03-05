@@ -23,7 +23,7 @@ def _load_recent_ids() -> list[str]:
     """Load recently-used playlist IDs from disk."""
     try:
         if RECENT_PLAYLISTS_FILE.exists():
-            data = json.loads(RECENT_PLAYLISTS_FILE.read_text())
+            data = json.loads(RECENT_PLAYLISTS_FILE.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 return data[:MAX_RECENT]
     except Exception:
@@ -35,7 +35,7 @@ def _save_recent_ids(ids: list[str]) -> None:
     """Persist recently-used playlist IDs to disk."""
     try:
         RECENT_PLAYLISTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        RECENT_PLAYLISTS_FILE.write_text(json.dumps(ids[:MAX_RECENT]))
+        RECENT_PLAYLISTS_FILE.write_text(json.dumps(ids[:MAX_RECENT]), encoding="utf-8")
     except Exception:
         logger.debug("Could not save recent playlists", exc_info=True)
 

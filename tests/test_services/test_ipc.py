@@ -97,7 +97,7 @@ class TestIPCServerHandler:
     """Exercise the real IPCServer._client_connected handler via a Unix socket."""
 
     @pytest.fixture
-    async def ipc_env(self, tmp_path):
+    async def ipc_env(self, tmp_path, monkeypatch):
         """Start an IPCServer on a temp socket and yield a helper to send messages."""
         socket_path = tmp_path / "test.sock"
 
@@ -106,11 +106,11 @@ class TestIPCServerHandler:
 
         server = IPCServer(handler)
 
-        # Patch SOCKET_PATH for this server instance so it uses the temp path.
-        import ytm_player.ipc as ipc_mod
+        # Patch SOCKET_PATH in the paths module so the server uses the temp path.
+        import ytm_player.config.paths as paths_mod
 
-        original = ipc_mod.SOCKET_PATH
-        ipc_mod.SOCKET_PATH = socket_path
+        monkeypatch.setattr(paths_mod, "SOCKET_PATH", socket_path)
+
         try:
             await server.start()
 
@@ -126,7 +126,6 @@ class TestIPCServerHandler:
             yield send
         finally:
             await server.stop()
-            ipc_mod.SOCKET_PATH = original
 
     async def test_valid_command_returns_handler_response(self, ipc_env):
         send = ipc_env

@@ -422,7 +422,7 @@ class YTMPlayerApp(App):
         state: dict = {}
         try:
             if SESSION_STATE_FILE.exists():
-                state = json.loads(SESSION_STATE_FILE.read_text())
+                state = json.loads(SESSION_STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             logger.debug("Could not read session state", exc_info=True)
 
@@ -532,13 +532,11 @@ class YTMPlayerApp(App):
             "lyrics_sidebar_open": self._lyrics_sidebar_open,
         }
         try:
-            import os
-
-            from ytm_player.config.paths import SECURE_FILE_MODE
+            from ytm_player.config.paths import SECURE_FILE_MODE, secure_chmod
 
             SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            SESSION_STATE_FILE.write_text(json.dumps(state))
-            os.chmod(SESSION_STATE_FILE, SECURE_FILE_MODE)
+            SESSION_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+            secure_chmod(SESSION_STATE_FILE, SECURE_FILE_MODE)
         except Exception:
             logger.warning("Could not save session state", exc_info=True)
 

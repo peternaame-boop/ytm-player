@@ -86,11 +86,12 @@ class Player:
         import ctypes.util
         import sys
 
-        _libc_name = (
-            "libSystem.B.dylib"
-            if sys.platform == "darwin"
-            else ctypes.util.find_library("c") or "libc.so.6"
-        )
+        if sys.platform == "win32":
+            _libc_name = "msvcrt"
+        elif sys.platform == "darwin":
+            _libc_name = "libSystem.B.dylib"
+        else:
+            _libc_name = ctypes.util.find_library("c") or "libc.so.6"
         _libc = ctypes.CDLL(_libc_name)
         _libc.setlocale.restype = ctypes.c_char_p
         _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]

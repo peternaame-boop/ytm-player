@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import shutil
 from pathlib import Path
 
 import aiosqlite
 
-from ytm_player.config.paths import CACHE_DB, SECURE_FILE_MODE
+from ytm_player.config.paths import CACHE_DB, SECURE_FILE_MODE, secure_chmod
 from ytm_player.config.settings import get_settings
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
@@ -60,7 +59,7 @@ class CacheManager:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self._db_path)
-        os.chmod(self._db_path, SECURE_FILE_MODE)
+        secure_chmod(self._db_path, SECURE_FILE_MODE)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_SCHEMA)

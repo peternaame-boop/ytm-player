@@ -58,7 +58,7 @@ class ThemeColors:
             value = getattr(self, f_info.name)
             lines.append(f'{f_info.name} = "{value}"')
         lines.append("")
-        path.write_text("\n".join(lines))
+        path.write_text("\n".join(lines), encoding="utf-8")
 
     def to_css(self) -> str:
         return "\n".join(

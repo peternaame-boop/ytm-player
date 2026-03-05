@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Self
 
 from ytm_player.config.paths import CACHE_DIR, CONFIG_FILE
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -124,8 +127,23 @@ class Settings:
             settings._create_default(path)
             return settings
 
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        try:
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            logger.warning(
+                "Config file %s is corrupted (%s) — backing up and recreating with defaults.",
+                path,
+                exc,
+            )
+            backup = path.with_suffix(".toml.bak")
+            try:
+                path.rename(backup)
+                logger.warning("Backed up corrupted config to %s", backup)
+            except OSError:
+                pass
+            settings._create_default(path)
+            return settings
 
         for section_name, section_cls in SECTION_MAP.items():
             if section_name in data:
@@ -138,9 +156,7 @@ class Settings:
         return settings
 
     def save(self, path: Path = CONFIG_FILE) -> None:
-        import os
-
-        from ytm_player.config.paths import SECURE_FILE_MODE
+        from ytm_player.config.paths import SECURE_FILE_MODE, secure_chmod
 
         path.parent.mkdir(parents=True, exist_ok=True)
         lines: list[str] = []
@@ -153,8 +169,8 @@ class Settings:
                 lines.append(f"{f_info.name} = {_format_toml_value(value)}")
             lines.append("")
 
-        path.write_text("\n".join(lines))
-        os.chmod(path, SECURE_FILE_MODE)
+        path.write_text("\n".join(lines), encoding="utf-8")
+        secure_chmod(path, SECURE_FILE_MODE)
 
     def _create_default(self, path: Path) -> None:
         self.save(path)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from ytm_player.config.paths import (
     AUTH_FILE,
     CONFIG_DIR,
     SECURE_FILE_MODE,
+    secure_chmod,
 )
 from ytm_player.services.yt_dlp_options import normalize_cookiefile
 
@@ -100,7 +102,7 @@ class AuthManager:
         if not self._auth_file.exists():
             return False
         try:
-            with open(self._auth_file) as f:
+            with open(self._auth_file, encoding="utf-8") as f:
                 data = json.load(f)
             return bool(data.get("cookie"))
         except (json.JSONDecodeError, OSError):
@@ -247,7 +249,7 @@ class AuthManager:
         if backup is not None:
             try:
                 self._auth_file.write_bytes(backup)
-                os.chmod(self._auth_file, SECURE_FILE_MODE)
+                secure_chmod(self._auth_file, SECURE_FILE_MODE)
                 logger.info("Restored previous auth after cookies file validation failure")
             except OSError:
                 logger.warning("Failed to restore previous auth file", exc_info=True)
@@ -266,16 +268,19 @@ class AuthManager:
             logger.warning("Failed to load cookies file %s: %s", cookies_file, exc)
             return False
 
-        try:
-            mode = cookies_file.stat().st_mode
-            if mode & 0o077:
-                logger.warning(
-                    "Cookies file has broad permissions (%o): %s",
-                    mode & 0o777,
-                    cookies_file,
+        if sys.platform != "win32":
+            try:
+                mode = cookies_file.stat().st_mode
+                if mode & 0o077:
+                    logger.warning(
+                        "Cookies file has broad permissions (%o): %s",
+                        mode & 0o777,
+                        cookies_file,
+                    )
+            except OSError:
+                logger.debug(
+                    "Could not stat cookies file permissions: %s", cookies_file, exc_info=True
                 )
-        except OSError:
-            logger.debug("Could not stat cookies file permissions: %s", cookies_file, exc_info=True)
         yt_cookies = [
             c for c in jar if c.domain == ".youtube.com" or c.domain.endswith(".youtube.com")
         ]
@@ -334,7 +339,7 @@ class AuthManager:
         # Save atomically with correct permissions from creation.
         self._config_dir.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(self._auth_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SECURE_FILE_MODE)
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
         return True
 
@@ -383,7 +388,7 @@ class AuthManager:
             import ytmusicapi
 
             ytmusicapi.setup(filepath=str(self._auth_file), headers_raw=normalized)
-            os.chmod(self._auth_file, SECURE_FILE_MODE)
+            secure_chmod(self._auth_file, SECURE_FILE_MODE)
             print()
             print("  Browser authentication saved.")
             return True

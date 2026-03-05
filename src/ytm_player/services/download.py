@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from ytm_player.config.paths import SECURE_FILE_MODE
+from ytm_player.config.paths import SECURE_FILE_MODE, secure_chmod
 from ytm_player.config.settings import get_settings
 from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
 from ytm_player.utils.formatting import VALID_VIDEO_ID
@@ -85,7 +84,7 @@ class DownloadService:
             for ext in ("opus", "webm", "m4a", "mp3", "ogg"):
                 path = self._download_dir / f"{video_id}.{ext}"
                 if path.exists():
-                    os.chmod(path, SECURE_FILE_MODE)
+                    secure_chmod(path, SECURE_FILE_MODE)
                     return DownloadResult(video_id=video_id, success=True, file_path=path)
 
             return DownloadResult(

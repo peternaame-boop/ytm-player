@@ -63,7 +63,7 @@ def load_spotify_creds() -> dict[str, str] | None:
     if not SPOTIFY_CREDS_FILE.exists():
         return None
     try:
-        data = json.loads(SPOTIFY_CREDS_FILE.read_text())
+        data = json.loads(SPOTIFY_CREDS_FILE.read_text(encoding="utf-8"))
         if data.get("client_id") and data.get("client_secret"):
             return data
     except Exception:
@@ -77,7 +77,7 @@ def save_spotify_creds(client_id: str, client_secret: str) -> None:
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(SPOTIFY_CREDS_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SECURE_FILE_MODE)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump({"client_id": client_id, "client_secret": client_secret}, f, indent=2)
 
 

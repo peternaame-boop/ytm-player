@@ -542,6 +542,20 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.3.4 (2026-03-05)
+
+**Windows Compatibility**
+- Fixed crash on Windows caused by config file encoding (em-dash written as cp1252 instead of UTF-8)
+- Added TCP localhost IPC for Windows (Unix sockets unavailable), with proper stale port cleanup
+- Fixed PID liveness check on Windows using `OpenProcess` API
+- Config now stored in `%APPDATA%\ytm-player`, cache in `%LOCALAPPDATA%\ytm-player`
+- Fixed crash log path, libc detection (`msvcrt`), and `ytm config` command for Windows
+- Added `encoding="utf-8"` to all file I/O (Windows defaults to cp1252)
+- Added clipboard support for Windows (`Set-Clipboard`) and macOS (`pbcopy`)
+- Corrupted config files are backed up to `.toml.bak` before recreating defaults
+
+---
+
 ### v1.3.3 (2026-03-05)
 
 **Bug Fixes**

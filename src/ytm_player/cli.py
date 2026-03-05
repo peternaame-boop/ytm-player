@@ -114,7 +114,9 @@ def main(ctx: click.Context, compact_json: bool) -> None:
         try:
             app.run()
         except Exception:
-            with open("/tmp/ytm-crash.log", "a") as _f:
+            from ytm_player.config.paths import CRASH_LOG
+
+            with open(CRASH_LOG, "a", encoding="utf-8") as _f:
                 _f.write(_tb.format_exc())
             raise
 
@@ -558,6 +560,9 @@ def config() -> None:
     editor = os.environ.get("EDITOR")
     if editor:
         target = str(CONFIG_FILE)
+    elif sys.platform == "win32":
+        os.startfile(str(CONFIG_FILE))
+        return
     else:
         editor = shutil.which("xdg-open")
         target = str(CONFIG_DIR)

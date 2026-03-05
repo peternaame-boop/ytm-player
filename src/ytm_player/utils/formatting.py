@@ -177,7 +177,28 @@ def copy_to_clipboard(text: str) -> bool:
     """Copy text to system clipboard. Returns True on success."""
     import shutil
     import subprocess
+    import sys
 
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $input"],
+                input=text.encode("utf-8"),
+                check=True,
+                creationflags=0x08000000,
+            )
+            return True
+        except Exception:
+            return False
+
+    if sys.platform == "darwin":
+        try:
+            subprocess.run(["pbcopy"], input=text.encode(), check=True)
+            return True
+        except Exception:
+            return False
+
+    # Linux: try X11/Wayland clipboard tools.
     for cmd in ("xclip", "xsel", "wl-copy"):
         if shutil.which(cmd):
             try:

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import aiosqlite
 
-from ytm_player.config.paths import HISTORY_DB, SECURE_FILE_MODE
+from ytm_player.config.paths import HISTORY_DB, SECURE_FILE_MODE, secure_chmod
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +66,7 @@ class HistoryManager:
         """Open the database and create tables if they don't exist."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self._db_path)
-        os.chmod(self._db_path, SECURE_FILE_MODE)
+        secure_chmod(self._db_path, SECURE_FILE_MODE)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_SCHEMA)
