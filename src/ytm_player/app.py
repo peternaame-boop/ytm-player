@@ -319,8 +319,9 @@ class YTMPlayerApp(App):
             callbacks = self._build_mpris_callbacks()
             await self.mpris.start(callbacks)
 
-        # Start media key listener on macOS/Windows (MPRIS handles this on Linux).
-        if sys.platform != "linux" and self.settings.mpris.enabled:
+        # Start media key listener on Windows (MPRIS handles Linux;
+        # macOS requires MPRemoteCommandCenter — not yet implemented).
+        if sys.platform == "win32" and self.settings.mpris.enabled:
             self.mediakeys = MediaKeysService()
             callbacks = self._build_mpris_callbacks()
             await self.mediakeys.start(callbacks, asyncio.get_running_loop())

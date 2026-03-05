@@ -277,7 +277,7 @@ class MPRISService:
         set_position, quit).
         """
         if not _DBUS_AVAILABLE:
-            logger.warning("dbus-next is not installed -- MPRIS disabled")
+            logger.debug("dbus-next is not installed — MPRIS disabled")
             return
 
         try:

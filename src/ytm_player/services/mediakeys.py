@@ -58,21 +58,24 @@ class MediaKeysService:
         functions — the same dict that MPRISService uses.
         """
         if not _PYNPUT_AVAILABLE:
-            logger.warning("pynput is not installed — media keys disabled")
+            logger.debug("pynput is not installed — media keys disabled")
             return
 
         self._callbacks = callbacks
         self._loop = loop
+
+        # Suppress pynput's own "This process is not trusted!" warning —
+        # we emit a friendlier message ourselves.
+        logging.getLogger("pynput").setLevel(logging.ERROR)
 
         # Check accessibility permissions on macOS.
         if sys.platform == "darwin":
             try:
                 trusted = Listener.IS_TRUSTED
                 if not trusted:
-                    logger.warning(
-                        "Media keys require Accessibility permission on macOS. "
-                        "Grant it in System Settings → Privacy & Security → Accessibility "
-                        "for your terminal app."
+                    logger.info(
+                        "Media keys: grant Accessibility permission to your terminal app "
+                        "in System Settings → Privacy & Security → Accessibility"
                     )
             except AttributeError:
                 pass  # Older pynput versions may not have IS_TRUSTED.

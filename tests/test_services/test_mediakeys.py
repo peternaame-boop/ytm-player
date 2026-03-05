@@ -64,11 +64,11 @@ async def _started_service(callbacks=None, loop=None):
 
 
 class TestStartWithoutPynput:
-    async def test_logs_warning(self, caplog):
+    async def test_logs_debug_message(self, caplog):
         svc = MediaKeysService()
         with (
             patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", False),
-            caplog.at_level(logging.WARNING),
+            caplog.at_level(logging.DEBUG),
         ):
             await svc.start({}, asyncio.get_running_loop())
         assert "pynput is not installed" in caplog.text
@@ -222,7 +222,7 @@ class TestOnPress:
 
 
 class TestMacOSAccessibility:
-    async def test_warning_when_not_trusted(self, caplog):
+    async def test_info_when_not_trusted(self, caplog):
         svc = MediaKeysService()
         mock_cls = MagicMock()
         mock_cls.IS_TRUSTED = False
@@ -232,14 +232,14 @@ class TestMacOSAccessibility:
             patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
             patch("ytm_player.services.mediakeys.Listener", mock_cls, create=True),
             patch("ytm_player.services.mediakeys.sys") as mock_sys,
-            caplog.at_level(logging.WARNING),
+            caplog.at_level(logging.INFO),
         ):
             mock_sys.platform = "darwin"
             await svc.start(_make_callbacks(), asyncio.get_running_loop())
 
         assert "Accessibility permission" in caplog.text
 
-    async def test_no_warning_when_trusted(self, caplog):
+    async def test_no_message_when_trusted(self, caplog):
         svc = MediaKeysService()
         mock_cls = MagicMock()
         mock_cls.IS_TRUSTED = True
@@ -249,7 +249,7 @@ class TestMacOSAccessibility:
             patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
             patch("ytm_player.services.mediakeys.Listener", mock_cls, create=True),
             patch("ytm_player.services.mediakeys.sys") as mock_sys,
-            caplog.at_level(logging.WARNING),
+            caplog.at_level(logging.INFO),
         ):
             mock_sys.platform = "darwin"
             await svc.start(_make_callbacks(), asyncio.get_running_loop())
@@ -284,7 +284,7 @@ class TestMacOSAccessibility:
             patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
             patch("ytm_player.services.mediakeys.Listener", mock_cls, create=True),
             patch("ytm_player.services.mediakeys.sys") as mock_sys,
-            caplog.at_level(logging.WARNING),
+            caplog.at_level(logging.INFO),
         ):
             mock_sys.platform = "linux"
             await svc.start(_make_callbacks(), asyncio.get_running_loop())

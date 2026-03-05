@@ -30,7 +30,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "click>=8.1.0",
     "Pillow>=10.0",
-    "pynput>=1.7.6; sys_platform != 'linux'",
+    "pynput>=1.7.6; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
