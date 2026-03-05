@@ -74,11 +74,13 @@ Or with any other AUR helper. Package: [ytm-player-git](https://aur.archlinux.or
 pip install ytm-player
 ```
 
-Or with [pipx](https://pipx.pypa.io/) for isolated installs:
+Or with [pipx](https://pipx.pypa.io/) for isolated installs (recommended on Windows — handles PATH automatically):
 
 ```bash
 pipx install ytm-player
 ```
+
+> **Windows users:** If `ytm` is not recognized after `pip install`, Python's Scripts directory isn't on your PATH. Either use `pipx` instead (recommended), or run via `python -m ytm_player`.
 
 #### From source
 
