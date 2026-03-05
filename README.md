@@ -542,10 +542,11 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
-### v1.3.2 (2026-03-05)
+### v1.3.3 (2026-03-05)
 
 **Bug Fixes**
-- Suppressed noisy warnings on macOS startup ("dbus-next not installed", "process not trusted") — these are expected on non-Linux and no longer shown to users
+- Disabled media key listener on macOS — pynput can't intercept keys, causing previous track to open iTunes. Media keys on macOS will be implemented properly with MPRemoteCommandCenter in a future release.
+- Suppressed noisy warnings on macOS startup ("dbus-next not installed", "process not trusted")
 
 ---
 
