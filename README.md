@@ -45,8 +45,7 @@ sudo apt install mpv
 # Fedora
 sudo dnf install mpv
 
-# NixOS (add to configuration.nix systemPackages)
-mpv
+# NixOS — handled by the flake (see NixOS section below)
 
 # macOS (Homebrew)
 brew install mpv
@@ -98,19 +97,66 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-#### NixOS note
+#### NixOS (Flake)
 
-NixOS doesn't expose `libmpv.so` in standard library paths. Add this to your shell config:
+ytm-player provides a `flake.nix` with two packages, a dev shell, and an overlay.
 
-```fish
-# Fish (~/.config/fish/config.fish)
-set -gx LD_LIBRARY_PATH /run/current-system/sw/lib $LD_LIBRARY_PATH
-```
+**Try it without installing:**
 
 ```bash
-# Bash/Zsh (~/.bashrc or ~/.zshrc)
-export LD_LIBRARY_PATH="/run/current-system/sw/lib:$LD_LIBRARY_PATH"
+nix run github:peternaame-boop/ytm-player
 ```
+
+**Add to your system flake (`flake.nix`):**
+
+```nix
+{
+  inputs.ytm-player.url = "github:peternaame-boop/ytm-player";
+
+  outputs = { nixpkgs, ytm-player, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        {
+          nixpkgs.overlays = [ ytm-player.overlays.default ];
+          environment.systemPackages = with pkgs; [
+            ytm-player          # core (MPRIS + album art included)
+            # ytm-player-full   # all features (Discord, Last.fm, Spotify import)
+          ];
+        }
+      ];
+    };
+  };
+}
+```
+
+**Or install imperatively with `nix profile`:**
+
+```bash
+# Core
+nix profile install github:peternaame-boop/ytm-player
+
+# All features (Discord, Last.fm, Spotify import, etc.)
+nix profile install github:peternaame-boop/ytm-player#ytm-player-full
+```
+
+**Dev shell** (for contributors):
+
+```bash
+git clone https://github.com/peternaame-boop/ytm-player.git
+cd ytm-player
+nix develop  # drops you into a shell with all deps + dev tools
+```
+
+> **Note:** If you install via `pip` instead of the flake, NixOS doesn't expose `libmpv.so` in standard library paths. Add to your shell config:
+> ```fish
+> # Fish
+> set -gx LD_LIBRARY_PATH /run/current-system/sw/lib $LD_LIBRARY_PATH
+> ```
+> ```bash
+> # Bash/Zsh
+> export LD_LIBRARY_PATH="/run/current-system/sw/lib:$LD_LIBRARY_PATH"
+> ```
+> The flake handles this automatically — no manual `LD_LIBRARY_PATH` needed.
 
 #### Optional extras
 
