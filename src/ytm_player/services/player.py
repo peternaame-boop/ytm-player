@@ -124,20 +124,24 @@ class Player:
         """
         # mpv segfaults if LC_NUMERIC is not C.  Textual's async runtime
         # resets locale, so we must force it immediately before mpv init.
+        # On Windows, Python 3.12+ links ucrtbase.dll — calling setlocale on
+        # the legacy msvcrt.dll does nothing.  locale.setlocale() targets the
+        # correct CRT on every platform, but on Linux it can interact badly
+        # with thread-local locale, so we use ctypes there.
         import ctypes
         import ctypes.util
-        import sys
 
         if sys.platform == "win32":
-            _libc_name = "msvcrt"
-        elif sys.platform == "darwin":
-            _libc_name = "libSystem.B.dylib"
+            locale.setlocale(locale.LC_NUMERIC, "C")
         else:
-            _libc_name = ctypes.util.find_library("c") or "libc.so.6"
-        _libc = ctypes.CDLL(_libc_name)
-        _libc.setlocale.restype = ctypes.c_char_p
-        _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
-        _libc.setlocale(locale.LC_NUMERIC, b"C")
+            if sys.platform == "darwin":
+                _libc_name = "libSystem.B.dylib"
+            else:
+                _libc_name = ctypes.util.find_library("c") or "libc.so.6"
+            _libc = ctypes.CDLL(_libc_name)
+            _libc.setlocale.restype = ctypes.c_char_p
+            _libc.setlocale.argtypes = [ctypes.c_int, ctypes.c_char_p]
+            _libc.setlocale(locale.LC_NUMERIC, b"C")
 
         from ytm_player.config.settings import get_settings
 

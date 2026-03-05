@@ -300,12 +300,12 @@ class YTMPlayerApp(App):
             await self.history.init()
             self.cache = CacheManager()
             await self.cache.init()
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to initialize services")
             self.notify(
-                "Could not start player services. Make sure mpv is installed and in your PATH.",
+                f"Could not start player services: {exc}",
                 severity="error",
-                timeout=6,
+                timeout=10,
             )
             self.set_timer(2.0, self.exit)
             return
