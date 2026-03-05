@@ -23,6 +23,8 @@ from ytm_player.services.discord_rpc import DiscordRPC
 from ytm_player.services.download import DownloadService
 from ytm_player.services.history import HistoryManager
 from ytm_player.services.lastfm import LastFMService
+from ytm_player.services.macos_eventtap import MacOSEventTapService
+from ytm_player.services.macos_media import MacOSMediaService
 from ytm_player.services.mediakeys import MediaKeysService
 from ytm_player.services.mpris import MPRISService
 from ytm_player.services.player import Player, PlayerEvent
@@ -157,6 +159,8 @@ class YTMPlayerApp(App):
         self.history: HistoryManager | None = None
         self.cache: CacheManager | None = None
         self.mpris: MPRISService | None = None
+        self.mac_media: MacOSMediaService | None = None
+        self.mac_eventtap: MacOSEventTapService | None = None
         self.mediakeys: MediaKeysService | None = None
         self.discord: DiscordRPC | None = None
         self.lastfm: LastFMService | None = None
@@ -319,12 +323,25 @@ class YTMPlayerApp(App):
             callbacks = self._build_mpris_callbacks()
             await self.mpris.start(callbacks)
 
-        # Start media key listener on Windows (MPRIS handles Linux;
-        # macOS requires MPRemoteCommandCenter — not yet implemented).
+        # Start media key listener on Windows (MPRIS handles Linux).
         if sys.platform == "win32" and self.settings.mpris.enabled:
             self.mediakeys = MediaKeysService()
             callbacks = self._build_mpris_callbacks()
             await self.mediakeys.start(callbacks, asyncio.get_running_loop())
+
+        # Start native macOS media key integration (Now Playing center).
+        if sys.platform == "darwin" and self.settings.mpris.enabled:
+            self.mac_media = MacOSMediaService()
+            self.mac_eventtap = MacOSEventTapService()
+            callbacks = self._build_mpris_callbacks()
+            await self.mac_media.start(callbacks, asyncio.get_running_loop())
+            tap_started = await self.mac_eventtap.start(callbacks, asyncio.get_running_loop())
+            if not tap_started:
+                self.notify(
+                    "Media keys unavailable: grant Accessibility permission to your terminal app.",
+                    severity="warning",
+                    timeout=8,
+                )
 
         # Start Discord Rich Presence if enabled.
         if self.settings.discord.enabled:
@@ -403,6 +420,12 @@ class YTMPlayerApp(App):
 
         if self.mediakeys:
             self.mediakeys.stop()
+
+        if self.mac_media:
+            self.mac_media.stop()
+
+        if self.mac_eventtap:
+            self.mac_eventtap.stop()
 
         if self.discord:
             await self.discord.disconnect()
@@ -1190,6 +1213,17 @@ class YTMPlayerApp(App):
             )
             await self.mpris.update_playback_status("Playing")
 
+        # Update macOS Now Playing metadata.
+        if self.mac_media:
+            duration_us = int((stream_info.duration or 0) * 1_000_000)
+            await self.mac_media.update_metadata(
+                title=track.get("title") or "",
+                artist=track.get("artist") or "",
+                album=track.get("album") or "",
+                length_us=duration_us,
+            )
+            await self.mac_media.update_playback_status("Playing")
+
     async def _toggle_play_pause(self) -> None:
         """Toggle play/pause, starting playback from queue if player is idle."""
         if self.player and self.player.current_track is None and self.queue.current_track:
@@ -1302,6 +1336,12 @@ class YTMPlayerApp(App):
             except Exception:
                 logger.debug("Failed to update MPRIS position", exc_info=True)
 
+        if self.mac_media and self.player.is_playing:
+            try:
+                self.mac_media.update_position(int(self.player.position * 1_000_000))
+            except Exception:
+                logger.debug("Failed to update macOS media position", exc_info=True)
+
         # Check Last.fm scrobble threshold.
         if self.lastfm and self.lastfm.is_connected and self.player.is_playing:
             try:
@@ -1398,12 +1438,23 @@ class YTMPlayerApp(App):
 
         if self.mpris:
             status = "Paused" if paused else "Playing"
+            mpris = self.mpris
             try:
                 self.call_later(
-                    lambda s=status: self.run_worker(self.mpris.update_playback_status(s))
+                    lambda s=status, svc=mpris: self.run_worker(svc.update_playback_status(s))
                 )
             except Exception:
                 logger.debug("Failed to update MPRIS playback status", exc_info=True)
+
+        if self.mac_media:
+            status = "Paused" if paused else "Playing"
+            mac_media = self.mac_media
+            try:
+                self.call_later(
+                    lambda s=status, svc=mac_media: self.run_worker(svc.update_playback_status(s))
+                )
+            except Exception:
+                logger.debug("Failed to update macOS media status", exc_info=True)
 
         # Update Discord presence on pause/resume.
         if self.discord and self.discord.is_connected:

@@ -1,15 +1,14 @@
-"""Cross-platform media key listener for macOS and Windows.
+"""Windows media key listener using pynput.
 
 Uses pynput to capture global media key events (play/pause, next, previous)
-and dispatch them to the app's playback callbacks.  On Linux, MPRIS handles
-this via D-Bus instead.
+and dispatch them to the app's playback callbacks. Linux uses MPRIS (D-Bus),
+and macOS uses native event-tap + Now Playing services.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -22,6 +21,7 @@ try:
 except ImportError:
     _PYNPUT_AVAILABLE = False
     Key = None  # type: ignore[assignment,misc]
+    Listener = None  # type: ignore[assignment,misc]
 
 # Type alias matching MPRIS convention.
 PlayerCallback = Callable[..., Coroutine[Any, Any, None]]
@@ -30,7 +30,7 @@ PlayerCallback = Callable[..., Coroutine[Any, Any, None]]
 # Uses the Key enum directly — not str() — because pynput delivers Key enum
 # instances for special keys and they're hashable singletons.
 _KEY_MAP: dict[Any, str] = {}
-if _PYNPUT_AVAILABLE:
+if _PYNPUT_AVAILABLE and Key is not None:
     _KEY_MAP = {
         Key.media_play_pause: "play_pause",
         Key.media_next: "next",
@@ -39,10 +39,10 @@ if _PYNPUT_AVAILABLE:
 
 
 class MediaKeysService:
-    """Listens for global media key presses on macOS and Windows."""
+    """Listens for global media key presses on Windows."""
 
     def __init__(self) -> None:
-        self._listener: Listener | None = None
+        self._listener: Any | None = None
         self._callbacks: dict[str, PlayerCallback] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
@@ -68,21 +68,15 @@ class MediaKeysService:
         # we emit a friendlier message ourselves.
         logging.getLogger("pynput").setLevel(logging.ERROR)
 
-        # Check accessibility permissions on macOS.
-        if sys.platform == "darwin":
-            try:
-                trusted = Listener.IS_TRUSTED
-                if not trusted:
-                    logger.info(
-                        "Media keys: grant Accessibility permission to your terminal app "
-                        "in System Settings → Privacy & Security → Accessibility"
-                    )
-            except AttributeError:
-                pass  # Older pynput versions may not have IS_TRUSTED.
+        listener_cls = Listener
+        if listener_cls is None:
+            logger.debug("pynput listener unavailable — media keys disabled")
+            return
 
-        self._listener = Listener(on_press=self._on_press)
-        self._listener.daemon = True
-        self._listener.start()
+        listener = listener_cls(on_press=self._on_press)
+        listener.daemon = True
+        listener.start()
+        self._listener = listener
         self._running = True
         logger.info("Media key listener started")
 

@@ -31,6 +31,8 @@ dependencies = [
     "click>=8.1.0",
     "Pillow>=10.0",
     "pynput>=1.7.6; sys_platform == 'win32'",
+    "pyobjc-framework-MediaPlayer>=11.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=11.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

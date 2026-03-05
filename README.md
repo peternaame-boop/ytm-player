@@ -524,6 +524,13 @@ audio-device=pulse/your-device-name
 
 List available devices with `mpv --audio-device=help`.
 
+### macOS media keys open Apple Music instead of ytm-player
+
+- ytm-player now registers with macOS Now Playing when running, so media keys should target it.
+- Start playback in `ytm` first; macOS routes media keys to the active Now Playing app.
+- Grant Accessibility and Input Monitoring permission to your terminal app (Terminal, Ghostty, iTerm) in System Settings -> Privacy & Security.
+- If Apple Music still steals keys, fully quit Music.app and press play/pause once in ytm.
+
 ### MPRIS / media keys not working
 
 Install the optional MPRIS dependency:

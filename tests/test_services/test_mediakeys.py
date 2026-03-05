@@ -49,7 +49,6 @@ async def _started_service(callbacks=None, loop=None):
     mock_listener_cls = MagicMock()
     mock_listener_inst = MagicMock()
     mock_listener_cls.return_value = mock_listener_inst
-    mock_listener_cls.IS_TRUSTED = True
 
     with (
         patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
@@ -216,78 +215,3 @@ class TestOnPress:
             captured[0]()
             mock_aio.ensure_future.assert_called_once()
             service._callbacks["next"].assert_called_once()
-
-
-# ── macOS accessibility ───────────────────────────────────────────
-
-
-class TestMacOSAccessibility:
-    async def test_info_when_not_trusted(self, caplog):
-        svc = MediaKeysService()
-        mock_cls = MagicMock()
-        mock_cls.IS_TRUSTED = False
-        mock_cls.return_value = MagicMock()
-
-        with (
-            patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
-            patch("ytm_player.services.mediakeys.Listener", mock_cls, create=True),
-            patch("ytm_player.services.mediakeys.sys") as mock_sys,
-            caplog.at_level(logging.INFO),
-        ):
-            mock_sys.platform = "darwin"
-            await svc.start(_make_callbacks(), asyncio.get_running_loop())
-
-        assert "Accessibility permission" in caplog.text
-
-    async def test_no_message_when_trusted(self, caplog):
-        svc = MediaKeysService()
-        mock_cls = MagicMock()
-        mock_cls.IS_TRUSTED = True
-        mock_cls.return_value = MagicMock()
-
-        with (
-            patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
-            patch("ytm_player.services.mediakeys.Listener", mock_cls, create=True),
-            patch("ytm_player.services.mediakeys.sys") as mock_sys,
-            caplog.at_level(logging.INFO),
-        ):
-            mock_sys.platform = "darwin"
-            await svc.start(_make_callbacks(), asyncio.get_running_loop())
-
-        assert "Accessibility permission" not in caplog.text
-
-    async def test_attribute_error_swallowed(self):
-        svc = MediaKeysService()
-        mock_cls = MagicMock()
-        type(mock_cls).IS_TRUSTED = property(
-            lambda self: (_ for _ in ()).throw(AttributeError("no IS_TRUSTED"))
-        )
-        mock_cls.return_value = MagicMock()
-
-        with (
-            patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
-            patch("ytm_player.services.mediakeys.Listener", mock_cls, create=True),
-            patch("ytm_player.services.mediakeys.sys") as mock_sys,
-        ):
-            mock_sys.platform = "darwin"
-            await svc.start(_make_callbacks(), asyncio.get_running_loop())
-
-        assert svc._running is True
-
-    async def test_macos_check_skipped_on_linux(self, caplog):
-        svc = MediaKeysService()
-        mock_cls = MagicMock()
-        mock_cls.IS_TRUSTED = False
-        mock_cls.return_value = MagicMock()
-
-        with (
-            patch("ytm_player.services.mediakeys._PYNPUT_AVAILABLE", True),
-            patch("ytm_player.services.mediakeys.Listener", mock_cls, create=True),
-            patch("ytm_player.services.mediakeys.sys") as mock_sys,
-            caplog.at_level(logging.INFO),
-        ):
-            mock_sys.platform = "linux"
-            await svc.start(_make_callbacks(), asyncio.get_running_loop())
-
-        assert "Accessibility permission" not in caplog.text
-        assert svc._running is True
