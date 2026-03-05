@@ -496,6 +496,14 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.3.1 (2026-03-05)
+
+**New**
+- Cross-platform media key support — play/pause, next, and previous media keys now work on macOS and Windows via `pynput` (Linux already supported via MPRIS)
+- Pillow (album art) is now a default dependency — no longer requires `pip install ytm-player[images]`
+
+---
+
 ### v1.3.0 (2026-03-05)
 
 **New**

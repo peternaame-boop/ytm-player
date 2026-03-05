@@ -12,6 +12,7 @@ depends=(
     'python-aiosqlite'
     'python-click'
     'python-mpv'
+    'python-pillow'
     'python-textual>=7.0'
     'python-ytmusicapi'
     'yt-dlp'
@@ -19,7 +20,6 @@ depends=(
 makedepends=('git' 'python-build' 'python-installer' 'python-hatchling')
 optdepends=(
     'python-dbus-next: MPRIS media key support'
-    'python-pillow: album art rendering'
     'python-pylast: Last.fm scrobbling'
     'python-pypresence: Discord Rich Presence'
     'python-spotipy: Spotify playlist import (AUR)'

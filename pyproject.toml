@@ -29,6 +29,8 @@ dependencies = [
     "python-mpv>=1.0.0",
     "aiosqlite>=0.20.0",
     "click>=8.1.0",
+    "Pillow>=10.0",
+    "pynput>=1.7.6; sys_platform != 'linux'",
 ]
 
 [project.optional-dependencies]
@@ -40,9 +42,7 @@ spotify = [
 mpris = [
     "dbus-next>=0.2.3",
 ]
-images = [
-    "Pillow>=10.0",
-]
+images = []  # Pillow is now a default dependency; kept for backwards compat.
 discord = [
     "pypresence>=4.3.0",
 ]

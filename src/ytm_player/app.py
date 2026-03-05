@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -22,6 +23,7 @@ from ytm_player.services.discord_rpc import DiscordRPC
 from ytm_player.services.download import DownloadService
 from ytm_player.services.history import HistoryManager
 from ytm_player.services.lastfm import LastFMService
+from ytm_player.services.mediakeys import MediaKeysService
 from ytm_player.services.mpris import MPRISService
 from ytm_player.services.player import Player, PlayerEvent
 from ytm_player.services.queue import QueueManager, RepeatMode
@@ -155,6 +157,7 @@ class YTMPlayerApp(App):
         self.history: HistoryManager | None = None
         self.cache: CacheManager | None = None
         self.mpris: MPRISService | None = None
+        self.mediakeys: MediaKeysService | None = None
         self.discord: DiscordRPC | None = None
         self.lastfm: LastFMService | None = None
         self.downloader: DownloadService = DownloadService()
@@ -310,11 +313,17 @@ class YTMPlayerApp(App):
         # Restore session state (volume, shuffle, repeat) from last session.
         await self._restore_session_state()
 
-        # Start MPRIS if enabled.
+        # Start MPRIS if enabled (Linux only).
         if self.settings.mpris.enabled:
             self.mpris = MPRISService()
             callbacks = self._build_mpris_callbacks()
             await self.mpris.start(callbacks)
+
+        # Start media key listener on macOS/Windows (MPRIS handles this on Linux).
+        if sys.platform != "linux" and self.settings.mpris.enabled:
+            self.mediakeys = MediaKeysService()
+            callbacks = self._build_mpris_callbacks()
+            await self.mediakeys.start(callbacks, asyncio.get_running_loop())
 
         # Start Discord Rich Presence if enabled.
         if self.settings.discord.enabled:
@@ -390,6 +399,9 @@ class YTMPlayerApp(App):
 
         if self.mpris:
             await self.mpris.stop()
+
+        if self.mediakeys:
+            self.mediakeys.stop()
 
         if self.discord:
             await self.discord.disconnect()
