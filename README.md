@@ -542,6 +542,14 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
+### v1.3.5 (2026-03-05)
+
+**Windows Fix**
+- Fixed mpv DLL not found on Windows when installed via scoop/chocolatey — python-mpv couldn't find `libmpv-2.dll` because package managers put the DLL in an app directory, not on PATH. ytm-player now auto-locates the DLL directory before import.
+- Improved error message when mpv library is genuinely missing on Windows
+
+---
+
 ### v1.3.4 (2026-03-05)
 
 **Windows Compatibility**

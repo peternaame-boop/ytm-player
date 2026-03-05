@@ -5,13 +5,55 @@ from __future__ import annotations
 import asyncio
 import locale
 import logging
+import os
+import sys
 import threading
 import time
 from collections.abc import Callable
 from enum import StrEnum, auto
+from pathlib import Path
 from typing import Any
 
-import mpv
+if sys.platform == "win32":
+    # python-mpv uses ctypes to find mpv DLLs on PATH.  Package managers like
+    # scoop/chocolatey install mpv to an app directory that isn't directly on
+    # PATH (only shims are), so we locate the DLL and add its directory.
+    _MPV_DLL_NAMES = ("libmpv-2.dll", "mpv-2.dll", "mpv-1.dll")
+
+    def _dll_on_path() -> bool:
+        for d in os.environ.get("PATH", "").split(os.pathsep):
+            if d and any((Path(d) / n).exists() for n in _MPV_DLL_NAMES):
+                return True
+        return False
+
+    if not _dll_on_path():
+        _home = Path.home()
+        _scoop = Path(os.environ.get("SCOOP", str(_home / "scoop")))
+        _candidates = [
+            _scoop / "apps" / "mpv" / "current",
+            _scoop / "apps" / "mpv-git" / "current",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "mpv",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "mpv",
+        ]
+        for _d in _candidates:
+            if _d.is_dir() and any((_d / n).exists() for n in _MPV_DLL_NAMES):
+                os.environ["PATH"] = str(_d) + os.pathsep + os.environ.get("PATH", "")
+                break
+
+try:
+    import mpv
+except OSError as _exc:
+    if sys.platform == "win32":
+        raise OSError(
+            "Cannot find mpv library (libmpv-2.dll).\n\n"
+            "If you installed mpv via scoop, the DLL may be missing from PATH.\n"
+            "Try:  scoop install mpv\n"
+            "Then verify the DLL exists:  dir %USERPROFILE%\\scoop\\apps\\mpv\\current\\libmpv-2.dll\n\n"
+            "If the DLL is missing, install the mpv-dev or mpv-git package, or download\n"
+            "libmpv from https://sourceforge.net/projects/mpv-player-windows/files/libmpv/\n"
+            "and place the DLL in the mpv directory or somewhere on your PATH."
+        ) from _exc
+    raise
 
 logger = logging.getLogger(__name__)
 
