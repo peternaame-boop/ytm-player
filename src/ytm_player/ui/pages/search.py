@@ -18,6 +18,7 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 from ytm_player.config.keymap import Action
 from ytm_player.config.settings import get_settings
 from ytm_player.ui.widgets.track_table import TrackTable
+from ytm_player.utils.formatting import normalize_tracks
 from ytm_player.utils.formatting import copy_to_clipboard, extract_artist, get_video_id, truncate
 
 logger = logging.getLogger(__name__)
@@ -601,7 +602,7 @@ class SearchPage(Widget):
         """Push result data into each panel widget."""
         # Songs go into the TrackTable.
         songs_table = self.query_one("#songs-table", TrackTable)
-        songs_table.load_tracks(results.get("songs", []))
+        songs_table.load_tracks(normalize_tracks(results.get("songs", [])))
 
         # Albums, Artists, Playlists go into SearchResultPanels.
         albums_panel = self.query_one("#albums-panel", SearchResultPanel)
