@@ -742,9 +742,10 @@ class BrowsePage(Widget):
 
     async def _navigate_item(self, item: dict[str, Any]) -> None:
         """Route an item to the appropriate context page or play it directly."""
-        result_type = item.get("resultType", item.get("type", ""))
+        result_type = (item.get("resultType") or item.get("type") or "").lower()
         video_id = get_video_id(item)
         browse_id = item.get("browseId")
+        playlist_id = item.get("playlistId") or item.get("audioPlaylistId")
 
         if result_type in ("song", "video", "flat_song") or video_id:
             await self.app.play_track(item)
@@ -755,11 +756,19 @@ class BrowsePage(Widget):
             if browse_id:
                 await self.app.navigate_to("context", context_type="artist", context_id=browse_id)
         elif result_type == "playlist":
-            playlist_id = item.get("playlistId") or browse_id
-            if playlist_id:
+            if playlist_id or browse_id:
                 await self.app.navigate_to(
-                    "context", context_type="playlist", context_id=playlist_id
+                    "context", context_type="playlist", context_id=playlist_id or browse_id
                 )
+        elif playlist_id:
+            # Shelves like "Mixed for you", "Listen again" radio entries, mixes etc.
+            # have a playlistId but no resultType.
+            await self.app.navigate_to(
+                "context", context_type="playlist", context_id=playlist_id
+            )
+        elif browse_id:
+            # Fallback: treat any remaining browseId as an album/playlist context.
+            await self.app.navigate_to("context", context_type="album", context_id=browse_id)
 
     # ------------------------------------------------------------------
     # Vim-style action handler

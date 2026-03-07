@@ -462,9 +462,10 @@ class YTMPlayerApp(App):
 
         # Restore queue from last session (before enabling shuffle so the
         # shuffle order is built from a populated queue).
+        from ytm_player.utils.formatting import normalize_tracks
         saved_tracks = state.get("queue_tracks", [])
         if saved_tracks and isinstance(saved_tracks, list):
-            self.queue.add_multiple(saved_tracks)
+            self.queue.add_multiple(normalize_tracks(saved_tracks))
             saved_index = state.get("queue_index", 0)
             if isinstance(saved_index, int) and 0 <= saved_index < len(saved_tracks):
                 self.queue.jump_to(saved_index)
@@ -1090,12 +1091,12 @@ class YTMPlayerApp(App):
             )
             return
 
-        video_id = track.get("video_id", "")
+        video_id = get_video_id(track)
         if not video_id:
             self._consecutive_failures += 1
             title = track.get("title", "Unknown")
             self.notify(
-                f'Skipping "{title}" — no video ID (may require Premium).',
+                f'Skipping "{title}" — no video ID (AI-generated streams are not supported).',
                 severity="warning",
                 timeout=3,
             )
@@ -1278,7 +1279,8 @@ class YTMPlayerApp(App):
 
         self.notify("Loading radio suggestions...", timeout=3)
         try:
-            radio_tracks = await self.ytmusic.get_radio(video_id)
+            from ytm_player.utils.formatting import normalize_tracks
+            radio_tracks = normalize_tracks(await self.ytmusic.get_radio(video_id))
             if radio_tracks:
                 self.queue.set_radio_tracks(radio_tracks)
                 next_track = self.queue.next_track()
@@ -1712,7 +1714,8 @@ class YTMPlayerApp(App):
 
         self.notify("Starting radio...", timeout=3)
         try:
-            radio_tracks = await self.ytmusic.get_radio(video_id)
+            from ytm_player.utils.formatting import normalize_tracks
+            radio_tracks = normalize_tracks(await self.ytmusic.get_radio(video_id))
         except Exception:
             logger.exception("Failed to start radio")
             self.notify("Failed to start radio", severity="error")
