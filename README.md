@@ -585,7 +585,10 @@ MIT — see [LICENSE](LICENSE).
 
 ## Changelog
 
-### v1.4.1 (2026-03-09)
+### v1.5.0 (2026-03-09)
+
+**Refactor**
+- Decomposed `app.py` (2000+ lines) into a package with 7 focused mixins — playback, navigation, keys, session, sidebar, track actions, MPRIS, IPC. Zero behavioral changes; all 370 tests pass unchanged.
 
 **New**
 - Lyrics transliteration — toggle ASCII transliteration of non-Latin lyrics with Ctrl+T, useful for Japanese, Korean, Arabic, Cyrillic, etc. Requires optional `anyascii` package (thanks @Kineforce, [#14](https://github.com/peternaame-boop/ytm-player/issues/14))
