@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, Select, Static
+from textual.widgets import Button, Input, Select, Static
 
 PRIVACY_OPTIONS: list[tuple[str, str]] = [
     ("Private", "PRIVATE"),
@@ -53,6 +53,17 @@ class CreatePlaylistPopup(ModalScreen[tuple[str, str] | None]):
 
     CreatePlaylistPopup Select {
         width: 100%;
+        margin-bottom: 1;
+    }
+
+    CreatePlaylistPopup #button-row {
+        height: auto;
+        align: right middle;
+        margin-top: 1;
+    }
+
+    CreatePlaylistPopup Button {
+        margin-left: 1;
     }
     """
 
@@ -66,12 +77,21 @@ class CreatePlaylistPopup(ModalScreen[tuple[str, str] | None]):
                 id="select-privacy",
                 allow_blank=False,
             )
+            with Horizontal(id="button-row"):
+                yield Button("Cancel", variant="default", id="btn-cancel")
+                yield Button("Create", variant="primary", id="btn-create")
 
     def on_mount(self) -> None:
         self.query_one("#input-name", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-create":
+            self._submit()
+        else:
+            self.dismiss(None)
 
     def _submit(self) -> None:
         name = self.query_one("#input-name", Input).value.strip()
