@@ -157,7 +157,7 @@ class LibraryPanel(Widget):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="panel-header"):
             yield Label(self._title, classes="panel-title")
-            yield Button("⟳", classes="panel-refresh-btn", id=f"{self.id}-refresh")
+            yield Button("↻", classes="panel-refresh-btn", id=f"{self.id}-refresh")
         yield Static("Loading...", classes="panel-loading")
         yield ListView(id=f"{self.id}-list")
         yield Static("", classes="panel-count")
