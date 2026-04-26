@@ -39,6 +39,12 @@ A reliability and quality release driven by a multi-agent expert audit. Hardens 
 - **README polish** — badges, tagline, Contributors section.
 - **Audit-driven follow-up plans** at `docs/superpowers/plans/2026-04-28-audit-driven-error-handling-cleanup.md` and `docs/superpowers/plans/2026-04-28-audit-driven-followup.md` — written via the superpowers writing-plans + subagent-driven-development workflow.
 
+### Unreleased
+
+**Fixes**
+
+- Browse tab bar now renders correctly — `.tab-item` height increased from 1 to 3 rows so text is visible, tabs sized with `width: auto` so all four render side-by-side, hover state added for discoverability, and tab bar background set to `$surface` for contrast.
+
 ---
 
 ### v1.7.2 (2026-04-27)

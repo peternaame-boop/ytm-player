@@ -38,6 +38,8 @@ class BrowseTabBar(Widget):
         height: 3;
         width: 1fr;
         padding: 0 1;
+        background: $surface;
+        border-bottom: solid $border;
     }
 
     BrowseTabBar Horizontal {
@@ -46,16 +48,23 @@ class BrowseTabBar(Widget):
     }
 
     BrowseTabBar .tab-item {
+        width: auto;
+        min-width: 12;
         padding: 0 2;
-        height: 1;
+        height: 3;
         content-align: center middle;
         color: $text-muted;
+        border-bottom: tall transparent;
+    }
+
+    BrowseTabBar .tab-item:hover {
+        color: $text;
     }
 
     BrowseTabBar .tab-item.active {
         text-style: bold;
         color: $text;
-        border-bottom: solid $primary;
+        border-bottom: tall $primary;
     }
     """
 
