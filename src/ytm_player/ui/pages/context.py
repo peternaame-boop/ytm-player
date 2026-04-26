@@ -103,9 +103,23 @@ class ContextPage(Widget):
     #add-to-library-btn:hover {
         background: $primary 30%;
     }
+    #start-radio-btn {
+        width: auto;
+        min-width: 14;
+        height: 1;
+        margin: 0 0 0 1;
+        padding: 0 1;
+        color: $primary;
+    }
+    #start-radio-btn:hover {
+        background: $primary 30%;
+    }
     .context-header-row {
         height: auto;
         width: 1fr;
+    }
+    .context-header-row Label {
+        width: auto;
     }
     .context-body {
         height: 1fr;
@@ -349,8 +363,11 @@ class ContextPage(Widget):
         container.mount(header)
         title_row = Horizontal(classes="context-header-row")
         header.mount(title_row)
+        owned = data.get("owned", False)
         title_row.mount(Label("[b]Playlist[/b]", markup=True))
-        title_row.mount(Static("[+ Add to Library]", id="add-to-library-btn", markup=True))
+        if not owned:
+            title_row.mount(Static("[+ Add to Library]", id="add-to-library-btn", markup=True))
+        title_row.mount(Static("[▶ Start Radio]", id="start-radio-btn", markup=True))
         header.mount(Label(title, classes="context-title"))
         header.mount(Label(subtitle, classes="context-subtitle"))
         unavailable = len(raw_tracks) - track_count
@@ -504,13 +521,16 @@ class ContextPage(Widget):
     # ── Events ────────────────────────────────────────────────────────
 
     def on_click(self, event: Click) -> None:
-        """Handle clicks on the add-to-library button."""
+        """Handle clicks on header action buttons."""
         widget = event.widget
         if widget is None:
             return
         if widget.id == "add-to-library-btn":
             event.stop()
             self.run_worker(self._add_to_library(), name="add_to_lib", exclusive=True)
+        elif widget.id == "start-radio-btn":
+            event.stop()
+            self.run_worker(self._start_radio(), name="start_radio", exclusive=True)
 
     async def _add_to_library(self) -> None:
         """Add the current album or playlist to the user's library."""
@@ -549,6 +569,12 @@ class ContextPage(Widget):
         else:
             suffix = mutation_failure_suffix(result)
             self.app.notify(f"Failed to add to library — {suffix}", severity="error", timeout=4)
+
+    async def _start_radio(self) -> None:
+        """Start radio seeded from the current playlist."""
+        data = self._data
+        data.setdefault("playlistId", self.context_id)
+        await self.app._start_playlist_radio(data)  # type: ignore[attr-defined]
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected track and enqueue remaining tracks."""

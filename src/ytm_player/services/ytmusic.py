@@ -482,6 +482,23 @@ class YTMusicService:
             logger.exception("get_radio failed for %r", video_id)
             return []
 
+    async def get_playlist_radio(self, playlist_id: str) -> list[dict]:
+        """Start a radio from a playlist via RDAMPL prefix."""
+        stripped = playlist_id.removeprefix("VL")
+        try:
+            result = await self._call(
+                self.client.get_watch_playlist,
+                playlistId="RDAMPL" + stripped,
+                radio=True,
+            )
+        except Exception:
+            logger.exception("Playlist radio failed for %s", playlist_id)
+            return []
+        tracks = result.get("tracks", []) if isinstance(result, dict) else []
+        if not tracks:
+            logger.warning("Playlist radio returned no tracks for %s", playlist_id)
+        return tracks
+
     # ------------------------------------------------------------------
     # Library actions
     # ------------------------------------------------------------------

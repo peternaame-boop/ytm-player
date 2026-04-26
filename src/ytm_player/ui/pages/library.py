@@ -6,7 +6,8 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
+from textual.events import Click
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Input, Label, Static
@@ -41,12 +42,29 @@ class LibraryPage(Widget):
         padding: 1 2;
     }
 
+    .content-title-row {
+        height: auto;
+        width: 1fr;
+    }
+    .content-title-row Label {
+        width: auto;
+    }
     .content-title {
         text-style: bold;
     }
-
     .content-subtitle {
         color: $text-muted;
+    }
+    #start-radio-btn {
+        width: auto;
+        min-width: 14;
+        height: 1;
+        margin: 0 0 0 1;
+        padding: 0 1;
+        color: $primary;
+    }
+    #start-radio-btn:hover {
+        background: $primary 30%;
     }
 
     #empty-state {
@@ -177,11 +195,19 @@ class LibraryPage(Widget):
             track_count = len(tracks)
             total_count = data.get("trackCount") or track_count
 
+            # Store data for radio button — ensure playlistId is set since
+            # get_playlist() returns 'id' but _start_playlist_radio expects 'playlistId'.
+            self._playlist_data = data
+            self._playlist_data.setdefault("playlistId", playlist_id)
+
             # Update header.
             header = self.query_one("#content-header", Vertical)
             await header.remove_children()
             header.display = True
-            await header.mount(Label(title, classes="content-title"))
+            title_row = Horizontal(classes="content-title-row")
+            await header.mount(title_row)
+            await title_row.mount(Label(title, classes="content-title"))
+            await title_row.mount(Static("[▶ Start Radio]", id="start-radio-btn", markup=True))
             subtitle = f"{owner} \u00b7 {track_count} track{'s' if track_count != 1 else ''}"
             if total_count > track_count:
                 subtitle += f" (loading {total_count} total\u2026)"
@@ -316,6 +342,22 @@ class LibraryPage(Widget):
                     self.query_one("#library-tracks", TrackTable).clear_filter()
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Header button clicks
+    # ------------------------------------------------------------------
+
+    def on_click(self, event: Click) -> None:
+        """Handle clicks on header action buttons."""
+        if event.widget.id == "start-radio-btn":
+            event.stop()
+            data = getattr(self, "_playlist_data", None)
+            if data:
+                self.run_worker(
+                    self.app._start_playlist_radio(data),  # type: ignore[attr-defined]
+                    name="start_radio",
+                    exclusive=True,
+                )
 
     # ------------------------------------------------------------------
     # Track selection → play

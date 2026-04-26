@@ -209,6 +209,12 @@ class SidebarMixin(YTMHostBase):
                     self.run_worker(self._add_playlist_to_queue(pid))
                 else:
                     self.notify("No playlist ID found", severity="error", timeout=2)
+            elif action_id == "start_radio":
+                pid = item.get("playlistId") or item.get("browseId")
+                if pid:
+                    self.run_worker(self._start_playlist_radio(item))
+                else:
+                    self.notify("No playlist ID found", severity="error", timeout=2)
             elif action_id == "delete":
                 from ytm_player.ui.popups.confirm_popup import ConfirmPopup
 
@@ -259,6 +265,31 @@ class SidebarMixin(YTMHostBase):
         except Exception:
             logger.exception("Failed to create playlist %r", name)
             self.notify("Failed to create playlist", severity="error", timeout=3)
+
+    async def _start_playlist_radio(self, item: dict) -> None:
+        """Start radio seeded from a sidebar playlist."""
+        from ytm_player.utils.formatting import normalize_tracks
+
+        playlist_id = item.get("playlistId") or item.get("browseId")
+        if not playlist_id or not self.ytmusic:
+            return
+
+        self.notify("Starting radio...", timeout=3)
+        try:
+            radio_tracks = normalize_tracks(await self.ytmusic.get_playlist_radio(playlist_id))
+        except Exception:
+            logger.exception("Failed to start playlist radio for %r", playlist_id)
+            self.notify("Failed to start radio", severity="error")
+            return
+
+        if radio_tracks:
+            self.queue.clear()
+            self.queue.set_radio_tracks(radio_tracks)
+            first = self.queue.next_track()
+            if first:
+                await self.play_track(first)
+        else:
+            self.notify("No radio tracks found", severity="warning", timeout=3)
 
     async def _delete_sidebar_playlist(self, item: dict) -> None:
         """Delete or remove a playlist and refresh the sidebar."""

@@ -39,6 +39,13 @@ A reliability and quality release driven by a multi-agent expert audit. Hardens 
 - **README polish** — badges, tagline, Contributors section.
 - **Audit-driven follow-up plans** at `docs/superpowers/plans/2026-04-28-audit-driven-error-handling-cleanup.md` and `docs/superpowers/plans/2026-04-28-audit-driven-followup.md` — written via the superpowers writing-plans + subagent-driven-development workflow.
 
+### Unreleased
+
+**New**
+
+- Playlist radio — right-click any sidebar playlist and choose "Start Radio", or click the "[▶ Start Radio]" button in the playlist header (Library and Context pages). Seeds a radio queue via `RDAMPL` + playlist ID.
+- "Add to Library" button now only shows for playlists you don't own. Both header buttons were previously invisible due to a layout bug (Label taking full width); fixed with `width: auto`.
+
 ---
 
 ### v1.7.2 (2026-04-27)
