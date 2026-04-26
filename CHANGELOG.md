@@ -39,6 +39,13 @@ A reliability and quality release driven by a multi-agent expert audit. Hardens 
 - **README polish** — badges, tagline, Contributors section.
 - **Audit-driven follow-up plans** at `docs/superpowers/plans/2026-04-28-audit-driven-error-handling-cleanup.md` and `docs/superpowers/plans/2026-04-28-audit-driven-followup.md` — written via the superpowers writing-plans + subagent-driven-development workflow.
 
+### Unreleased
+
+**New**
+
+- Configurable home shelf count — set `home_shelves` under `[ui]` in `config.toml` to control how many recommendation shelves are fetched on the Browse > For You tab (default: 3, range: 1–25).
+- For You shelves scroll as a single section instead of each shelf scrolling independently, with subtle separators and colored section titles for readability.
+
 ---
 
 ### v1.7.2 (2026-04-27)

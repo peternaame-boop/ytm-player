@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
@@ -14,6 +14,7 @@ from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView, Static
 
 from ytm_player.config.keymap import Action
+from ytm_player.config.settings import get_settings
 from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.formatting import extract_artist, get_video_id, normalize_tracks, truncate
 
@@ -120,13 +121,15 @@ class ForYouSection(Widget):
 
     ForYouSection .shelf-title {
         text-style: bold;
-        color: $text;
+        color: $primary;
         padding: 1 0 0 0;
     }
 
     ForYouSection .shelf-items {
         height: auto;
-        max-height: 6;
+        padding: 0 0 1 0;
+        margin: 0 0 1 0;
+        border-bottom: solid $border;
     }
 
     ForYouSection .loading {
@@ -150,7 +153,7 @@ class ForYouSection(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("Loading recommendations...", id="foryou-loading", classes="loading")
-        yield Vertical(id="foryou-shelves")
+        yield VerticalScroll(id="foryou-shelves")
 
     def on_unmount(self) -> None:
         """Release shelf data to prevent memory retention."""
@@ -162,7 +165,8 @@ class ForYouSection(Widget):
         try:
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
-            self._shelves = await ytmusic.get_home()
+            limit = get_settings().ui.home_shelves
+            self._shelves = await ytmusic.get_home(limit=limit)
         except Exception:
             logger.debug("Failed to load home recommendations", exc_info=True)
             self._show_error("Failed to load recommendations.")
@@ -175,7 +179,7 @@ class ForYouSection(Widget):
             logger.debug("Failed to render home shelves", exc_info=True)
             # Clean up any partially-mounted widgets.
             try:
-                container = self.query_one("#foryou-shelves", Vertical)
+                container = self.query_one("#foryou-shelves", VerticalScroll)
                 await container.remove_children()
             except Exception:
                 pass
@@ -187,7 +191,7 @@ class ForYouSection(Widget):
         loading = self.query_one("#foryou-loading", Static)
         loading.display = False
 
-        container = self.query_one("#foryou-shelves", Vertical)
+        container = self.query_one("#foryou-shelves", VerticalScroll)
         # Clear _shelf_items references from old ListViews before removing.
         for lv in container.query(ListView):
             if hasattr(lv, "_shelf_items"):

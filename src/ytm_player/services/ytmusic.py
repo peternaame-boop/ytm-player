@@ -271,10 +271,10 @@ class YTMusicService:
     # Browsing
     # ------------------------------------------------------------------
 
-    async def get_home(self) -> list[dict[str, Any]]:
+    async def get_home(self, limit: int = 3) -> list[dict[str, Any]]:
         """Return personalised home page recommendations."""
         try:
-            return await self._call(self.client.get_home, limit=3)
+            return await self._call(self.client.get_home, limit=limit)
         except Exception:
             logger.exception("get_home failed")
             return []

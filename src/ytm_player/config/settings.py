@@ -78,6 +78,7 @@ class UISettings:
     col_album: int = 0
     col_duration: int = 8
     bidi_mode: str = "auto"  # "auto", "reorder", "passthrough"
+    home_shelves: int = 3
 
 
 @dataclass
@@ -184,6 +185,8 @@ class Settings:
                 for f_info in fields(section_instance):
                     if f_info.name in section_data:
                         setattr(section_instance, f_info.name, section_data[f_info.name])
+
+        settings.ui.home_shelves = max(1, min(25, settings.ui.home_shelves))
 
         return settings
 
