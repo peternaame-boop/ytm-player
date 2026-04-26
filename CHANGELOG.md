@@ -44,6 +44,8 @@ A reliability and quality release driven by a multi-agent expert audit. Hardens 
 **Fixes**
 
 - macOS built-in keyboard media keys (prev/next) now work — built-in MacBook keyboards send key codes 19/20 (fast-forward/rewind) instead of the standard 17/18 (next/previous) that external keyboards use. The Quartz event tap now maps both sets.
+- Browse tab bar now renders correctly — `.tab-item` height increased from 1 to 3 rows so text is visible, tabs sized with `width: auto` so all four render side-by-side, hover state added for discoverability, and tab bar background set to `$surface` for contrast.
+- yt-dlp now also tries the android client when the default web client refuses (e.g., madeForKids content); falls through to a non-PoT legacy format that succeeds. Normal songs unaffected.
 
 ---
 
