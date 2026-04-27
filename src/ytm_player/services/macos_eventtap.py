@@ -33,11 +33,15 @@ _MEDIA_KEY_DOWN_STATE = 0xA
 _PLAY_PAUSE_KEY = 16
 _NEXT_KEY = 17
 _PREVIOUS_KEY = 18
+_FAST_FORWARD_KEY = 19
+_REWIND_KEY = 20
 
 _KEY_TO_ACTION = {
     _PLAY_PAUSE_KEY: "play_pause",
     _NEXT_KEY: "next",
     _PREVIOUS_KEY: "previous",
+    _FAST_FORWARD_KEY: "next",
+    _REWIND_KEY: "previous",
 }
 
 
