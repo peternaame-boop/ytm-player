@@ -87,7 +87,7 @@ jobs:
           if [ ! -s release_notes.md ]; then
             echo "Release ${GITHUB_REF_NAME}" > release_notes.md
           fi
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           body_path: release_notes.md
           files: dist/*
