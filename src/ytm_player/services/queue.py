@@ -99,6 +99,20 @@ class QueueManager:
     def shuffle_enabled(self) -> bool:
         return self._shuffle
 
+    @property
+    def real_index(self) -> int:
+        """Current index into _tracks regardless of shuffle mode."""
+        with self._lock:
+            return self._real_index()
+
+    @property
+    def remaining_tracks(self) -> int:
+        """Number of tracks remaining after the current position (shuffle-aware)."""
+        with self._lock:
+            if self._shuffle:
+                return len(self._shuffle_order) - self._shuffle_position - 1
+            return len(self._tracks) - self._current_index - 1
+
     # -- Helpers ----------------------------------------------------------
 
     def _real_index(self) -> int:

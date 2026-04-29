@@ -143,6 +143,7 @@ class YTMusicService:
         # Serializes get_playlist(order=...) monkey-patches so concurrent
         # calls don't stack patches on client._send_request.
         self._order_lock = asyncio.Lock()
+        self._last_discovery_source: int = -1
 
     @property
     def client(self) -> YTMusic:
@@ -473,14 +474,194 @@ class YTMusicService:
             )
             return []
 
-    async def get_radio(self, video_id: str) -> list[dict[str, Any]]:
-        """Start a radio queue from a song and return its tracks."""
-        try:
-            result = await self._call(self.client.get_watch_playlist, videoId=video_id, radio=True)
-            return result.get("tracks", []) if isinstance(result, dict) else []
-        except Exception:
-            logger.exception("get_radio failed for %r", video_id)
+    async def get_radio(self, video_ids: str | list[str], limit: int = 25) -> list[dict]:
+        """Fetch radio tracks from one or more seeds and return a deduplicated mix.
+
+        Fetches all seeds in parallel. Individual seed failures are
+        swallowed so a single bad ID doesn't abort the batch.
+        Returns the pool normalized, shuffled, and trimmed to *limit*.
+        """
+        import random
+
+        from ytm_player.utils.formatting import normalize_tracks
+
+        if isinstance(video_ids, str):
+            video_ids = [video_ids]
+        if not video_ids:
             return []
+
+        async def _fetch_one(video_id: str) -> list[dict]:
+            try:
+                result = await self._call(
+                    self.client.get_watch_playlist, videoId=video_id, radio=True
+                )
+                return result.get("tracks", []) if isinstance(result, dict) else []
+            except Exception:
+                logger.debug("get_radio: seed %r failed, skipping", video_id)
+                return []
+
+        results = await asyncio.gather(*[_fetch_one(vid) for vid in video_ids])
+
+        pool: list[dict] = []
+        seen_ids: set[str] = set()
+        for tracks in results:
+            for track in tracks:
+                vid = track.get("videoId") or track.get("video_id", "")
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
+                    pool.append(track)
+
+        random.shuffle(pool)
+        return normalize_tracks(pool[:limit])
+
+    async def get_discovery_mix(self) -> tuple[list[dict], str]:
+        """Select seed tracks from one of seven sources for discovery playback.
+
+        Rotates sources — avoids repeating the last-used source.
+        Returns (seed_tracks, label).  On failure, tries a different
+        source as fallback.  Returns ([], "") if all fail.
+        """
+        import random
+
+        sources = [1, 2, 3, 4, 5, 6, 7]
+
+        if self._last_discovery_source in sources and len(sources) > 1:
+            sources.remove(self._last_discovery_source)
+
+        random.shuffle(sources)
+
+        async def _home_mix() -> tuple[list[dict], str]:
+            shelves = await self._call(self.client.get_home, limit=3)
+            all_playable: list[dict] = []
+            for shelf in shelves:
+                items = shelf.get("contents", []) if isinstance(shelf, dict) else []
+                all_playable.extend(i for i in items if isinstance(i, dict) and i.get("videoId"))
+            if not all_playable:
+                return [], ""
+            sampled = random.sample(all_playable, min(3, len(all_playable)))
+            label = sampled[0].get("title", "Home")
+            return sampled, f"Radio: {label}"
+
+        async def _trending_mix() -> tuple[list[dict], str]:
+            result = await self._call(self.client.get_explore)
+            playlist_id = result.get("trending", {}).get("playlist")
+            if not playlist_id:
+                return [], ""
+            wl = await self._call(
+                self.client.get_watch_playlist, playlistId=playlist_id, shuffle=True
+            )
+            items = wl.get("tracks", []) if isinstance(wl, dict) else []
+            playable = [t for t in items if isinstance(t, dict) and t.get("videoId")]
+            if not playable:
+                return [], ""
+            sampled = random.sample(playable, min(3, len(playable)))
+            label = sampled[0].get("title", "Trending")
+            return sampled, f"Radio: {label}"
+
+        async def _mood_mix() -> tuple[list[dict], str]:
+            categories_dict = await self._call(self.client.get_mood_categories)
+            if not categories_dict or not isinstance(categories_dict, dict):
+                return [], ""
+            section = random.choice(list(categories_dict.values()))
+            if not section:
+                return [], ""
+            category = random.choice(section)
+            params = category.get("params", "")
+            if not params:
+                return [], ""
+            playlists = await self._call(self.client.get_mood_playlists, params)
+            if not playlists:
+                return [], ""
+            playlist = random.choice(playlists)
+            playlist_id = playlist.get("playlistId", "")
+            if not playlist_id:
+                return [], ""
+            wl = await self._call(
+                self.client.get_watch_playlist, playlistId=playlist_id, shuffle=True
+            )
+            items = wl.get("tracks", []) if isinstance(wl, dict) else []
+            playable = [t for t in items if isinstance(t, dict) and t.get("videoId")]
+            if not playable:
+                return [], ""
+            sampled = random.sample(playable, min(3, len(playable)))
+            playlist_title = playlist.get("title", "")
+            label = sampled[0].get("title", playlist_title or "Mood")
+            return sampled, f"Radio: {label}"
+
+        async def _charts_mix() -> tuple[list[dict], str]:
+            charts = await self._call(self.client.get_charts)
+            videos = charts.get("videos", {})
+            items = videos.get("items", videos) if isinstance(videos, dict) else videos
+            if not items:
+                return [], ""
+            sampled = random.sample(items, min(3, len(items)))
+            playable = [v for v in sampled if v.get("videoId")]
+            if not playable:
+                return [], ""
+            label = playable[0].get("title", "Charts")
+            return playable, f"Radio: {label}"
+
+        async def _liked_songs_mix() -> tuple[list[dict], str]:
+            liked = await self._call(self.client.get_liked_songs, limit=50)
+            items = liked.get("tracks", []) if isinstance(liked, dict) else []
+            playable = [t for t in items if isinstance(t, dict) and t.get("videoId")]
+            if not playable:
+                return [], ""
+            sampled = random.sample(playable, min(3, len(playable)))
+            label = sampled[0].get("title", "Liked songs")
+            return sampled, f"Radio: {label}"
+
+        async def _artist_mix() -> tuple[list[dict], str]:
+            artists = await self._call(self.client.get_library_artists, limit=25)
+            if not artists:
+                return [], ""
+            artist = random.choice(artists)
+            channel_id = artist.get("browseId", "")
+            if not channel_id:
+                return [], ""
+            artist_data = await self._call(self.client.get_artist, channel_id)
+            songs = artist_data.get("songs", {})
+            results = songs.get("results", []) if isinstance(songs, dict) else []
+            playable = [t for t in results if isinstance(t, dict) and t.get("videoId")]
+            if not playable:
+                return [], ""
+            sampled = random.sample(playable, min(3, len(playable)))
+            artist_name = artist.get("artist", "Artist")
+            label = sampled[0].get("title", artist_name)
+            return sampled, f"{artist_name}: {label}"
+
+        async def _history_mix() -> tuple[list[dict], str]:
+            history = await self._call(self.client.get_history)
+            if not history:
+                return [], ""
+            playable = [t for t in history if isinstance(t, dict) and t.get("videoId")]
+            if not playable:
+                return [], ""
+            recent = playable[:20]
+            sampled = random.sample(recent, min(3, len(recent)))
+            label = sampled[0].get("title", "History")
+            return sampled, f"Radio: {label}"
+
+        _source_fns: dict[int, Any] = {
+            1: _trending_mix,
+            2: _mood_mix,
+            3: _charts_mix,
+            4: _home_mix,
+            5: _liked_songs_mix,
+            6: _artist_mix,
+            7: _history_mix,
+        }
+
+        for source in sources:
+            try:
+                seeds, label = await _source_fns[source]()
+                if seeds:
+                    self._last_discovery_source = source
+                    return seeds, label
+            except Exception:
+                logger.exception("get_discovery_mix: source %d failed", source)
+
+        return [], ""
 
     # ------------------------------------------------------------------
     # Library actions

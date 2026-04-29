@@ -247,7 +247,12 @@ class PlaybackMixin(YTMHostBase):
             # is already None (cleared by _on_end_file before we get here).
             seed = ended_track or (self.player.current_track if self.player else None)
             if seed:
-                await self._fetch_and_play_radio(seed_track=seed)
+                await self._fetch_and_play_radio(seed_track=seed, append=True)
+                first = self.queue.next_track()
+                if first:
+                    await self.play_track(first)
+                else:
+                    self.notify("End of queue.", timeout=2)
             else:
                 self.notify("End of queue.", timeout=2)
         else:
@@ -264,38 +269,54 @@ class PlaybackMixin(YTMHostBase):
         if track:
             await self.play_track(track)
 
-    async def _fetch_and_play_radio(self, seed_track: dict | None = None) -> None:
-        """Fetch radio suggestions and continue playback.
+    async def _fetch_and_play_radio(
+        self,
+        seed_track: dict | list[dict],
+        *,
+        label: str | None = None,
+        append: bool = False,
+    ) -> None:
+        """Fetch radio for one or more seed tracks and load into queue.
 
-        *seed_track* is used as the radio seed.  Falls back to the player's
-        current track if not provided.
+        When *append* is False (default), clears the queue first and starts
+        playback — used for user-initiated "Start Radio" / discovery mix.
+        When *append* is True, silently adds tracks — used for background
+        queue refill.
         """
         if not self.ytmusic:
             return
-
-        track = seed_track or (self.player.current_track if self.player else None)
-        if not track:
+        seeds = [seed_track] if isinstance(seed_track, dict) else seed_track
+        video_ids = [get_video_id(t) for t in seeds if get_video_id(t)]
+        if not video_ids:
             return
 
-        video_id = track.get("video_id", "")
-        if not video_id:
-            return
+        if not append:
+            self.notify("Loading radio...", timeout=3)
 
-        self.notify("Loading radio suggestions...", timeout=3)
         try:
-            from ytm_player.utils.formatting import normalize_tracks
-
-            radio_tracks = normalize_tracks(await self.ytmusic.get_radio(video_id))
-            if radio_tracks:
-                self.queue.set_radio_tracks(radio_tracks)
-                next_track = self.queue.next_track()
-                if next_track:
-                    await self.play_track(next_track)
-                    return
+            tracks = await self.ytmusic.get_radio(video_ids)
         except Exception:
-            logger.exception("Failed to fetch radio tracks")
+            logger.exception("Failed to fetch radio")
+            tracks = []
 
-        self.notify("No more suggestions available. Add more tracks to your queue.", timeout=3)
+        if not tracks:
+            if not append:
+                self.notify("No radio suggestions available.", severity="warning", timeout=3)
+            return
+
+        if append:
+            self.queue.set_radio_tracks(tracks)
+            self._refresh_queue_page()
+            return
+
+        self.queue.clear()
+        self.queue.set_radio_tracks(tracks)
+        self._refresh_queue_page()
+        label = label or f"Radio generated from {seeds[0].get('title', 'Unknown')}"
+        first = self.queue.next_track()
+        if first:
+            await self.play_track(first)
+        self.notify(f"Playing: {label}", timeout=4)
 
     # ── Player event callbacks ───────────────────────────────────────
 
@@ -366,6 +387,8 @@ class PlaybackMixin(YTMHostBase):
 
         Called on the event loop via call_soon_threadsafe -- safe to touch widgets.
         """
+        self._refill_queue()
+
         try:
             bar = self.query_one("#playback-bar", PlaybackBar)
             bar.update_track(track)
@@ -434,6 +457,47 @@ class PlaybackMixin(YTMHostBase):
                     group="prefetch",
                     exclusive=True,
                 )
+
+    def _refill_queue(self) -> None:
+        """Refill the queue in the background when tracks are running low."""
+        if self.queue.repeat_mode != "off":
+            return
+        if not self.settings.playback.autoplay:
+            return
+        if self.queue.remaining_tracks > 3:
+            return
+        for worker in self.workers:
+            if worker.group == "queue_extend" and worker.is_running:
+                return
+
+        all_tracks = self.queue.tracks
+        current_idx = self.queue.real_index
+        played = list(all_tracks[: current_idx + 1]) if current_idx >= 0 else []
+        seeds = played[-5:]
+        if not seeds:
+            track = self.player.current_track if self.player else None
+            if track:
+                seeds = [track]
+        if not seeds:
+            return
+
+        self.run_worker(
+            self._fetch_and_play_radio(seeds, append=True),
+            group="queue_extend",
+            exclusive=True,
+        )
+
+    async def _start_discovery_mix(self) -> None:
+        """Fetch a random discovery mix, replace the queue, and start playing."""
+        if not self.ytmusic:
+            return
+        self.notify("Loading discovery mix...", timeout=3)
+        seeds, label = await self.ytmusic.get_discovery_mix()
+        if not seeds:
+            self.notify("Discovery failed — no content available", severity="warning")
+            return
+        await self._fetch_and_play_radio(seeds, label=label)
+        await self.navigate_to("queue")
 
     def _on_volume_change(self, volume: int) -> None:
         """Handle volume change events."""

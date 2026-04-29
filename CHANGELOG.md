@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**New**
+
+- **Proactive queue refill** — autoplay silently tops up the queue before it runs dry, seeded from recently-played tracks
+- **Discovery Mix** — new sidebar item that plays a random mix from your home picks, trending, moods, charts, liked songs, library artists, or listening history
+- **Multi-seed radio** — radio requests use multiple seeds for better variety
+
+---
+
 ### v1.8.0 (2026-04-28)
 
 A reliability and quality release driven by a multi-agent expert audit. Hardens error handling across the service/UI cascade so silent-failure UX is replaced with actionable feedback, fixes several latent runtime bugs, and brings the codebase to zero non-exempted Pyright errors (down from 218).

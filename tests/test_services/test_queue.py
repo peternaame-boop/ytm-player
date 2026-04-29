@@ -376,3 +376,33 @@ class TestRadioTracks:
         ]
         queue_manager.set_radio_tracks(radio)
         assert queue_manager.length == 7
+
+
+class TestQueuePositionTracking:
+    """Tests for real_index and remaining_tracks properties."""
+
+    def test_real_index_without_shuffle(self, queue_manager, sample_tracks):
+        for t in sample_tracks:
+            queue_manager.add(t)
+        queue_manager.jump_to(2)
+        assert queue_manager.real_index == 2
+
+    def test_real_index_with_shuffle_resolves_to_tracks_index(self, queue_manager, sample_tracks):
+        for t in sample_tracks:
+            queue_manager.add(t)
+        queue_manager.toggle_shuffle()
+        queue_manager.jump_to(0)
+        assert 0 <= queue_manager.real_index < len(sample_tracks)
+
+    def test_remaining_tracks_without_shuffle(self, queue_manager, sample_tracks):
+        for t in sample_tracks:
+            queue_manager.add(t)
+        queue_manager.jump_to(2)
+        assert queue_manager.remaining_tracks == 2  # tracks 3 and 4
+
+    def test_remaining_tracks_with_shuffle(self, queue_manager, sample_tracks):
+        for t in sample_tracks:
+            queue_manager.add(t)
+        queue_manager.toggle_shuffle()
+        queue_manager.jump_to(0)
+        assert queue_manager.remaining_tracks == len(sample_tracks) - 1

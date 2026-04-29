@@ -99,7 +99,7 @@ class TrackActionsMixin(YTMHostBase):
                 self._refresh_queue_page()
                 self.notify("Added to queue", timeout=2)
             elif action_id == "start_radio":
-                self.run_worker(self._start_radio_for(track))
+                self.run_worker(self._fetch_and_play_radio(track))
             elif action_id == "go_to_artist":
                 artists = track.get("artists", [])
                 if isinstance(artists, list) and artists:
@@ -171,26 +171,3 @@ class TrackActionsMixin(YTMHostBase):
     def on_playback_bar_track_right_clicked(self, message: PlaybackBar.TrackRightClicked) -> None:
         """Handle right-click on the playback bar -- open actions popup."""
         self._open_actions_for_track(message.track)
-
-    async def _start_radio_for(self, track: dict) -> None:
-        """Start radio from a specific track."""
-        video_id = get_video_id(track)
-        if not video_id or not self.ytmusic:
-            return
-
-        self.notify("Starting radio...", timeout=3)
-        try:
-            from ytm_player.utils.formatting import normalize_tracks
-
-            radio_tracks = normalize_tracks(await self.ytmusic.get_radio(video_id))
-        except Exception:
-            logger.exception("Failed to start radio")
-            self.notify("Failed to start radio", severity="error")
-            return
-
-        if radio_tracks:
-            self.queue.clear()
-            self.queue.set_radio_tracks(radio_tracks)
-            first = self.queue.next_track()
-            if first:
-                await self.play_track(first)
