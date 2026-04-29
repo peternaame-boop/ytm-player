@@ -85,6 +85,7 @@ class StreamResolver:
             # Avoid writing any files to disk.
             "writeinfojson": False,
             "writethumbnail": False,
+            "extractor_args": {"youtube": {"player_client": ["default", "android"]}},
         }
         return apply_configured_yt_dlp_options(opts, settings)
 
