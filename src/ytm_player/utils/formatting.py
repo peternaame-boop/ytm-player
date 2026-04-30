@@ -73,22 +73,27 @@ def extract_artist(track: dict) -> str:
 
 
 def extract_duration(track: dict) -> int:
-    """Extract duration in seconds from various track dict formats."""
+    """Extract duration in seconds from various track dict formats.
+
+    Checks ``duration_seconds``, ``duration``, and ``length``
+    (ytmusicapi's get_watch_playlist uses ``length`` for "M:SS" strings).
+    """
     dur = track.get("duration_seconds")
     if dur is not None:
         return int(dur)
-    dur = track.get("duration")
-    if isinstance(dur, int):
-        return dur
-    if isinstance(dur, str) and ":" in dur:
-        parts = dur.split(":")
-        try:
-            if len(parts) == 2:
-                return int(parts[0]) * 60 + int(parts[1])
-            if len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-        except ValueError:
-            pass
+    for key in ("duration", "length"):
+        dur = track.get(key)
+        if isinstance(dur, int):
+            return dur
+        if isinstance(dur, str) and ":" in dur:
+            parts = dur.split(":")
+            try:
+                if len(parts) == 2:
+                    return int(parts[0]) * 60 + int(parts[1])
+                if len(parts) == 3:
+                    return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+            except ValueError:
+                pass
     return 0
 
 
@@ -111,10 +116,9 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
         album_info = t.get("album")
         album = album_info.get("name", "") if isinstance(album_info, dict) else (album_info or "")
         album_id = album_info.get("id") if isinstance(album_info, dict) else t.get("album_id")
-        raw_dur = (
-            t.get("duration_seconds")
-            if t.get("duration_seconds") is not None
-            else t.get("duration")
+        raw_dur = next(
+            (t[k] for k in ("duration_seconds", "duration", "length") if t.get(k) is not None),
+            None,
         )
         duration = extract_duration(t) if raw_dur is not None else None
         thumbnail = None

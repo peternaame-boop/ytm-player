@@ -93,8 +93,8 @@ async def test_recently_played_shows_error_fallback_when_history_raises_oserror(
 
     await page._load_history()
 
-    # Tracks must be empty — the page falls back cleanly.
-    assert page._tracks == []
+    # Table must not have received any tracks — the page falls back cleanly.
+    widgets["#recent-table"].load_tracks.assert_not_called()
 
     # Loading label received the failure message and stays visible
     # so the user can read it.
@@ -127,7 +127,7 @@ async def test_recently_played_shows_error_fallback_when_history_raises_sqlite_e
 
     await page._load_history()
 
-    assert page._tracks == []
+    widgets["#recent-table"].load_tracks.assert_not_called()
     update_calls = [c.args[0] for c in widgets["#recent-loading"].update.call_args_list]
     assert any("Couldn't load history" in msg for msg in update_calls)
 

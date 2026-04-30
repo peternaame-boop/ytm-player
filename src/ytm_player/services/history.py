@@ -188,11 +188,13 @@ class HistoryManager:
         if self._db is None:
             raise RuntimeError("Database not initialized")
 
+        from ytm_player.utils.formatting import extract_duration
+
         video_id = track["video_id"]
         title = track.get("title", "")
         artist = track.get("artist", "")
         album = track.get("album", "")
-        duration = track.get("duration_seconds", 0)
+        duration = extract_duration(track)
 
         try:
             await self._db.execute(

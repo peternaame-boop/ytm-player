@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
+from textual.events import Click
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import DataTable, Label, Static
-from textual.widgets.data_table import RowKey
+from textual.widgets import Input, Label, Static
 
 from ytm_player.config.keymap import Action
-from ytm_player.config.settings import get_settings
-from ytm_player.utils.formatting import format_duration
+from ytm_player.ui.widgets.track_table import TrackTable
+
+if TYPE_CHECKING:
+    from ytm_player.app._base import YTMHostBase
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +45,27 @@ class RecentlyPlayedPage(Widget):
         padding: 1 2;
         background: $surface;
     }
+    .recent-header-row {
+        height: auto;
+        width: 1fr;
+    }
+    .recent-header-row Label {
+        width: auto;
+    }
     .recent-header-title {
         text-style: bold;
         color: $primary;
     }
-    .recent-table {
-        height: 1fr;
-        width: 1fr;
+    #start-radio-btn {
+        width: auto;
+        min-width: 14;
+        height: 1;
+        margin: 0 0 0 1;
+        padding: 0 1;
+        color: $primary;
     }
-    .recent-table > .datatable--cursor {
-        background: $selected-item;
+    #start-radio-btn:hover {
+        background: $primary 30%;
     }
     .recent-footer {
         height: 1;
@@ -66,6 +79,13 @@ class RecentlyPlayedPage(Widget):
         content-align: center middle;
         color: $text-muted;
     }
+    .track-filter {
+        dock: bottom;
+        display: none;
+    }
+    .track-filter.visible {
+        display: block;
+    }
     """
 
     track_count: reactive[int] = reactive(0)
@@ -73,41 +93,24 @@ class RecentlyPlayedPage(Widget):
 
     def __init__(self, *, cursor_row: int | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._row_keys: list[RowKey] = []
-        self._tracks: list[dict] = []
         self._restore_cursor_row = cursor_row
         # Set when ``_load_history`` catches an expected disk-side
-        # failure so ``_refresh_table`` can render the failure message
+        # failure so ``_display_tracks`` can render the failure message
         # instead of the genuine empty-state copy.
         self._load_failed = False
 
     def compose(self) -> ComposeResult:
-        yield Vertical(
-            Label("Recently Played", classes="recent-header-title"),
-            id="recent-header",
-            classes="recent-header",
-        )
+        with Vertical(id="recent-header", classes="recent-header"):
+            with Horizontal(classes="recent-header-row"):
+                yield Label("Recently Played", classes="recent-header-title")
+                yield Static("[▶ Start Radio]", id="start-radio-btn", markup=True)
         yield Label("Loading history...", id="recent-loading", classes="recent-loading")
-        yield DataTable(
-            cursor_type="row",
-            zebra_stripes=True,
-            id="recent-table",
-            classes="recent-table",
-        )
+        yield TrackTable(show_album=False, id="recent-table")
         yield Static("", id="recent-footer", classes="recent-footer")
+        yield Input(placeholder="/ Filter tracks...", id="track-filter", classes="track-filter")
 
     def on_mount(self) -> None:
-        table = self.query_one("#recent-table", DataTable)
-        ui = get_settings().ui
-
-        def w(v: int) -> int | None:
-            return v if v > 0 else None
-
-        table.add_column("#", width=w(ui.col_index), key="index")
-        table.add_column("Title", width=w(ui.col_title), key="title")
-        table.add_column("Artist", width=w(ui.col_artist), key="artist")
-        table.add_column("Duration", width=w(ui.col_duration), key="duration")
-        table.display = False
+        self.query_one("#recent-table", TrackTable).display = False
         self.run_worker(self._load_history(), group="recent-load")
 
     async def _load_history(self) -> None:
@@ -117,7 +120,7 @@ class RecentlyPlayedPage(Widget):
             return
 
         try:
-            self._tracks = await history.get_recently_played(limit=100)
+            tracks = await history.get_recently_played(limit=100)
             self._load_failed = False
         except (OSError, sqlite3.Error):
             # Local DB failure: file unreadable, disk full, DB locked,
@@ -126,18 +129,16 @@ class RecentlyPlayedPage(Widget):
             # must propagate so bugs surface in development per the
             # error-handling architecture in CLAUDE.md.
             logger.exception("Failed to load play history")
-            self._tracks = []
+            tracks = []
             self._load_failed = True
 
-        self._refresh_table()
+        self._display_tracks(tracks)
 
-    def _refresh_table(self) -> None:
-        table = self.query_one("#recent-table", DataTable)
+    def _display_tracks(self, tracks: list[dict]) -> None:
+        table = self.query_one("#recent-table", TrackTable)
         loading = self.query_one("#recent-loading", Label)
-        table.clear()
-        self._row_keys = []
 
-        if not self._tracks:
+        if not tracks:
             table.display = False
             if self._load_failed:
                 loading.update(_HISTORY_LOAD_FAILED_MSG)
@@ -148,18 +149,11 @@ class RecentlyPlayedPage(Widget):
 
         loading.display = False
         table.display = True
+        table.load_tracks(tracks)
 
-        for i, track in enumerate(self._tracks):
-            title = track.get("title", "Unknown")
-            artist = track.get("artist", "Unknown")
-            dur = track.get("duration_seconds", 0)
-            dur_str = format_duration(dur) if dur else "--:--"
-            row_key = table.add_row(str(i + 1), title, artist, dur_str, key=f"recent_{i}")
-            self._row_keys.append(row_key)
-
-        self.track_count = len(self._tracks)
+        self.track_count = len(tracks)
         footer = self.query_one("#recent-footer", Static)
-        footer.update(f"{len(self._tracks)} recently played tracks")
+        footer.update(f"{len(tracks)} recently played tracks")
 
         # Restore cursor position from navigation state.
         row = self._restore_cursor_row
@@ -171,7 +165,7 @@ class RecentlyPlayedPage(Widget):
         """Return state to preserve when navigating away."""
         state: dict[str, Any] = {}
         try:
-            table = self.query_one("#recent-table", DataTable)
+            table = self.query_one("#recent-table", TrackTable)
             if table.cursor_row is not None and table.cursor_row > 0:
                 state["cursor_row"] = table.cursor_row
         except Exception:
@@ -188,56 +182,94 @@ class RecentlyPlayedPage(Widget):
         if saved is not None and queue.shuffle_enabled != saved:
             queue.toggle_shuffle()
 
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         event.stop()
-        idx = event.cursor_row
-        if 0 <= idx < len(self._tracks):
-            track = self._tracks[idx]
-            queue = self.app.queue  # type: ignore[attr-defined]
-            queue.add(track)
-            queue.jump_to_real(queue.length - 1)
-            self._apply_shuffle_pref(queue)
-            await self.app.play_track(track)  # type: ignore[attr-defined]
+        host = cast("YTMHostBase", self.app)
+        host.queue.add(event.track)
+        host.queue.jump_to_real(host.queue.length - 1)
+        self._apply_shuffle_pref(host.queue)
+        await host.play_track(event.track)
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
-        table = self.query_one("#recent-table", DataTable)
+        table = self.query_one("#recent-table", TrackTable)
 
         match action:
-            case Action.MOVE_DOWN:
-                for _ in range(count):
-                    table.action_cursor_down()
-            case Action.MOVE_UP:
-                for _ in range(count):
-                    table.action_cursor_up()
-            case Action.PAGE_DOWN:
-                table.action_scroll_down()
-            case Action.PAGE_UP:
-                table.action_scroll_up()
-            case Action.GO_TOP:
-                if table.row_count > 0:
-                    table.move_cursor(row=0)
-            case Action.GO_BOTTOM:
-                if table.row_count > 0:
-                    table.move_cursor(row=table.row_count - 1)
-            case Action.JUMP_TO_CURRENT:
-                queue = self.app.queue  # type: ignore[attr-defined]
-                current = queue.current_track if queue else None
-                if current and current.get("video_id"):
-                    vid = current["video_id"]
-                    for i, t in enumerate(self._tracks):
-                        if t.get("video_id") == vid:
-                            table.move_cursor(row=i)
-                            break
-            case Action.SELECT:
-                if table.cursor_row is not None and 0 <= table.cursor_row < len(self._tracks):
-                    track = self._tracks[table.cursor_row]
-                    queue = self.app.queue  # type: ignore[attr-defined]
-                    queue.add(track)
-                    queue.jump_to_real(queue.length - 1)
-                    self._apply_shuffle_pref(queue)
-                    await self.app.play_track(track)  # type: ignore[attr-defined]
             case Action.ADD_TO_QUEUE:
-                if table.cursor_row is not None and 0 <= table.cursor_row < len(self._tracks):
-                    queue = self.app.queue  # type: ignore[attr-defined]
-                    queue.add(self._tracks[table.cursor_row])
+                track = table.selected_track
+                if track:
+                    host = cast("YTMHostBase", self.app)
+                    host.queue.add(track)
                     self.app.notify("Added to queue", timeout=2)
+            case Action.TRACK_ACTIONS:
+                track = table.selected_track
+                if track:
+                    host = cast("YTMHostBase", self.app)
+                    host._open_actions_for_track(track)
+            case _:
+                await table.handle_action(action, count)
+
+    def on_click(self, event: Click) -> None:
+        if event.widget is not None and event.widget.id == "start-radio-btn":
+            event.stop()
+            self.run_worker(self._start_radio(), name="start_radio", exclusive=True)
+
+    async def _start_radio(self) -> None:
+        import random
+
+        table = self.query_one("#recent-table", TrackTable)
+        tracks = table.tracks
+        if not tracks:
+            return
+        seeds = random.sample(tracks, min(5, len(tracks)))
+        seed_list = "\n".join(f"  • {s.get('title', 'Unknown')}" for s in seeds)
+        host = cast("YTMHostBase", self.app)
+        await host._fetch_and_play_radio(seeds, label=f"Radio: Recently Played\n{seed_list}")
+
+    def on_track_table_filter_requested(self, event: TrackTable.FilterRequested) -> None:
+        event.stop()
+        try:
+            f = self.query_one("#track-filter", Input)
+            f.value = ""
+            f.add_class("visible")
+            f.focus()
+        except Exception:
+            pass
+
+    def on_track_table_filter_closed(self, event: TrackTable.FilterClosed) -> None:
+        event.stop()
+        try:
+            f = self.query_one("#track-filter", Input)
+            f.remove_class("visible")
+            self.query_one("#recent-table", TrackTable).focus()
+        except Exception:
+            pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "track-filter":
+            self.query_one("#recent-table", TrackTable).apply_filter(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "track-filter":
+            try:
+                f = self.query_one("#track-filter", Input)
+                f.remove_class("visible")
+                self.query_one("#recent-table", TrackTable).focus()
+            except Exception:
+                pass
+
+    def on_key(self, event: object) -> None:
+        from textual.events import Key
+
+        if not isinstance(event, Key):
+            return
+        if event.key == "escape":
+            try:
+                f = self.query_one("#track-filter", Input)
+                if f.has_class("visible"):
+                    event.stop()
+                    event.prevent_default()
+                    self.query_one("#recent-table", TrackTable).clear_filter()
+                    f.remove_class("visible")
+                    self.query_one("#recent-table", TrackTable).focus()
+            except Exception:
+                pass

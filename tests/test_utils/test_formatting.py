@@ -194,6 +194,19 @@ class TestExtractDuration:
     def test_duration_seconds_zero(self):
         assert extract_duration({"duration_seconds": 0}) == 0
 
+    def test_length_string_mm_ss(self):
+        """get_watch_playlist returns duration as 'length' key."""
+        assert extract_duration({"length": "3:07"}) == 187
+
+    def test_length_string_hh_mm_ss(self):
+        assert extract_duration({"length": "1:00:00"}) == 3600
+
+    def test_duration_seconds_takes_priority_over_length(self):
+        assert extract_duration({"duration_seconds": 100, "length": "5:00"}) == 100
+
+    def test_duration_takes_priority_over_length(self):
+        assert extract_duration({"duration": 200, "length": "5:00"}) == 200
+
 
 # ── normalize_tracks ─────────────────────────────────────────────────
 
@@ -257,6 +270,11 @@ class TestNormalizeTracks:
     def test_duration_seconds_zero(self):
         result = normalize_tracks([{"videoId": "x", "duration_seconds": 0}])
         assert result[0]["duration"] == 0
+
+    def test_length_key_from_watch_playlist(self):
+        """get_watch_playlist returns 'length' instead of 'duration'."""
+        result = normalize_tracks([{"videoId": "x", "title": "Radio Track", "length": "3:07"}])
+        assert result[0]["duration"] == 187
 
     def test_album_as_string(self):
         result = normalize_tracks([{"videoId": "x", "album": "My Album"}])

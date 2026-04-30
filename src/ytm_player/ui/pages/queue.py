@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, Label, Static
-from textual.widgets.data_table import RowKey
+from textual.widgets import Input, Label, Static
 
 from ytm_player.config.keymap import Action
 from ytm_player.services.player import PlayerEvent
-from ytm_player.utils.formatting import extract_artist, extract_duration, format_duration
+from ytm_player.ui.widgets.track_table import TrackTable
+
+if TYPE_CHECKING:
+    from ytm_player.app._base import YTMHostBase
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +48,6 @@ class QueuePage(Widget):
     .queue-now-playing-artist {
         color: $text-muted;
     }
-    .queue-table {
-        height: 1fr;
-        width: 1fr;
-    }
-    .queue-table > .datatable--cursor {
-        background: $selected-item;
-    }
     .queue-footer {
         height: 1;
         padding: 0 2;
@@ -78,33 +73,16 @@ class QueuePage(Widget):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._row_keys: list[RowKey] = []
-        self._playing_row: int | None = None  # tracks last play indicator position
         self._track_change_callback: Any = None
-        # Filter state — maps visible row index → real queue index.
-        self._filter_text: str = ""
-        self._filtered_indices: list[int] = []
-        self._filter_timer: Any = None
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="queue-header", classes="queue-now-playing")
         yield Label("Queue is empty.", id="queue-empty", classes="queue-empty")
-        yield DataTable(
-            cursor_type="row",
-            zebra_stripes=True,
-            id="queue-table",
-            classes="queue-table",
-        )
+        yield TrackTable(show_album=False, id="queue-table")
         yield Static("", id="queue-footer", classes="queue-footer")
         yield Input(placeholder="/ Filter tracks...", id="track-filter", classes="track-filter")
 
     def on_mount(self) -> None:
-        table = self.query_one("#queue-table", DataTable)
-        table.add_column("#", width=4, key="index")
-        table.add_column("Title", width=None, key="title")
-        table.add_column("Artist", width=None, key="artist")
-        table.add_column("Duration", width=8, key="duration")
-
         self._register_player_events()
         self._refresh_queue()
 
@@ -129,9 +107,6 @@ class QueuePage(Widget):
     def _on_track_change(self, _track_info: dict) -> None:
         """Update the queue display when the track changes.
 
-        Does a lightweight update (header + play indicator) instead of
-        rebuilding the entire DataTable.
-
         Player events are dispatched onto the asyncio loop via
         ``call_soon_threadsafe`` (see services/player.py), so this
         callback already runs on the main thread — call directly.
@@ -142,14 +117,8 @@ class QueuePage(Widget):
             logger.debug("Failed to update queue page on track change", exc_info=True)
 
     def _update_current_track(self) -> None:
-        """Lightweight update: refresh header and play indicator without rebuilding the table.
-
-        Player events are dispatched onto the asyncio loop via
-        ``call_soon_threadsafe`` (see services/player.py), so this
-        callback already runs on the main thread — call directly.
-        """
+        """Lightweight update: refresh header and play indicator without rebuilding the table."""
         queue = self.app.queue  # type: ignore[attr-defined]
-        new_index = queue.current_index
         current_track = queue.current_track
 
         # Update the "Now Playing" header.
@@ -164,36 +133,20 @@ class QueuePage(Widget):
         else:
             header.display = False
 
-        # Only update the previous and new play-indicator cells (O(1) not O(n)).
-        table = self.query_one("#queue-table", DataTable)
-        old_index = self._playing_row
-
-        if old_index == new_index:
-            return  # Cursor is already showing the right row — no-op.
-
-        # Restore the old row's index number.
-        if old_index is not None and 0 <= old_index < len(self._row_keys):
-            try:
-                table.update_cell(self._row_keys[old_index], "index", str(old_index + 1))
-            except Exception:
-                logger.debug("Failed to restore old play indicator", exc_info=True)
-
-        # Set the play indicator on the new row.
-        if new_index is not None and 0 <= new_index < len(self._row_keys):
-            try:
-                table.update_cell(self._row_keys[new_index], "index", "\u25b6")
-            except Exception:
-                logger.debug("Failed to set play indicator", exc_info=True)
-
-        self._playing_row = new_index
+        # Update the playing indicator via TrackTable.
+        video_id = current_track.get("video_id", "") if current_track else None
+        try:
+            table = self.query_one("#queue-table", TrackTable)
+            table.set_playing(video_id)
+        except Exception:
+            logger.debug("Failed to update playing indicator", exc_info=True)
 
     # ── Queue rendering ───────────────────────────────────────────────
 
     def _refresh_queue(self) -> None:
         """Rebuild the entire queue display from the QueueManager state."""
         queue = self.app.queue  # type: ignore[attr-defined]
-        tracks = queue.tracks
-        current_index = queue.current_index
+        tracks = list(queue.tracks)
         current_track = queue.current_track
 
         # Update the "Now Playing" header.
@@ -208,41 +161,21 @@ class QueuePage(Widget):
         else:
             header.display = False
 
-        # Build the queue table with upcoming tracks (everything except current).
-        table = self.query_one("#queue-table", DataTable)
-        table.clear()
-        self._row_keys = []
-        self._filtered_indices = []
+        table = self.query_one("#queue-table", TrackTable)
 
-        # Show all tracks; the current one gets a play indicator.
         if not tracks:
             table.display = False
             self.query_one("#queue-empty").display = True
         else:
             table.display = True
             self.query_one("#queue-empty").display = False
+            table.load_tracks(tracks)
 
-            for i, track in enumerate(tracks):
-                if self._filter_text and not self._matches_filter(track, self._filter_text):
-                    continue
-                self._filtered_indices.append(i)
-                title = track.get("title", "Unknown")
-                artist = extract_artist(track)
-                dur = extract_duration(track)
-                dur_str = format_duration(dur) if dur else "--:--"
-                indicator = "\u25b6" if i == current_index else str(i + 1)
-
-                row_key = table.add_row(
-                    indicator,
-                    title,
-                    artist,
-                    dur_str,
-                    key=f"q_{i}",
-                )
-                self._row_keys.append(row_key)
+            # Set the playing indicator on the current track.
+            video_id = current_track.get("video_id", "") if current_track else None
+            table.set_playing(video_id)
 
         self.queue_length = len(tracks)
-        self._playing_row = current_index
         self._update_footer()
 
     def _update_footer(self) -> None:
@@ -257,82 +190,32 @@ class QueuePage(Widget):
         except Exception:
             logger.debug("Failed to update queue footer", exc_info=True)
 
-    # ── DataTable events ──────────────────────────────────────────────
+    # ── Track selection ───────────────────────────────────────────────
 
-    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Jump to and play the selected track."""
         event.stop()
-        idx = self._resolve_row_idx(event.cursor_row)
-        if idx is None:
-            return
         queue = self.app.queue  # type: ignore[attr-defined]
-        track = queue.jump_to(idx)
+        track = queue.jump_to(event.index)
         if track:
-            await self.app.play_track(track)  # type: ignore[attr-defined]
+            host = cast("YTMHostBase", self.app)
+            await host.play_track(track)
             self._refresh_queue()
 
     # ── Action handling ───────────────────────────────────────────────
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
         """Process vim-style navigation and queue management actions."""
-        table = self.query_one("#queue-table", DataTable)
+        table = self.query_one("#queue-table", TrackTable)
         queue = self.app.queue  # type: ignore[attr-defined]
 
         match action:
-            case Action.MOVE_DOWN:
-                for _ in range(count):
-                    table.action_cursor_down()
-
-            case Action.MOVE_UP:
-                for _ in range(count):
-                    table.action_cursor_up()
-
-            case Action.PAGE_DOWN:
-                table.action_scroll_down()
-
-            case Action.PAGE_UP:
-                table.action_scroll_up()
-
-            case Action.GO_TOP:
-                if table.row_count > 0:
-                    table.move_cursor(row=0)
-
-            case Action.GO_BOTTOM:
-                if table.row_count > 0:
-                    table.move_cursor(row=table.row_count - 1)
-
-            case Action.JUMP_TO_CURRENT:
-                # Find the current queue index in the visible (filtered) rows.
-                cur = queue.current_index
-                if cur is not None:
-                    if self._filter_text:
-                        for visible_row, real_idx in enumerate(self._filtered_indices):
-                            if real_idx == cur:
-                                table.move_cursor(row=visible_row)
-                                break
-                    elif 0 <= cur < table.row_count:
-                        table.move_cursor(row=cur)
-
-            case Action.SELECT:
-                idx = self._resolve_row_idx(table.cursor_row)
-                if idx is not None:
-                    track = queue.jump_to(idx)
-                    if track:
-                        await self.app.play_track(track)  # type: ignore[attr-defined]
-                        self._refresh_queue()
-
-            # Remove selected track from queue (d d / delete key).
             case Action.DELETE_ITEM:
                 self._remove_selected(table, queue)
 
-            case Action.FILTER:
-                self._show_filter()
-
-            # Reorder: move track up (C-k).
             case Action.FOCUS_PREV if self._is_reorder_context():
                 self._move_track(table, queue, direction=-1)
 
-            # Reorder: move track down (C-j).
             case Action.FOCUS_NEXT if self._is_reorder_context():
                 self._move_track(table, queue, direction=1)
 
@@ -344,87 +227,49 @@ class QueuePage(Widget):
             # app/_keys.py and never delegated here, so no QueuePage case
             # for it.
 
+            case Action.TRACK_ACTIONS:
+                track = table.selected_track
+                if track:
+                    host = cast("YTMHostBase", self.app)
+                    host._open_actions_for_track(track)
+
+            case _:
+                await table.handle_action(action, count)
+
     def _is_reorder_context(self) -> bool:
         """Always allow reorder in the queue page."""
         return True
 
-    def on_mouse_down(self, event: Any) -> None:
-        """Forward right-click on the queue table to the app's actions popup.
-
-        Queue page uses a raw DataTable (not TrackTable), so the
-        right-click → actions popup wiring on TrackTable doesn't apply.
-        We use the cursor row (right-click typically lands on the
-        currently-highlighted row).
-        """
-        if getattr(event, "button", 1) != 3:
-            return
-        try:
-            table = self.query_one("#queue-table", DataTable)
-            row = table.cursor_row
-            idx = self._resolve_row_idx(row)
-            if idx is None:
-                return
-            queue = self.app.queue  # type: ignore[attr-defined]
-            if not (0 <= idx < queue.length):
-                return
-            track = queue.tracks[idx]
-            self.app._open_actions_for_track(track)  # type: ignore[attr-defined]
-            event.stop()
-        except Exception:
-            logger.debug("Failed to open queue actions popup", exc_info=True)
-
-    def _remove_selected(self, table: DataTable, queue: Any) -> None:
+    def _remove_selected(self, table: TrackTable, queue: Any) -> None:
         """Remove the currently highlighted track from the queue."""
-        idx = self._resolve_row_idx(table.cursor_row)
-        if idx is None:
+        track = table.selected_track
+        if not track:
             return
-        if 0 <= idx < queue.length:
+        # Find the track's real index in the queue.
+        idx = table.cursor_row
+        if idx is not None and 0 <= idx < queue.length:
             queue.remove(idx)
             self._refresh_queue()
-            # Keep cursor in bounds after removal.
             if table.row_count > 0:
-                visible_row = table.cursor_row
-                if visible_row is not None:
-                    new_row = min(visible_row, table.row_count - 1)
-                    table.move_cursor(row=new_row)
+                new_row = min(idx, table.row_count - 1)
+                table.move_cursor(row=new_row)
 
-    def _move_track(self, table: DataTable, queue: Any, direction: int) -> None:
+    def _move_track(self, table: TrackTable, queue: Any, direction: int) -> None:
         """Move the highlighted track up or down in the queue."""
-        from_idx = self._resolve_row_idx(table.cursor_row)
-        if from_idx is None:
+        if table.cursor_row is None:
             return
+        from_idx = table.cursor_row
         to_idx = from_idx + direction
         if not (0 <= to_idx < queue.length):
             return
         queue.move(from_idx, to_idx)
         self._refresh_queue()
-        # When unfiltered, the cursor follows the moved row; when filtered,
-        # the visible position may not match — keep cursor where it was.
-        if not self._filter_text:
-            table.move_cursor(row=to_idx)
+        table.move_cursor(row=to_idx)
 
-    # ── Filter helpers ───────────────────────────────────────────────
+    # ── Filter wiring ────────────────────────────────────────────────
 
-    def _resolve_row_idx(self, row: int | None) -> int | None:
-        """Map a visible row index to the real queue index."""
-        if row is None:
-            return None
-        if self._filter_text:
-            if 0 <= row < len(self._filtered_indices):
-                return self._filtered_indices[row]
-            return None
-        queue = self.app.queue  # type: ignore[attr-defined]
-        if 0 <= row < queue.length:
-            return row
-        return None
-
-    @staticmethod
-    def _matches_filter(track: dict, query: str) -> bool:
-        title = (track.get("title") or "").lower()
-        artist = extract_artist(track).lower()
-        return query in title or query in artist
-
-    def _show_filter(self) -> None:
+    def on_track_table_filter_requested(self, event: TrackTable.FilterRequested) -> None:
+        event.stop()
         try:
             f = self.query_one("#track-filter", Input)
             f.value = ""
@@ -433,34 +278,27 @@ class QueuePage(Widget):
         except Exception:
             pass
 
-    def _hide_filter(self) -> None:
+    def on_track_table_filter_closed(self, event: TrackTable.FilterClosed) -> None:
+        event.stop()
         try:
             f = self.query_one("#track-filter", Input)
             f.remove_class("visible")
-            self.query_one("#queue-table", DataTable).focus()
+            self.query_one("#queue-table", TrackTable).focus()
         except Exception:
             pass
 
-    def _apply_filter(self, query: str) -> None:
-        self._filter_text = query.strip().lower()
-        if self._filter_timer is not None:
-            try:
-                self._filter_timer.stop()
-            except Exception:
-                pass
-            self._filter_timer = None
-        if not self._filter_text:
-            self._refresh_queue()
-            return
-        self._filter_timer = self.set_timer(0.15, self._refresh_queue)
-
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "track-filter":
-            self._apply_filter(event.value)
+            self.query_one("#queue-table", TrackTable).apply_filter(event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "track-filter":
-            self._hide_filter()
+            try:
+                f = self.query_one("#track-filter", Input)
+                f.remove_class("visible")
+                self.query_one("#queue-table", TrackTable).focus()
+            except Exception:
+                pass
 
     def on_key(self, event: object) -> None:
         from textual.events import Key
@@ -473,8 +311,8 @@ class QueuePage(Widget):
                 if f.has_class("visible"):
                     event.stop()
                     event.prevent_default()
-                    self._filter_text = ""
-                    self._refresh_queue()
-                    self._hide_filter()
+                    self.query_one("#queue-table", TrackTable).clear_filter()
+                    f.remove_class("visible")
+                    self.query_one("#queue-table", TrackTable).focus()
             except Exception:
                 pass

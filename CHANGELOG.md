@@ -131,16 +131,14 @@ A reliability and quality release driven by a multi-agent expert audit. Hardens 
 
 **New**
 
-- Playlist radio — right-click any sidebar playlist and choose "Start Radio", or click the "[▶ Start Radio]" button in the playlist header (Library and Context pages). Seeds a radio queue via `RDAMPL` + playlist ID.
-- "Add to Library" button now only shows for playlists you don't own. Both header buttons were previously invisible due to a layout bug (Label taking full width); fixed with `width: auto`.
-- Configurable home shelf count — set `home_shelves` under `[ui]` in `config.toml` to control how many recommendation shelves are fetched on the Browse > For You tab (default: 3, range: 1–25).
-- For You shelves scroll as a single section instead of each shelf scrolling independently, with subtle separators and colored section titles for readability.
+- Queue, Liked Songs, and Recently Played pages migrated from raw DataTable to TrackTable — gains right-click context menus, play indicators, column resize, filtering, and sorting
+- `[▶ Start Radio]` button in Liked Songs and Recently Played page headers — seeds radio from 5 random tracks in the collection
+- Shuffle-lock integration for Liked Songs and Recently Played — selecting a track applies the per-collection shuffle preference
 
 **Fixes**
 
-- macOS built-in keyboard media keys (prev/next) now work — built-in MacBook keyboards send key codes 19/20 (fast-forward/rewind) instead of the standard 17/18 (next/previous) that external keyboards use. The Quartz event tap now maps both sets.
-- Browse tab bar now renders correctly — `.tab-item` height increased from 1 to 3 rows so text is visible, tabs sized with `width: auto` so all four render side-by-side, hover state added for discoverability, and tab bar background set to `$surface` for contrast.
-- yt-dlp now also tries the android client when the default web client refuses (e.g., madeForKids content); falls through to a non-PoT legacy format that succeeds. Normal songs unaffected.
+- Radio track durations no longer show `--:--` — ytmusicapi's `get_watch_playlist` returns duration as `length` (e.g. "3:07") instead of `duration`; `extract_duration` now checks all three keys
+- Play history no longer stores duration as 0 — `log_play` was using `duration_seconds` but normalized tracks store `duration`; fixed with `extract_duration()`
 
 ---
 
