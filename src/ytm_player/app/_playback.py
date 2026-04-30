@@ -317,7 +317,9 @@ class PlaybackMixin(YTMHostBase):
         # set_context() in _start_playlist_radio.
         self.queue.set_context(None)
         self._refresh_queue_page()
-        label = label or f"Radio generated from {seeds[0].get('title', 'Unknown')}"
+        if not label:
+            seed_list = "\n".join(f"  • {s.get('title', 'Unknown')}" for s in seeds)
+            label = f"Radio generated from:\n{seed_list}"
         first = self.queue.next_track()
         if first:
             await self.play_track(first)
@@ -497,12 +499,15 @@ class PlaybackMixin(YTMHostBase):
         if not self.ytmusic:
             return
         self.notify("Loading discovery mix...", timeout=3)
-        seeds, label = await self.ytmusic.get_discovery_mix()
+        seeds, source = await self.ytmusic.get_discovery_mix()
         if not seeds:
             self.notify("Discovery failed — no content available", severity="warning")
             return
+        seed_list = "\n".join(f"  • {s.get('title', 'Unknown')}" for s in seeds)
+        label = f"Discovery ({source}):\n{seed_list}" if source else None
         await self._fetch_and_play_radio(seeds, label=label)
-        await self.navigate_to("queue")
+        if self._current_page != "queue":
+            await self.navigate_to("queue")
 
     def _on_volume_change(self, volume: int) -> None:
         """Handle volume change events."""
