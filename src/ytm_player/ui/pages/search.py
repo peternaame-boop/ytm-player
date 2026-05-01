@@ -809,95 +809,6 @@ class SearchPage(Widget):
         except Exception:
             logger.debug("Failed to load subscribed artists", exc_info=True)
 
-    async def _start_artist_radio(self, browse_id: str) -> None:
-        """Fetch artist data and start a radio from their radioId or top songs."""
-        host = cast("YTMHostBase", self.app)
-        assert host.ytmusic is not None
-        host.notify("Loading radio...", timeout=3)
-        data = await host.ytmusic.get_artist(browse_id)
-        if not data:
-            host.notify("Couldn't load artist data.", severity="warning", timeout=3)
-            return
-        artist_name = data.get("name", "Unknown Artist")
-        radio_id = data.get("radioId")
-        if radio_id:
-            tracks = await host.ytmusic.get_watch_playlist(playlist_id=radio_id, radio=True)
-            normalized = normalize_tracks(tracks)
-            if normalized:
-                host.queue.clear()
-                host.queue.set_context(None)
-                host.queue.set_radio_tracks(normalized)
-                host._refresh_queue_page()
-                first = host.queue.next_track()
-                if first:
-                    await host.play_track(first)
-                host.notify(f"Playing: Radio from {artist_name}", timeout=4)
-            else:
-                host.notify("No radio suggestions available.", severity="warning", timeout=3)
-        else:
-            songs = data.get("songs", {})
-            results = songs.get("results", []) if isinstance(songs, dict) else []
-            seeds = [t for t in results if t.get("videoId")]
-            if seeds:
-                await host._fetch_and_play_radio(seeds, label=f"Radio from {artist_name}")
-            else:
-                host.notify("No songs to seed radio.", severity="warning", timeout=3)
-
-    async def _play_artist_top_songs(self, browse_id: str) -> None:
-        """Fetch artist top songs, queue them, and start playback."""
-        host = cast("YTMHostBase", self.app)
-        assert host.ytmusic is not None
-        host.notify("Loading top songs...", timeout=3)
-        data = await host.ytmusic.get_artist(browse_id)
-        if not data:
-            host.notify("Couldn't load artist data.", severity="warning", timeout=3)
-            return
-        songs_section = data.get("songs", {})
-        top_tracks = normalize_tracks(
-            songs_section.get("results", []) if isinstance(songs_section, dict) else []
-        )
-        if not top_tracks:
-            host.notify("No songs found for this artist.", severity="warning", timeout=3)
-            return
-        artist_name = data.get("name", "Unknown Artist")
-        host.queue.clear()
-        host.queue.set_context(None)
-        host.queue.add_multiple(top_tracks)
-        host.queue.jump_to_real(0)
-        host._refresh_queue_page()
-        await host.play_track(top_tracks[0])
-        host.notify(f"Playing top songs from {artist_name}", timeout=4)
-        songs_browse_id = songs_section.get("browseId") if isinstance(songs_section, dict) else None
-        if songs_browse_id:
-            self.run_worker(
-                self._fetch_remaining_artist_songs(songs_browse_id, top_tracks),
-                name="fetch-artist-songs",
-                exclusive=True,
-            )
-
-    async def _fetch_remaining_artist_songs(
-        self, browse_id: str, initial_tracks: list[dict[str, Any]]
-    ) -> None:
-        """Background-fetch the full artist song list, enrich initial tracks, and append rest."""
-        host = cast("YTMHostBase", self.app)
-        try:
-            assert host.ytmusic is not None
-            pl = await host.ytmusic.get_playlist(browse_id)
-            all_tracks = normalize_tracks(pl.get("tracks", []) if isinstance(pl, dict) else [])
-            full_by_id = {t.get("video_id", ""): t for t in all_tracks if t.get("video_id")}
-            existing_ids = {t.get("video_id", "") for t in initial_tracks}
-            # Enrich initial tracks with full data (durations, album, etc.)
-            for qt in host.queue.tracks:
-                vid = qt.get("video_id", "")
-                if vid in full_by_id:
-                    qt.update(full_by_id[vid])
-            for t in all_tracks:
-                if t.get("video_id", "") not in existing_ids:
-                    host.queue.add(t)
-            host._refresh_queue_page()
-        except Exception:
-            logger.debug("Background artist songs fetch failed", exc_info=True)
-
     async def _toggle_artist_subscribe(self, item: dict[str, Any], browse_id: str) -> None:
         """Subscribe to or unsubscribe from an artist."""
         from ytm_player.services.ytmusic import mutation_failure_suffix
@@ -1092,7 +1003,7 @@ class SearchPage(Widget):
                 if not browse_id:
                     host.notify("No ID available for this item.", severity="warning", timeout=2)
                 elif item_type == "artist":
-                    host.run_worker(self._start_artist_radio(browse_id))
+                    host.run_worker(host._start_artist_radio(browse_id))
                 elif item_type == "playlist":
                     host.run_worker(host._start_playlist_radio(item))
 
@@ -1101,7 +1012,7 @@ class SearchPage(Widget):
                 if not browse_id:
                     host.notify("No ID available for this item.", severity="warning", timeout=2)
                 elif item_type == "artist":
-                    host.run_worker(self._play_artist_top_songs(browse_id))
+                    host.run_worker(host._play_artist_top_songs(browse_id))
                 else:
                     ctx_type = item_type if item_type in ("album", "playlist") else "artist"
                     host.run_worker(

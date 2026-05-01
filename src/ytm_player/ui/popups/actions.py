@@ -181,11 +181,12 @@ class ActionsPopup(ModalScreen[str | None]):
         item_type: str = "track",
         *,
         in_queue: bool = False,
+        actions: list[tuple[str, str]] | None = None,
     ) -> None:
         super().__init__()
         self.item = item
         self.item_type = item_type
-        self._actions = _build_actions(item, item_type, in_queue=in_queue)
+        self._actions = actions or _build_actions(item, item_type, in_queue=in_queue)
 
     @property
     def _title_text(self) -> str:

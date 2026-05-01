@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.ui.pages.search import SearchPage
 
 
@@ -47,7 +48,7 @@ class TestStartArtistRadio:
                 {"videoId": "r2", "title": "Radio 2", "artists": [{"name": "A", "id": "a1"}]},
             ],
         )
-        await SearchPage._start_artist_radio(page, "UC_test")
+        await TrackActionsMixin._start_artist_radio(host, "UC_test")
 
         host.ytmusic.get_artist.assert_awaited_once_with("UC_test")
         host.ytmusic.get_watch_playlist.assert_awaited_once_with(
@@ -71,7 +72,7 @@ class TestStartArtistRadio:
                 },
             },
         )
-        await SearchPage._start_artist_radio(page, "UC_test")
+        await TrackActionsMixin._start_artist_radio(host, "UC_test")
 
         host._fetch_and_play_radio.assert_awaited_once()
         call_args = host._fetch_and_play_radio.call_args
@@ -82,7 +83,7 @@ class TestStartArtistRadio:
     async def test_artist_fetch_failure(self):
         """When get_artist returns empty, shows warning."""
         page, host = _make_page(get_artist_return={})
-        await SearchPage._start_artist_radio(page, "UC_test")
+        await TrackActionsMixin._start_artist_radio(host, "UC_test")
 
         host.notify.assert_any_call("Couldn't load artist data.", severity="warning", timeout=3)
         host.queue.clear.assert_not_called()
@@ -93,7 +94,7 @@ class TestStartArtistRadio:
             get_artist_return={"name": "Test", "radioId": "RDAMPL_test"},
             get_watch_playlist_return=[],
         )
-        await SearchPage._start_artist_radio(page, "UC_test")
+        await TrackActionsMixin._start_artist_radio(host, "UC_test")
 
         host.notify.assert_any_call(
             "No radio suggestions available.", severity="warning", timeout=3
@@ -104,7 +105,7 @@ class TestStartArtistRadio:
         page, host = _make_page(
             get_artist_return={"name": "Empty", "songs": {"results": []}},
         )
-        await SearchPage._start_artist_radio(page, "UC_test")
+        await TrackActionsMixin._start_artist_radio(host, "UC_test")
 
         host.notify.assert_any_call("No songs to seed radio.", severity="warning", timeout=3)
 
@@ -134,7 +135,7 @@ class TestPlayArtistTopSongs:
                 },
             },
         )
-        await SearchPage._play_artist_top_songs(page, "UC_ax")
+        await TrackActionsMixin._play_artist_top_songs(host, "UC_ax")
 
         host.queue.clear.assert_called_once()
         host.queue.set_context.assert_called_once_with(None)
@@ -158,16 +159,16 @@ class TestPlayArtistTopSongs:
                 },
             },
         )
-        await SearchPage._play_artist_top_songs(page, "UC_ax")
+        await TrackActionsMixin._play_artist_top_songs(host, "UC_ax")
 
-        page.run_worker.assert_called_once()
+        host.run_worker.assert_called_once()
 
     async def test_no_songs(self):
         """When artist has no songs, shows warning."""
         page, host = _make_page(
             get_artist_return={"name": "Empty Artist", "songs": {"results": []}},
         )
-        await SearchPage._play_artist_top_songs(page, "UC_empty")
+        await TrackActionsMixin._play_artist_top_songs(host, "UC_empty")
 
         host.notify.assert_any_call(
             "No songs found for this artist.", severity="warning", timeout=3
@@ -177,7 +178,7 @@ class TestPlayArtistTopSongs:
     async def test_artist_failure(self):
         """When get_artist returns empty, shows warning."""
         page, host = _make_page(get_artist_return={})
-        await SearchPage._play_artist_top_songs(page, "UC_fail")
+        await TrackActionsMixin._play_artist_top_songs(host, "UC_fail")
 
         host.notify.assert_any_call("Couldn't load artist data.", severity="warning", timeout=3)
 
@@ -299,7 +300,7 @@ class TestFetchRemainingArtistSongs:
         queue_track = {"video_id": "s1", "title": "Existing"}
         host.queue.tracks = (queue_track,)
         initial = [{"video_id": "s1", "title": "Existing"}]
-        await SearchPage._fetch_remaining_artist_songs(page, "VLPLfull", initial)
+        await TrackActionsMixin._fetch_remaining_artist_songs(host, "VLPLfull", initial)
 
         host.ytmusic.get_playlist.assert_awaited_once_with("VLPLfull")
         assert host.queue.add.call_count == 2
@@ -311,7 +312,7 @@ class TestFetchRemainingArtistSongs:
         page, host = _make_page()
         host.ytmusic.get_playlist = AsyncMock(side_effect=Exception("API down"))
         initial = [{"video_id": "s1", "title": "Track"}]
-        await SearchPage._fetch_remaining_artist_songs(page, "VLPLfull", initial)
+        await TrackActionsMixin._fetch_remaining_artist_songs(host, "VLPLfull", initial)
 
         host.queue.add.assert_not_called()
 
