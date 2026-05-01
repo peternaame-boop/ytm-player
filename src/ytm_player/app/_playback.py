@@ -11,7 +11,7 @@ from ytm_player.app._base import YTMHostBase
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import get_video_id
+from ytm_player.utils.formatting import get_video_id, normalize_tracks
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +311,9 @@ class PlaybackMixin(YTMHostBase):
             return
 
         self.queue.clear()
+        normalized_seeds = normalize_tracks(seeds)
+        if normalized_seeds:
+            self.queue.add_multiple(normalized_seeds)
         self.queue.set_radio_tracks(tracks)
         self.queue.radio_seeds = seeds
         # Track-seeded radio and discovery mix are ephemeral — clear any
