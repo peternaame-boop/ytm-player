@@ -30,7 +30,7 @@ class DiscordRPC:
     async def connect(self) -> bool:
         """Attempt to connect to Discord. Returns True on success."""
         try:
-            from pypresence import AioPresence
+            from pypresence import AioPresence  # type: ignore[reportPrivateImportUsage]
         except ImportError:
             logger.info("pypresence not installed — Discord RPC disabled")
             return False

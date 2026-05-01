@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 
+from ytm_player.app._base import YTMHostBase
+
 logger = logging.getLogger(__name__)
 
 
-class IPCMixin:
+class IPCMixin(YTMHostBase):
     """Handles IPC commands from the CLI."""
 
     async def _handle_ipc_command(self, command: str, args: dict) -> dict:
@@ -64,7 +66,7 @@ class IPCMixin:
                         or not self.player.current_track.get("video_id")
                     ):
                         return {"ok": False, "error": "no track is playing"}
-                    await self.ytmusic.rate_song(self.player.current_track["video_id"], "LIKE")
+                    await self.ytmusic.rate_song(self.player.current_track["video_id"], "LIKE")  # type: ignore[reportOptionalMemberAccess]
                     return {"ok": True}
 
                 case "dislike":
@@ -74,7 +76,7 @@ class IPCMixin:
                         or not self.player.current_track.get("video_id")
                     ):
                         return {"ok": False, "error": "no track is playing"}
-                    await self.ytmusic.rate_song(self.player.current_track["video_id"], "DISLIKE")
+                    await self.ytmusic.rate_song(self.player.current_track["video_id"], "DISLIKE")  # type: ignore[reportOptionalMemberAccess]
                     return {"ok": True}
 
                 case "unlike":
@@ -84,7 +86,7 @@ class IPCMixin:
                         or not self.player.current_track.get("video_id")
                     ):
                         return {"ok": False, "error": "no track is playing"}
-                    await self.ytmusic.rate_song(
+                    await self.ytmusic.rate_song(  # type: ignore[reportOptionalMemberAccess]
                         self.player.current_track["video_id"], "INDIFFERENT"
                     )
                     return {"ok": True}

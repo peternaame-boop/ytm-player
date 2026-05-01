@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
+from ytm_player.app._base import YTMHostBase
 from ytm_player.services.queue import RepeatMode
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 _SESSION_SCHEMA_VERSION = 1
 
 
-class SessionMixin:
+class SessionMixin(YTMHostBase):
     """Persist and restore session state (volume, shuffle, repeat, queue, etc.)."""
 
     async def _restore_session_state(self) -> None:
@@ -41,7 +42,7 @@ class SessionMixin:
             state = {}
 
         volume = state.get("volume", self.settings.playback.default_volume)
-        await self.player.set_volume(volume)
+        await self.player.set_volume(volume)  # type: ignore[reportOptionalMemberAccess]
 
         repeat = state.get("repeat", "off")
         try:

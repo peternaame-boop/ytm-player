@@ -129,7 +129,7 @@ class Player:
 
         self._mpv = self._init_mpv()
 
-    def _init_mpv(self) -> mpv.MPV:
+    def _init_mpv(self) -> Any:
         """Create and configure a new mpv instance.
 
         Sets LC_NUMERIC locale, creates the MPV process, enables gapless

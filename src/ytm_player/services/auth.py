@@ -57,12 +57,12 @@ def _patch_yt_dlp_browsers() -> None:
     try:
         from yt_dlp import cookies as c
 
-        orig_fn = c._get_chromium_based_browser_settings
+        orig_fn = c._get_chromium_based_browser_settings  # type: ignore[reportAttributeAccessIssue]
 
         def _patched(browser_name: str):  # type: ignore[no-untyped-def]
             if browser_name in _CUSTOM_CHROMIUM_BROWSERS:
                 config_dir_name, keyring = _CUSTOM_CHROMIUM_BROWSERS[browser_name]
-                config_home = c._config_home()
+                config_home = c._config_home()  # type: ignore[reportAttributeAccessIssue]
                 return {
                     "browser_dir": os.path.join(config_home, config_dir_name),
                     "keyring_name": keyring,
@@ -70,7 +70,7 @@ def _patch_yt_dlp_browsers() -> None:
                 }
             return orig_fn(browser_name)
 
-        c._get_chromium_based_browser_settings = _patched
+        c._get_chromium_based_browser_settings = _patched  # type: ignore[reportAttributeAccessIssue]
         c.CHROMIUM_BASED_BROWSERS = c.CHROMIUM_BASED_BROWSERS | set(_CUSTOM_CHROMIUM_BROWSERS)
         _yt_dlp_patched = True
     except (ImportError, AttributeError) as exc:
@@ -354,6 +354,7 @@ class AuthManager:
         valid_accounts: list[tuple[int, str, str]] = []  # (authuser_index, accountName, handle)
         for authuser in authuser_indices:
             headers = {**base_headers, "x-goog-authuser": str(authuser)}
+            tmp_path: str | None = None
             try:
                 fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=str(self._config_dir))
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -368,8 +369,9 @@ class AuthManager:
                 logger.debug("x-goog-authuser=%d did not work, skipping", authuser)
             finally:
                 try:
-                    os.unlink(tmp_path)
-                except (OSError, UnboundLocalError):
+                    if tmp_path is not None:
+                        os.unlink(tmp_path)
+                except OSError:
                     pass
 
         if not valid_accounts:

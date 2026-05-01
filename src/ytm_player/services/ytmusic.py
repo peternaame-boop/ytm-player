@@ -194,7 +194,7 @@ class YTMusicService:
     async def get_new_releases(self) -> list[dict[str, Any]]:
         """Return new album releases."""
         try:
-            result = await self._call(self.client.get_new_releases)
+            result = await self._call(self.client.get_new_releases)  # type: ignore[reportAttributeAccessIssue]
             # ytmusicapi may return a list directly or a dict with a key.
             if isinstance(result, list):
                 return result

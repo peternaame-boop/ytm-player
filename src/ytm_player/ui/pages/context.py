@@ -141,7 +141,7 @@ class ContextPage(Widget):
     }
     """
 
-    loading: reactive[bool] = reactive(True)
+    loading: reactive[bool] = reactive(True)  # type: ignore[reportIncompatibleVariableOverride]
     error_message: reactive[str] = reactive("")
 
     def __init__(
@@ -210,7 +210,7 @@ class ContextPage(Widget):
                 else:
                     self._build_content()
             elif event.state == WorkerState.ERROR:
-                self.loading = False
+                self.loading = False  # type: ignore[reportIncompatibleVariableOverride]
                 self.error_message = f"Failed to load {self.context_type}."
                 logger.exception("Failed to load %s %s", self.context_type, self.context_id)
         elif event.worker.name == "fetch_remaining":
@@ -403,7 +403,7 @@ class ContextPage(Widget):
     def on_click(self, event: Click) -> None:
         """Handle clicks on the add-to-library button."""
         widget = event.widget
-        if widget.id == "add-to-library-btn":
+        if widget.id == "add-to-library-btn":  # type: ignore[reportOptionalMemberAccess]
             event.stop()
             self.run_worker(self._add_to_library(), name="add_to_lib", exclusive=True)
 

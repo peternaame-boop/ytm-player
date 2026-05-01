@@ -331,7 +331,7 @@ class LibraryPanel(Widget):
         labels = getattr(self, "_bouncing_labels", [])
         if idx is not None and 0 <= idx < len(labels):
             try:
-                sidebar_width = self.parent.styles.width.value if self.parent else 30
+                sidebar_width = self.parent.styles.width.value if self.parent else 30  # type: ignore[reportOptionalMemberAccess]
             except Exception:
                 sidebar_width = 30
             labels[idx].start_bounce(int(sidebar_width))
@@ -555,10 +555,10 @@ class PlaylistSidebar(Widget):
 
     def on_click(self, event: Click) -> None:
         target = event.widget
-        if target.id == "ps-nav-liked":
+        if target.id == "ps-nav-liked":  # type: ignore[reportOptionalMemberAccess]
             event.stop()
             self.post_message(self.NavItemClicked("liked_songs"))
-        elif target.id == "ps-nav-recent":
+        elif target.id == "ps-nav-recent":  # type: ignore[reportOptionalMemberAccess]
             event.stop()
             self.post_message(self.NavItemClicked("recently_played"))
 
@@ -585,9 +585,9 @@ class PlaylistSidebar(Widget):
             case Action.PAGE_UP:
                 list_view.action_scroll_up()
             case Action.GO_TOP:
-                list_view.action_first()
+                list_view.action_first()  # type: ignore[reportAttributeAccessIssue]
             case Action.GO_BOTTOM:
-                list_view.action_last()
+                list_view.action_last()  # type: ignore[reportAttributeAccessIssue]
             case Action.SELECT:
                 list_view.action_select_cursor()
             case Action.FILTER:

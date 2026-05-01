@@ -77,7 +77,7 @@ class DownloadService:
 
         try:
             opts = self._build_opts(output_template)
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[reportArgumentType]
                 ydl.download([url])
 
             # Find the downloaded file (extension may vary).

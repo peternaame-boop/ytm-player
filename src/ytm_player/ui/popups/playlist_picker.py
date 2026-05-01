@@ -174,7 +174,7 @@ class PlaylistPicker(ModalScreen[str | None]):
 
     async def _fetch_playlists(self) -> list[dict[str, Any]]:
         try:
-            playlists = await self.app.ytmusic.get_library_playlists(limit=50)
+            playlists = await self.app.ytmusic.get_library_playlists(limit=50)  # type: ignore[reportAttributeAccessIssue]
             return playlists
         except Exception:
             logger.exception("Failed to fetch library playlists")
@@ -285,14 +285,14 @@ class PlaylistPicker(ModalScreen[str | None]):
         status.update(f"Creating '{name}'...")
 
         try:
-            playlist_id = await self.app.ytmusic.create_playlist(name)
+            playlist_id = await self.app.ytmusic.create_playlist(name)  # type: ignore[reportAttributeAccessIssue]
             if not playlist_id:
                 self.notify("Failed to create playlist", severity="error")
                 status.update("Creation failed")
                 return
 
             status.update(f"Adding tracks to '{name}'...")
-            await self.app.ytmusic.add_playlist_items(playlist_id, self.video_ids)
+            await self.app.ytmusic.add_playlist_items(playlist_id, self.video_ids)  # type: ignore[reportAttributeAccessIssue]
 
             _record_recent(playlist_id)
 
@@ -320,7 +320,7 @@ class PlaylistPicker(ModalScreen[str | None]):
         status.update(f"Adding to '{title}'...")
 
         try:
-            await self.app.ytmusic.add_playlist_items(playlist_id, self.video_ids)
+            await self.app.ytmusic.add_playlist_items(playlist_id, self.video_ids)  # type: ignore[reportAttributeAccessIssue]
 
             _record_recent(playlist_id)
 

@@ -136,11 +136,11 @@ class AlbumArt(Widget):
         Each character cell represents 2 vertical pixels using the upper
         half block (▀) with foreground = top pixel, background = bottom pixel.
         """
-        img = Image.open(BytesIO(img_bytes)).convert("RGB")
+        img = Image.open(BytesIO(img_bytes)).convert("RGB")  # type: ignore[reportPossiblyUnboundVariable]
         # Each char = 1 pixel wide, 2 pixels tall.
         pixel_w = width
         pixel_h = height * 2
-        img = img.resize((pixel_w, pixel_h), Image.LANCZOS)
+        img = img.resize((pixel_w, pixel_h), Image.LANCZOS)  # type: ignore[reportPossiblyUnboundVariable, reportAttributeAccessIssue]
 
         result = Text()
         for row in range(height):
@@ -149,8 +149,8 @@ class AlbumArt(Widget):
             top_y = row * 2
             bot_y = row * 2 + 1
             for col in range(pixel_w):
-                tr, tg, tb = img.getpixel((col, top_y))
-                br, bg, bb = img.getpixel((col, bot_y))
+                tr, tg, tb = img.getpixel((col, top_y))  # type: ignore[reportGeneralTypeIssues]
+                br, bg, bb = img.getpixel((col, bot_y))  # type: ignore[reportGeneralTypeIssues]
                 style = Style(
                     color=Color.from_rgb(tr, tg, tb),
                     bgcolor=Color.from_rgb(br, bg, bb),

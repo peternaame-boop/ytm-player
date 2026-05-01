@@ -122,9 +122,9 @@ def install_excepthooks(*, crash_dir: Path, keep: int = 10) -> None:
         text = "".join(
             traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
         )
-        _write(f"=== Thread crash ({args.thread.name}) ===\n{text}")
+        _write(f"=== Thread crash ({args.thread.name}) ===\n{text}")  # type: ignore[reportOptionalMemberAccess]
         _prune()
-        threading.__excepthook__(args)
+        threading.__excepthook__(args)  # type: ignore[reportAttributeAccessIssue]
 
     sys.excepthook = _sys_hook
     threading.excepthook = _thread_hook

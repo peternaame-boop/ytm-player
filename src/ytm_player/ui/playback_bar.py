@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -121,14 +122,14 @@ class _VolumeDisplay(Widget):
     async def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
         event.stop()
         app = self.app
-        if hasattr(app, "player") and app.player:
-            await app.player.change_volume(5)
+        if hasattr(app, "player") and app.player:  # type: ignore[reportAttributeAccessIssue]
+            await app.player.change_volume(5)  # type: ignore[reportAttributeAccessIssue]
 
     async def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
         event.stop()
         app = self.app
-        if hasattr(app, "player") and app.player:
-            await app.player.change_volume(-5)
+        if hasattr(app, "player") and app.player:  # type: ignore[reportAttributeAccessIssue]
+            await app.player.change_volume(-5)  # type: ignore[reportAttributeAccessIssue]
 
 
 class _RepeatButton(Widget):
@@ -160,7 +161,7 @@ class _RepeatButton(Widget):
         event.stop()
         app = self.app
         if hasattr(app, "queue"):
-            mode = app.queue.cycle_repeat()
+            mode = app.queue.cycle_repeat()  # type: ignore[reportAttributeAccessIssue]
             try:
                 bar = app.query_one("#playback-bar", PlaybackBar)
                 bar.update_repeat(mode)
@@ -196,8 +197,8 @@ class _ShuffleButton(Widget):
         event.stop()
         app = self.app
         if hasattr(app, "queue"):
-            app.queue.toggle_shuffle()
-            enabled = app.queue.shuffle_enabled
+            app.queue.toggle_shuffle()  # type: ignore[reportAttributeAccessIssue]
+            enabled = app.queue.shuffle_enabled  # type: ignore[reportAttributeAccessIssue]
             try:
                 bar = app.query_one("#playback-bar", PlaybackBar)
                 bar.update_shuffle(enabled)
@@ -285,10 +286,10 @@ class PlaybackBar(Widget):
             return
         app = self.app
         track = None
-        if hasattr(app, "player") and app.player and app.player.current_track:
-            track = app.player.current_track
-        elif hasattr(app, "queue") and app.queue.current_track:
-            track = app.queue.current_track
+        if hasattr(app, "player") and app.player and app.player.current_track:  # type: ignore[reportAttributeAccessIssue]
+            track = app.player.current_track  # type: ignore[reportAttributeAccessIssue]
+        elif hasattr(app, "queue") and app.queue.current_track:  # type: ignore[reportAttributeAccessIssue]
+            track = app.queue.current_track  # type: ignore[reportAttributeAccessIssue]
         if track:
             self.post_message(self.TrackRightClicked(track))
 
@@ -360,7 +361,7 @@ class _FooterButton(Widget):
     is_active: reactive[bool] = reactive(False)
     is_dimmed: reactive[bool] = reactive(False)
 
-    def __init__(self, label: str, action: str, **kwargs: object) -> None:
+    def __init__(self, label: str, action: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._label = label
         self._action = action
@@ -386,14 +387,14 @@ class _FooterButton(Widget):
                 | "liked_songs"
                 | "recently_played"
             ):
-                await app.navigate_to(self._action)  # type: ignore[attr-defined]
+                await app.navigate_to(self._action)  # type: ignore[reportAttributeAccessIssue]
             case "play_pause":
                 if hasattr(app, "_toggle_play_pause"):
-                    await app._toggle_play_pause()
+                    await app._toggle_play_pause()  # type: ignore[reportAttributeAccessIssue]
             case "prev":
-                await app._play_previous()  # type: ignore[attr-defined]
+                await app._play_previous()  # type: ignore[reportAttributeAccessIssue]
             case "next":
-                await app._play_next()  # type: ignore[attr-defined]
+                await app._play_next()  # type: ignore[reportAttributeAccessIssue]
             case "spotify_import":
                 from ytm_player.ui.popups.spotify_import import SpotifyImportPopup
 

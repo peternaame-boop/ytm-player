@@ -43,7 +43,7 @@ spotify = [
     "thefuzz>=0.22.0",
 ]
 mpris = [
-    "dbus-next>=0.2.3",
+    "dbus-fast>=2.0.0",
 ]
 images = []  # Pillow is now a default dependency; kept for backwards compat.
 discord = [
@@ -61,6 +61,8 @@ dev = [
     "pytest-cov",
     "ruff",
     "anyascii>=0.3.0",
+    "pre-commit>=4.0",
+    "pyright>=1.1",
 ]
 
 [project.urls]
@@ -111,3 +113,9 @@ omit = [
     "src/ytm_player/ui/*",
     "src/ytm_player/__main__.py",
 ]
+
+[tool.pyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"

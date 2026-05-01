@@ -139,12 +139,12 @@ def extract_spotify_tracks_spotipy(url: str) -> tuple[str, list[dict]]:
 
     if is_album:
         album = sp.album(playlist_id)
-        playlist_name = album.get("name", "Imported Album")
-        results = album.get("tracks", {})
+        playlist_name = album.get("name", "Imported Album")  # type: ignore[reportOptionalMemberAccess]
+        results = album.get("tracks", {})  # type: ignore[reportOptionalMemberAccess]
     else:
         playlist = sp.playlist(playlist_id)
-        playlist_name = playlist.get("name", "Imported Playlist")
-        results = playlist.get("tracks", {})
+        playlist_name = playlist.get("name", "Imported Playlist")  # type: ignore[reportOptionalMemberAccess]
+        results = playlist.get("tracks", {})  # type: ignore[reportOptionalMemberAccess]
 
     tracks: list[dict] = []
     while results:
@@ -221,8 +221,8 @@ def _fuzzy_score(spotify_track: dict, ytm_track: dict) -> int:
     ytm_title = (ytm_track.get("title", "") or "").lower()
     ytm_artist = extract_artist(ytm_track).lower()
 
-    title_score = fuzz.ratio(sp_title, ytm_title)
-    artist_score = fuzz.ratio(sp_artist, ytm_artist)
+    title_score = fuzz.ratio(sp_title, ytm_title)  # type: ignore[reportPossiblyUnboundVariable]
+    artist_score = fuzz.ratio(sp_artist, ytm_artist)  # type: ignore[reportPossiblyUnboundVariable]
 
     # Weighted: title matters more but artist is still important.
     return int(title_score * TITLE_MATCH_WEIGHT + artist_score * ARTIST_MATCH_WEIGHT)
@@ -280,11 +280,11 @@ def match_tracks(
     # Pre-allocate results list so we can slot them back in order.
     results: list[MatchResult | None] = [None] * len(spotify_tracks)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
+    with Progress(  # type: ignore[reportPossiblyUnboundVariable]
+        SpinnerColumn(),  # type: ignore[reportPossiblyUnboundVariable]
+        TextColumn("[progress.description]{task.description}"),  # type: ignore[reportPossiblyUnboundVariable]
+        BarColumn(),  # type: ignore[reportPossiblyUnboundVariable]
+        TextColumn("{task.completed}/{task.total}"),  # type: ignore[reportPossiblyUnboundVariable]
         console=console,
     ) as progress:
         task = progress.add_task("Searching YouTube Music...", total=len(spotify_tracks))
@@ -320,7 +320,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     if not _HAS_SPOTIFY_DEPS:
         click.echo("Spotify import requires extra dependencies: pip install ytm-player[spotify]")
         return
-    console = Console()
+    console = Console()  # type: ignore[reportPossiblyUnboundVariable]
 
     # Validate URL.
     if not re.match(r"https?://open\.spotify\.com/(playlist|album)/", spotify_url):

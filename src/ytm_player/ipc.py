@@ -159,8 +159,8 @@ class IPCServer:
         # Save the port so the client can find us.
         addr = self._server.sockets[0].getsockname()
         port = addr[1]
-        IPC_PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        IPC_PORT_FILE.write_text(str(port), encoding="utf-8")
+        IPC_PORT_FILE.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[reportAttributeAccessIssue]
+        IPC_PORT_FILE.write_text(str(port), encoding="utf-8")  # type: ignore[reportAttributeAccessIssue]
         logger.info("IPC server listening on 127.0.0.1:%d", port)
 
     async def stop(self) -> None:

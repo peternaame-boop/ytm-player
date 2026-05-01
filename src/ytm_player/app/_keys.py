@@ -6,6 +6,7 @@ import logging
 
 from textual.events import Key
 
+from ytm_player.app._base import YTMHostBase
 from ytm_player.config import Action, MatchResult
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 _MAX_KEY_COUNT = 1000
 
 
-class KeyHandlingMixin:
+class KeyHandlingMixin(YTMHostBase):
     """Keyboard input processing and action dispatch."""
 
     async def on_key(self, event: Key) -> None:
@@ -259,7 +260,7 @@ class KeyHandlingMixin:
             ):
                 page = self._get_current_page()
                 if page and hasattr(page, "handle_action"):
-                    await page.handle_action(action, count)
+                    await page.handle_action(action, count)  # type: ignore[reportAttributeAccessIssue]
 
             case _:
                 logger.debug("Unhandled action: %s", action)

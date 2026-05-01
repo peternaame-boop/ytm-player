@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from ytm_player.app._base import YTMHostBase
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.popups.playlist_picker import PlaylistPicker
@@ -13,7 +14,7 @@ from ytm_player.utils.formatting import copy_to_clipboard, get_video_id
 logger = logging.getLogger(__name__)
 
 
-class TrackActionsMixin:
+class TrackActionsMixin(YTMHostBase):
     """Track table integration and actions popup wiring."""
 
     async def on_track_table_track_selected(self, message: TrackTable.TrackSelected) -> None:
@@ -128,7 +129,7 @@ class TrackActionsMixin:
 
                     async def _rate(vid: str, r: str, lbl: str) -> None:
                         try:
-                            await self.ytmusic.rate_song(vid, r)
+                            await self.ytmusic.rate_song(vid, r)  # type: ignore[reportOptionalMemberAccess]
                             track["likeStatus"] = r
                             self.notify(lbl, timeout=2)
                         except Exception:

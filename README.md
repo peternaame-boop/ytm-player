@@ -205,7 +205,7 @@ If you installed via AUR, install optional dependencies with pacman/yay — **no
 
 ```bash
 # MPRIS media key support (Linux)
-sudo pacman -S python-dbus-next
+sudo pacman -S python-dbus-fast
 
 # Last.fm scrobbling
 yay -S python-pylast
@@ -547,7 +547,7 @@ src/ytm_player/
 └── utils/              # Terminal detection, formatting, BiDi text, transliteration
 ```
 
-**Stack:** [Textual](https://textual.textualize.io/) (TUI) · [ytmusicapi](https://github.com/sigma67/ytmusicapi) (API) · [yt-dlp](https://github.com/yt-dlp/yt-dlp) (streams/downloads) · [python-mpv](https://github.com/jaseg/python-mpv) (playback) · [aiosqlite](https://github.com/omnilib/aiosqlite) (history/cache) · [dbus-next](https://github.com/altdesktop/python-dbus-next) (MPRIS) · [pypresence](https://github.com/qwertyquerty/pypresence) (Discord) · [pylast](https://github.com/pylast/pylast) (Last.fm)
+**Stack:** [Textual](https://textual.textualize.io/) (TUI) · [ytmusicapi](https://github.com/sigma67/ytmusicapi) (API) · [yt-dlp](https://github.com/yt-dlp/yt-dlp) (streams/downloads) · [python-mpv](https://github.com/jaseg/python-mpv) (playback) · [aiosqlite](https://github.com/omnilib/aiosqlite) (history/cache) · [dbus-fast](https://github.com/Bluetooth-Devices/dbus-fast) (MPRIS) · [pypresence](https://github.com/qwertyquerty/pypresence) (Discord) · [pylast](https://github.com/pylast/pylast) (Last.fm)
 
 ## Troubleshooting
 

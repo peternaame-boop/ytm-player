@@ -65,10 +65,10 @@ class HeaderBar(Widget):
     def on_click(self, event: Click) -> None:
         """Route clicks on toggle buttons to the correct message."""
         target = event.widget
-        if target.id == "toggle-playlist":
+        if target.id == "toggle-playlist":  # type: ignore[reportOptionalMemberAccess]
             event.stop()
             self.post_message(self.TogglePlaylistSidebar())
-        elif target.id == "toggle-lyrics":
+        elif target.id == "toggle-lyrics":  # type: ignore[reportOptionalMemberAccess]
             event.stop()
             self.post_message(self.ToggleLyricsSidebar())
 

@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Any
 
+from ytm_player.app._base import YTMHostBase
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.widgets.track_table import TrackTable
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 _MAX_CONSECUTIVE_FAILURES = 5
 
 
-class PlaybackMixin:
+class PlaybackMixin(YTMHostBase):
     """Playback coordination, player event callbacks, history logging, download."""
 
     async def play_track(self, track: dict) -> None:
@@ -449,12 +450,12 @@ class PlaybackMixin:
         if self.discord and self.discord.is_connected:
             try:
                 if paused:
-                    self.call_later(lambda: self.run_worker(self.discord.clear()))
+                    self.call_later(lambda: self.run_worker(self.discord.clear()))  # type: ignore[reportOptionalMemberAccess]
                 elif self.player and self.player.current_track:
                     t = self.player.current_track
                     self.call_later(
                         lambda: self.run_worker(
-                            self.discord.update(
+                            self.discord.update(  # type: ignore[reportOptionalMemberAccess]
                                 title=t.get("title", ""),
                                 artist=t.get("artist", ""),
                                 album=t.get("album", ""),

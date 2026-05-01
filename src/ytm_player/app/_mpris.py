@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ytm_player.app._base import YTMHostBase
 
-class MPRISMixin:
+
+class MPRISMixin(YTMHostBase):
     """Builds the callback dict expected by MPRISService / MacOS / Windows media keys."""
 
     def _build_mpris_callbacks(self) -> dict[str, Any]:

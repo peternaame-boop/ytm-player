@@ -316,7 +316,7 @@ class TrackTable(DataTable):
         if self.size.width == 0:
             return
         try:
-            title_col = self.columns.get("title")
+            title_col = self.columns.get("title")  # type: ignore[reportArgumentType]
         except Exception:
             return
         if title_col is None:
@@ -455,7 +455,7 @@ class TrackTable(DataTable):
         self._filter_text = query.strip().lower()
         if self._filter_timer is not None:
             try:
-                self._filter_timer.stop()
+                self._filter_timer.stop()  # type: ignore[reportAttributeAccessIssue]
             except Exception:
                 pass
         if not self._filter_text:

@@ -156,7 +156,7 @@ class LibraryPage(Widget):
         loading.display = True
 
         try:
-            data = await self.app.ytmusic.get_playlist(
+            data = await self.app.ytmusic.get_playlist(  # type: ignore[reportAttributeAccessIssue]
                 playlist_id, limit=self._FIRST_BATCH, order="recently_added"
             )
 
@@ -213,7 +213,7 @@ class LibraryPage(Widget):
 
     async def _fetch_remaining(self, playlist_id: str, already_have: int) -> None:
         """Background fetch for tracks beyond the first batch."""
-        remaining = await self.app.ytmusic.get_playlist_remaining(
+        remaining = await self.app.ytmusic.get_playlist_remaining(  # type: ignore[reportAttributeAccessIssue]
             playlist_id, already_have, order="recently_added"
         )
         # Discard if user switched playlists while we were fetching.
@@ -246,7 +246,9 @@ class LibraryPage(Widget):
 
         # Fall back to the currently-playing track.
         playing_id = getattr(self.app, "player", None) and getattr(
-            self.app.player, "_current_track", None
+            self.app.player,  # type: ignore[reportAttributeAccessIssue]
+            "_current_track",
+            None,
         )
         if playing_id and isinstance(playing_id, dict):
             playing_id = playing_id.get("video_id")
@@ -322,12 +324,12 @@ class LibraryPage(Widget):
         tracks = table.tracks
         idx = event.index
 
-        self.app.queue.clear()
-        self.app.queue.add_multiple(tracks)
-        self.app.queue.jump_to_real(idx)
+        self.app.queue.clear()  # type: ignore[reportAttributeAccessIssue]
+        self.app.queue.add_multiple(tracks)  # type: ignore[reportAttributeAccessIssue]
+        self.app.queue.jump_to_real(idx)  # type: ignore[reportAttributeAccessIssue]
         if self._active_playlist_id:
             self.app._active_library_playlist_id = self._active_playlist_id  # type: ignore[attr-defined]
-        await self.app.play_track(event.track)
+        await self.app.play_track(event.track)  # type: ignore[reportAttributeAccessIssue]
 
     # ------------------------------------------------------------------
     # Vim-style action handler

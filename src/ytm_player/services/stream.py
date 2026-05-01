@@ -92,7 +92,7 @@ class StreamResolver:
 
         with self._ydl_lock:
             if self._ydl is None:
-                self._ydl = yt_dlp.YoutubeDL(self._build_ydl_opts())
+                self._ydl = yt_dlp.YoutubeDL(self._build_ydl_opts())  # type: ignore[reportArgumentType]
             return self._ydl
 
     def _reset_ydl(self) -> None:
@@ -128,19 +128,19 @@ class StreamResolver:
 
         try:
             ydl = self._get_ydl()
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(url, download=False)  # type: ignore[reportAttributeAccessIssue]
 
             if info is None:
                 logger.error("yt-dlp returned no info for video_id=%s", video_id)
                 return None
 
-            stream_url: str = info.get("url", "")
+            stream_url: str = info.get("url", "")  # type: ignore[reportAssignmentType]
             if not stream_url:
                 # Some formats nest the URL under requested_formats.
                 formats = info.get("requested_formats") or []
                 for fmt in formats:
                     if fmt.get("vcodec") == "none" or fmt.get("acodec") != "none":
-                        stream_url = fmt.get("url", "")
+                        stream_url = fmt.get("url", "")  # type: ignore[reportAssignmentType]
                         break
 
             if not stream_url:
@@ -162,14 +162,14 @@ class StreamResolver:
             return StreamInfo(
                 url=stream_url,
                 video_id=video_id,
-                format=fmt_name,
+                format=fmt_name,  # type: ignore[reportArgumentType]
                 bitrate=abr,
                 duration=duration,
                 expires_at=expires_at,
                 thumbnail_url=thumbnail,
             )
 
-        except yt_dlp.utils.DownloadError as exc:
+        except yt_dlp.utils.DownloadError as exc:  # type: ignore[reportAttributeAccessIssue]
             logger.warning(
                 "yt-dlp download error for video_id=%s (attempt %d): %s",
                 video_id,

@@ -535,7 +535,7 @@ class SearchPage(Widget):
     async def _load_suggestions(self, query: str) -> None:
         """Fetch predictive suggestions from the API."""
         try:
-            suggestions = await self.app.ytmusic.get_search_suggestions(query)
+            suggestions = await self.app.ytmusic.get_search_suggestions(query)  # type: ignore[reportAttributeAccessIssue]
             overlay = self.query_one("#suggestion-overlay", SuggestionList)
             overlay.show_suggestions(suggestions)
         except Exception:
@@ -555,7 +555,7 @@ class SearchPage(Widget):
     async def _load_recent_searches(self) -> None:
         """Load and display recent searches from history."""
         try:
-            history = await self.app.history.get_search_history(limit=10)
+            history = await self.app.history.get_search_history(limit=10)  # type: ignore[reportAttributeAccessIssue]
             if history:
                 suggestions = [entry["query"] for entry in history]
                 overlay = self.query_one("#suggestion-overlay", SuggestionList)
@@ -602,7 +602,7 @@ class SearchPage(Widget):
             # Log the search to history.
             total_count = sum(len(v) for v in results.values())
             try:
-                await self.app.history.log_search(
+                await self.app.history.log_search(  # type: ignore[reportAttributeAccessIssue]
                     query=query,
                     filter_mode=self.search_mode,
                     result_count=total_count,
@@ -630,7 +630,7 @@ class SearchPage(Widget):
 
         # Run all four searches concurrently.
         tasks = {
-            category: self.app.ytmusic.search(query, filter=api_filter, limit=10)
+            category: self.app.ytmusic.search(query, filter=api_filter, limit=10)  # type: ignore[reportAttributeAccessIssue]
             for category, api_filter in self._MUSIC_FILTERS.items()
         }
 
@@ -653,7 +653,7 @@ class SearchPage(Widget):
             "playlists": [],
         }
 
-        raw = await self.app.ytmusic.search(query, filter=None, limit=40)
+        raw = await self.app.ytmusic.search(query, filter=None, limit=40)  # type: ignore[reportAttributeAccessIssue]
 
         for item in raw:
             result_type = item.get("resultType", "")
@@ -705,8 +705,8 @@ class SearchPage(Widget):
         # Match the #search-mode Static or any child of it.
         try:
             if (
-                widget.id == "search-mode"
-                or self.query_one("#search-mode", Static) in widget.ancestors
+                widget.id == "search-mode"  # type: ignore[reportOptionalMemberAccess]
+                or self.query_one("#search-mode", Static) in widget.ancestors  # type: ignore[reportOptionalMemberAccess]
             ):
                 event.stop()
                 self._toggle_search_mode()
@@ -744,10 +744,10 @@ class SearchPage(Widget):
         video_id = get_video_id(track)
         if video_id:
             table = self.query_one("#songs-table", TrackTable)
-            self.app.queue.clear()
-            self.app.queue.add_multiple(table.tracks)
-            self.app.queue.jump_to_real(event.index)
-            await self.app.play_track(track)
+            self.app.queue.clear()  # type: ignore[reportAttributeAccessIssue]
+            self.app.queue.add_multiple(table.tracks)  # type: ignore[reportAttributeAccessIssue]
+            self.app.queue.jump_to_real(event.index)  # type: ignore[reportAttributeAccessIssue]
+            await self.app.play_track(track)  # type: ignore[reportAttributeAccessIssue]
 
     async def on_search_result_panel_item_selected(
         self, event: SearchResultPanel.ItemSelected
@@ -760,17 +760,17 @@ class SearchPage(Widget):
         if panel_id == "albums-panel" or result_type == "album":
             browse_id = item.get("browseId") or item.get("album_id")
             if browse_id:
-                await self.app.navigate_to("context", context_type="album", context_id=browse_id)
+                await self.app.navigate_to("context", context_type="album", context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
 
         elif panel_id == "artists-panel" or result_type == "artist":
             browse_id = item.get("browseId") or item.get("artist_id")
             if browse_id:
-                await self.app.navigate_to("context", context_type="artist", context_id=browse_id)
+                await self.app.navigate_to("context", context_type="artist", context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
 
         elif panel_id == "playlists-panel" or result_type == "playlist":
             browse_id = item.get("browseId") or item.get("playlistId")
             if browse_id:
-                await self.app.navigate_to("context", context_type="playlist", context_id=browse_id)
+                await self.app.navigate_to("context", context_type="playlist", context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
 
     def on_search_result_panel_item_right_clicked(
         self, event: SearchResultPanel.ItemRightClicked
@@ -800,7 +800,7 @@ class SearchPage(Widget):
                 ctx_type = item_type if item_type in ("album", "playlist") else None
                 if browse_id and ctx_type:
                     self.app.run_worker(
-                        self.app.navigate_to("context", context_type=ctx_type, context_id=browse_id)
+                        self.app.navigate_to("context", context_type=ctx_type, context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
                     )
 
             elif action_id == "go_to_artist":
@@ -813,14 +813,14 @@ class SearchPage(Widget):
                     artist_id = ""
                 if artist_id:
                     self.app.run_worker(
-                        self.app.navigate_to("context", context_type="artist", context_id=artist_id)
+                        self.app.navigate_to("context", context_type="artist", context_id=artist_id)  # type: ignore[reportAttributeAccessIssue]
                     )
 
             elif action_id in ("play_top_songs", "start_radio", "view_albums", "view_similar"):
                 browse_id = item.get("browseId") or item.get("artist_id") or ""
                 if browse_id:
                     self.app.run_worker(
-                        self.app.navigate_to("context", context_type="artist", context_id=browse_id)
+                        self.app.navigate_to("context", context_type="artist", context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
                     )
 
             elif action_id == "copy_link":

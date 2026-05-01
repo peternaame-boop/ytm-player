@@ -157,7 +157,7 @@ class ForYouSection(Widget):
         """Fetch and display personalised home shelves."""
         self.is_loading = True
         try:
-            self._shelves = await self.app.ytmusic.get_home()
+            self._shelves = await self.app.ytmusic.get_home()  # type: ignore[reportAttributeAccessIssue]
         except Exception:
             logger.debug("Failed to load home recommendations", exc_info=True)
             self._show_error("Failed to load recommendations.")
@@ -292,7 +292,7 @@ class MoodsGenresSection(Widget):
         """Fetch and display mood/genre categories."""
         self.is_loading = True
         try:
-            self._categories = await self.app.ytmusic.get_mood_categories()
+            self._categories = await self.app.ytmusic.get_mood_categories()  # type: ignore[reportAttributeAccessIssue]
             await self._populate_categories()
         except Exception:
             logger.debug("Failed to load mood categories")
@@ -417,7 +417,7 @@ class ChartsSection(Widget):
         self.is_loading = True
         self._country = country
         try:
-            self._chart_data = await self.app.ytmusic.get_charts(country=country)
+            self._chart_data = await self.app.ytmusic.get_charts(country=country)  # type: ignore[reportAttributeAccessIssue]
             self._populate_charts()
         except Exception:
             logger.debug("Failed to load charts for country=%r", country)
@@ -520,7 +520,7 @@ class NewReleasesSection(Widget):
         """Fetch and display new releases."""
         self.is_loading = True
         try:
-            self._albums = await self.app.ytmusic.get_new_releases()
+            self._albums = await self.app.ytmusic.get_new_releases()  # type: ignore[reportAttributeAccessIssue]
             self._populate_releases()
         except Exception:
             logger.debug("Failed to load new releases")
@@ -726,7 +726,7 @@ class BrowsePage(Widget):
     async def _load_mood_playlists(self, category_params: str) -> None:
         """Fetch playlists for a mood/genre and navigate to the first one."""
         try:
-            playlists = await self.app.ytmusic.get_mood_playlists(category_params)
+            playlists = await self.app.ytmusic.get_mood_playlists(category_params)  # type: ignore[reportAttributeAccessIssue]
             if playlists:
                 # Navigate to the first playlist as a preview, or show a list.
                 # For now, navigate to the first one.
@@ -734,7 +734,7 @@ class BrowsePage(Widget):
                 if first:
                     playlist_id = first.get("playlistId") or first.get("browseId")
                     if playlist_id:
-                        await self.app.navigate_to(
+                        await self.app.navigate_to(  # type: ignore[reportAttributeAccessIssue]
                             "context", context_type="playlist", context_id=playlist_id
                         )
         except Exception:
@@ -748,16 +748,16 @@ class BrowsePage(Widget):
         album = event.album
         album_id = album.get("browseId") or album.get("album_id")
         if album_id:
-            await self.app.navigate_to("context", context_type="album", context_id=album_id)
+            await self.app.navigate_to("context", context_type="album", context_id=album_id)  # type: ignore[reportAttributeAccessIssue]
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected chart track and populate the queue."""
         event.stop()
         table = self.query_one("#charts-table", TrackTable)
-        self.app.queue.clear()
-        self.app.queue.add_multiple(table.tracks)
-        self.app.queue.jump_to_real(event.index)
-        await self.app.play_track(event.track)
+        self.app.queue.clear()  # type: ignore[reportAttributeAccessIssue]
+        self.app.queue.add_multiple(table.tracks)  # type: ignore[reportAttributeAccessIssue]
+        self.app.queue.jump_to_real(event.index)  # type: ignore[reportAttributeAccessIssue]
+        await self.app.play_track(event.track)  # type: ignore[reportAttributeAccessIssue]
 
     async def _navigate_item(self, item: dict[str, Any]) -> None:
         """Route an item to the appropriate context page or play it directly."""
@@ -769,25 +769,25 @@ class BrowsePage(Widget):
         if result_type in ("song", "video", "flat_song") or video_id:
             normalized_tracks = normalize_tracks([item])
             track_to_play = normalized_tracks[0] if normalized_tracks else item
-            await self.app.play_track(track_to_play)
+            await self.app.play_track(track_to_play)  # type: ignore[reportAttributeAccessIssue]
         elif result_type in ("album", "single"):
             if browse_id:
-                await self.app.navigate_to("context", context_type="album", context_id=browse_id)
+                await self.app.navigate_to("context", context_type="album", context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
         elif result_type == "artist":
             if browse_id:
-                await self.app.navigate_to("context", context_type="artist", context_id=browse_id)
+                await self.app.navigate_to("context", context_type="artist", context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
         elif result_type == "playlist":
             if playlist_id or browse_id:
-                await self.app.navigate_to(
+                await self.app.navigate_to(  # type: ignore[reportAttributeAccessIssue]
                     "context", context_type="playlist", context_id=playlist_id or browse_id
                 )
         elif playlist_id:
             # Shelves like "Mixed for you", "Listen again" radio entries, mixes etc.
             # have a playlistId but no resultType.
-            await self.app.navigate_to("context", context_type="playlist", context_id=playlist_id)
+            await self.app.navigate_to("context", context_type="playlist", context_id=playlist_id)  # type: ignore[reportAttributeAccessIssue]
         elif browse_id:
             # Fallback: treat any remaining browseId as an album/playlist context.
-            await self.app.navigate_to("context", context_type="album", context_id=browse_id)
+            await self.app.navigate_to("context", context_type="album", context_id=browse_id)  # type: ignore[reportAttributeAccessIssue]
 
     # ------------------------------------------------------------------
     # Vim-style action handler
@@ -829,14 +829,14 @@ class BrowsePage(Widget):
             case Action.GO_TOP:
                 focused = self.app.focused
                 if isinstance(focused, ListView):
-                    focused.action_first()
+                    focused.action_first()  # type: ignore[reportAttributeAccessIssue]
                 elif isinstance(focused, TrackTable):
                     await focused.handle_action(action, count)
 
             case Action.GO_BOTTOM:
                 focused = self.app.focused
                 if isinstance(focused, ListView):
-                    focused.action_last()
+                    focused.action_last()  # type: ignore[reportAttributeAccessIssue]
                 elif isinstance(focused, TrackTable):
                     await focused.handle_action(action, count)
 

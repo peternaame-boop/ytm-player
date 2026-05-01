@@ -10,6 +10,7 @@ from textual.containers import Container
 from textual.widget import Widget
 from textual.widgets import Static
 
+from ytm_player.app._base import YTMHostBase
 from ytm_player.config import Action
 from ytm_player.ui.playback_bar import FooterBar
 
@@ -61,7 +62,7 @@ class _PlaceholderPage(Widget):
         pass
 
 
-class NavigationMixin:
+class NavigationMixin(YTMHostBase):
     """Page navigation: navigate_to, _create_page, _get_current_page."""
 
     @property
@@ -103,7 +104,7 @@ class NavigationMixin:
         if self._current_page:
             current_page = self._get_current_page()
             if current_page and hasattr(current_page, "get_nav_state"):
-                page_state = current_page.get_nav_state()
+                page_state = current_page.get_nav_state()  # type: ignore[reportAttributeAccessIssue]
                 if page_state:
                     self._page_state_cache[self._current_page] = page_state
 

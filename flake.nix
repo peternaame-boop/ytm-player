@@ -85,7 +85,7 @@
           ];
 
           optional-dependencies = with python.pkgs; {
-            mpris = [ dbus-next ];
+            mpris = [ dbus-fast ];
             images = [ ];  # Pillow moved to core deps; kept for compat
             discord = [ pypresence ];
             lastfm = [ pylast ];
@@ -158,7 +158,7 @@
               ruff
 
               # Include all optional deps in the dev shell
-              dbus-next
+              dbus-fast
               pillow
               pypresence
               pylast

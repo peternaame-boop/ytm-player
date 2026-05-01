@@ -208,8 +208,8 @@ class PlaybackProgress(Widget):
     def _seek_to(self, seconds: float) -> None:
         """Tell the app player to seek to an absolute position."""
         app = self.app
-        if hasattr(app, "player") and app.player:
-            self.call_later(lambda: app.run_worker(app.player.seek_absolute(seconds)))
+        if hasattr(app, "player") and app.player:  # type: ignore[reportAttributeAccessIssue]
+            self.call_later(lambda: app.run_worker(app.player.seek_absolute(seconds)))  # type: ignore[reportAttributeAccessIssue]
 
     # ── Public API (unchanged) ────────────────────────────────────
 

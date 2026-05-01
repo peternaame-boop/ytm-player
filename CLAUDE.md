@@ -31,9 +31,31 @@ pytest tests/test_services/test_queue.py
 
 # Single test
 pytest tests/test_services/test_queue.py::test_add_track -v
+
+# Type checking
+uv run pyright src/ytm_player/
+
+# Pre-commit (run all hooks)
+uv run pre-commit run --all-files
+
+# Install pre-commit hooks
+uv run pre-commit install
 ```
 
 System dependency: `mpv` must be installed (`sudo pacman -S mpv` on Arch).
+
+## Pre-commit Hooks
+
+Four hooks run automatically on `git commit`:
+
+1. **ruff-format** — Auto-formats staged files. If formatting changes are needed, the commit is aborted so you can review and re-stage.
+2. **ruff** — Lints with `--fix --exit-non-zero-on-fix`. Auto-fixes what it can; aborts if fixes were applied so you can re-stage.
+3. **pyright** — Type checks `src/ytm_player/` at standard strictness. Blocks commit on type errors.
+4. **pytest** — Runs the full test suite. Blocks commit on test failures.
+
+To skip hooks for a quick commit: `git commit --no-verify`
+
+To install hooks in a fresh clone: `uv run pre-commit install`
 
 ## Architecture
 
@@ -41,7 +63,7 @@ System dependency: `mpv` must be installed (`sudo pacman -S mpv` on Arch).
 
 **Three-layer structure:**
 
-- **`services/`** — Backend singletons: `Player` (mpv wrapper), `QueueManager` (shuffle/repeat), `StreamResolver` (yt-dlp), `YTMusicService` (ytmusicapi), `CacheManager` (LRU audio cache), `HistoryManager` (SQLite via aiosqlite), `AuthManager` (browser cookie extraction), `lrclib` (LRCLIB.net lyrics fallback), `DownloadService` (offline downloads), `SpotifyImport`. Platform-specific: `MPRISService` (Linux D-Bus), `MacOSMediaService` + `MacOSEventTapService` (macOS), `MediaKeysService` (Windows pynput). Optional: `DiscordRPC`, `LastFMService`.
+- **`services/`** — Backend singletons: `Player` (mpv wrapper), `QueueManager` (shuffle/repeat), `StreamResolver` (yt-dlp), `YTMusicService` (ytmusicapi), `CacheManager` (LRU audio cache), `HistoryManager` (SQLite via aiosqlite), `AuthManager` (browser cookie extraction), `lrclib` (LRCLIB.net lyrics fallback), `DownloadService` (offline downloads), `SpotifyImport`. Platform-specific: `MPRISService` (Linux D-Bus via `dbus-fast`, not `dbus-next`), `MacOSMediaService` + `MacOSEventTapService` (macOS), `MediaKeysService` (Windows pynput). Optional: `DiscordRPC`, `LastFMService`.
 - **`ui/`** — Textual widgets: `pages/` (library, search, browse, context, queue, etc.), `sidebars/` (playlist list, synced lyrics), `popups/` (modals), `widgets/` (track table, progress bar, album art). Styling via `theme.py` with CSS variables.
 - **`config/`** — `Settings` dataclass loaded from `~/.config/ytm-player/config.toml`. `KeyMap` system supports multi-key vim sequences and count prefixes. All paths centralized in `paths.py`.
 
@@ -64,6 +86,8 @@ ruff check src/ tests/
 ```
 `ruff check` alone is NOT enough. `ruff format` catches line length and style issues that `ruff check` does not. Always format first, then lint.
 
+**Note:** Pre-commit hooks now automate the format + lint steps above. Manual runs are only needed when hooks are bypassed with `--no-verify`.
+
 ## Ruff Configuration
 
 - Line length: 100, target Python 3.12
@@ -78,7 +102,7 @@ ruff check src/ tests/
 - Coverage floor: 10%
 - Heavy mocking of mpv, ytmusicapi, yt-dlp, D-Bus — tests never hit real APIs or require mpv installed
 - Test fixtures in `tests/conftest.py`: `sample_track`/`sample_tracks` use `_make_track()` helper to create standardized track dicts; `queue_manager` provides a fresh `QueueManager` instance
-- CI runs on GitHub Actions (ubuntu, Python 3.12): ruff lint + format check, then pytest with coverage
+- CI runs on GitHub Actions (Ubuntu + macOS + Windows, Python 3.12 and 3.13): ruff lint + format check, pyright type check, then pytest with coverage
 
 ## Logging
 

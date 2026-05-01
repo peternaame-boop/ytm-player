@@ -4,6 +4,7 @@ Interface: MacOSEventTapService.start/stop registers and tears down a global eve
 Invariants: Only media-key key-down events are intercepted; all other events pass through.
 Decisions: Swallow handled media keys so Apple Music does not auto-launch while ytm-player is active.
 """
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
 from __future__ import annotations
 

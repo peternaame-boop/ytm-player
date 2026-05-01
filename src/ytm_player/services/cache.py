@@ -207,8 +207,8 @@ class CacheManager:
         ) as cursor:
             row = await cursor.fetchone()
         return {
-            "total_size": row["total_size"],
-            "file_count": row["file_count"],
+            "total_size": row["total_size"],  # type: ignore[reportOptionalSubscript]
+            "file_count": row["file_count"],  # type: ignore[reportOptionalSubscript]
             "max_size": self._max_size_mb * 1024 * 1024,
             "cache_dir": str(self._cache_dir),
         }
@@ -222,7 +222,7 @@ class CacheManager:
         async with self._db.execute(
             "SELECT COALESCE(SUM(file_size), 0) AS total FROM cache_index"
         ) as cursor:
-            total = (await cursor.fetchone())["total"]
+            total = (await cursor.fetchone())["total"]  # type: ignore[reportOptionalSubscript]
 
         if total <= max_bytes:
             return

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from ytm_player.app._base import YTMHostBase
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
@@ -12,7 +13,7 @@ from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
 logger = logging.getLogger(__name__)
 
 
-class SidebarMixin:
+class SidebarMixin(YTMHostBase):
     """Sidebar toggling and playlist sidebar event handlers."""
 
     # ── Sidebar toggling ────────────────────────────────────────────
@@ -118,7 +119,7 @@ class SidebarMixin:
             self.queue.add_multiple(tracks)
             self.queue.jump_to(0)
             self._active_library_playlist_id = playlist_id
-            await self.play_track(self.queue.current_track)
+            await self.play_track(self.queue.current_track)  # type: ignore[reportArgumentType]
 
             # Background-fetch remaining tracks and append to queue.
             total_count = data.get("trackCount") or len(raw_tracks)
@@ -136,7 +137,7 @@ class SidebarMixin:
         from ytm_player.utils.formatting import normalize_tracks
 
         try:
-            remaining = await self.ytmusic.get_playlist_remaining(
+            remaining = await self.ytmusic.get_playlist_remaining(  # type: ignore[reportOptionalMemberAccess]
                 playlist_id, already_have, order="recently_added"
             )
             if remaining:
@@ -201,7 +202,7 @@ class SidebarMixin:
 
                 title = item.get("title", "this playlist")
 
-                def _on_confirm(confirmed: bool) -> None:
+                def _on_confirm(confirmed: bool | None) -> None:
                     if confirmed:
                         self.run_worker(self._delete_sidebar_playlist(item))
 
@@ -238,7 +239,7 @@ class SidebarMixin:
                 self.notify(f"Created '{name}'", timeout=2)
                 ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
                 panel = ps.query_one("#ps-playlists")
-                panel.prepend_item({"playlistId": playlist_id, "title": name})
+                panel.prepend_item({"playlistId": playlist_id, "title": name})  # type: ignore[reportAttributeAccessIssue]
             else:
                 self.notify("Failed to create playlist", severity="error", timeout=3)
         except Exception:
@@ -267,7 +268,7 @@ class SidebarMixin:
             if success:
                 self.notify(f"Removed '{title}'", timeout=2)
                 ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
-                ps.query_one("#ps-playlists").remove_item(raw_id)
+                ps.query_one("#ps-playlists").remove_item(raw_id)  # type: ignore[reportAttributeAccessIssue]
             else:
                 self.notify("Failed to remove playlist", severity="error", timeout=3)
         except Exception:
