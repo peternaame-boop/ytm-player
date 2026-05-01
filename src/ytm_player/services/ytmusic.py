@@ -257,7 +257,7 @@ class YTMusicService:
             logger.exception("get_library_albums failed")
             return []
 
-    async def get_library_artists(self, limit: int = 25) -> list[dict[str, Any]]:
+    async def get_library_artists(self, limit: int | None = 25) -> list[dict[str, Any]]:
         """Return the user's subscribed/followed artists."""
         try:
             return await self._call(self.client.get_library_subscriptions, limit=limit)
@@ -454,6 +454,8 @@ class YTMusicService:
         video_id: str | None = None,
         playlist_id: str | None = None,
         limit: int = 25,
+        *,
+        radio: bool = False,
     ) -> list[dict[str, Any]]:
         """Return the "Up Next" queue for a song or the tracks of a playlist.
 
@@ -467,6 +469,9 @@ class YTMusicService:
           (``parse_audio_playlist`` dereferences ``tracks[0]["album"]``
           which is None, raising TypeError).
 
+        When *radio* is True, the endpoint returns radio-shuffled results
+        instead of a fixed-order queue (matches ``get_radio``'s usage).
+
         Returns:
             List of track dicts.
         """
@@ -478,6 +483,8 @@ class YTMusicService:
                 kwargs["videoId"] = video_id
             if playlist_id is not None:
                 kwargs["playlistId"] = playlist_id
+            if radio:
+                kwargs["radio"] = True
             result = await self._call(self.client.get_watch_playlist, **kwargs)
             return result.get("tracks", []) if isinstance(result, dict) else []
         except Exception:
@@ -810,6 +817,22 @@ class YTMusicService:
         except _EXPECTED_MUTATION_EXCEPTIONS as exc:
             kind = _classify_mutation_failure(exc)
             logger.exception("remove_album_from_library failed for %r (kind=%s)", playlist_id, kind)
+            return kind
+
+    async def subscribe_artist(self, channel_id: str) -> MutationResult:
+        """Subscribe to an artist (add to library).
+
+        Returns:
+            ``"success"`` if the server accepted the subscribe, otherwise
+            one of ``"auth_required"``, ``"auth_expired"``, ``"network"``,
+            ``"server_error"``. Unexpected exceptions propagate.
+        """
+        try:
+            await self._call(self.client.subscribe_artists, [channel_id])
+            return "success"
+        except _EXPECTED_MUTATION_EXCEPTIONS as exc:
+            kind = _classify_mutation_failure(exc)
+            logger.exception("subscribe_artist failed for %r (kind=%s)", channel_id, kind)
             return kind
 
     async def unsubscribe_artist(self, channel_id: str) -> MutationResult:
