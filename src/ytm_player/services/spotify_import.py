@@ -15,7 +15,7 @@ from ytmusicapi import YTMusic
 try:
     from rich.console import Console
     from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
-    from thefuzz import fuzz
+    from thefuzz import fuzz  # type: ignore[reportMissingImports]
 
     _HAS_SPOTIFY_DEPS = True
 except ImportError:
@@ -120,8 +120,8 @@ def extract_spotify_tracks_spotipy(url: str) -> tuple[str, list[dict]]:
     Uses stored client credentials from ``~/.config/ytm-player/spotify.json``.
     Raises ``RuntimeError`` if credentials are missing or the request fails.
     """
-    import spotipy
-    from spotipy.oauth2 import SpotifyClientCredentials
+    import spotipy  # type: ignore[reportMissingImports]
+    from spotipy.oauth2 import SpotifyClientCredentials  # type: ignore[reportMissingImports]
 
     creds = load_spotify_creds()
     if not creds:
@@ -183,7 +183,7 @@ def extract_spotify_tracks(url: str) -> tuple[str, list[dict]]:
             logger.warning("spotipy extraction failed, falling back to scraper: %s", exc)
 
     # Fallback: spotify_scraper (limited to ~100 tracks).
-    from spotify_scraper import SpotifyClient
+    from spotify_scraper import SpotifyClient  # type: ignore[reportMissingImports]
 
     client = SpotifyClient()
     try:

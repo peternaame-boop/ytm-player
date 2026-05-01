@@ -48,7 +48,7 @@ spotify = [
     "thefuzz>=0.22.0",
 ]
 mpris = [
-    "dbus-next>=0.2.3",
+    "dbus-fast>=4.0.0",
 ]
 images = []  # Pillow is now a default dependency; kept for backwards compat.
 discord = [
@@ -67,6 +67,8 @@ dev = [
     "responses>=0.25.0",
     "ruff",
     "anyascii>=0.3.0",
+    "pre-commit>=4.6",
+    "pyright>=1.1",
 ]
 
 [project.urls]
@@ -127,6 +129,7 @@ omit = [
 # attribute surface mixins inherit at runtime.
 # pythonVersion pinned to the supported floor (matches requires-python)
 # so accidental 3.11+ syntax is flagged at type-check time.
+typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.10"

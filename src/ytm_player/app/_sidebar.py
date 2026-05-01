@@ -147,7 +147,9 @@ class SidebarMixin(YTMHostBase):
                 bar.refresh_shuffle_lock_state()  # type: ignore[attr-defined]
             except Exception:
                 pass
-            await self.play_track(self.queue.current_track)
+            track = self.queue.current_track
+            if track:
+                await self.play_track(track)
 
             # Background-fetch remaining tracks and append to queue.
             total_count = data.get("trackCount") or len(raw_tracks)
