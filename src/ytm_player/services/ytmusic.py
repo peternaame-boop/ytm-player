@@ -567,8 +567,12 @@ class YTMusicService:
 
             region = get_settings().ui.region
             charts = await self._call(self.client.get_charts, country=region)
-            shelves = charts.get("daily", charts.get("videos", []))
-            if not isinstance(shelves, list) or not shelves:
+            shelves: list[dict] = []
+            for key in ("daily", "weekly", "videos"):
+                arr = charts.get(key)
+                if isinstance(arr, list):
+                    shelves.extend(s for s in arr if isinstance(s, dict))
+            if not shelves:
                 return [], ""
             idx = (self._last_chart_shelf + 1) % len(shelves)
             self._last_chart_shelf = idx

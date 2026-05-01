@@ -130,7 +130,6 @@ def _split_events_and_charts(
     return events, charts
 
 
-
 class BrowseTabBar(Widget):
     """A horizontal tab selector for the Browse page sections."""
 

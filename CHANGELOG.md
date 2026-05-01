@@ -151,7 +151,7 @@ A focused fix release. The Charts page region selector was effectively non-funct
 **Changed**
 
 - Mood source removed from discovery mix — upstream removed Moods & Genres tab; the source was failing silently
-- `clean_shelf_title` and `get_chart_shelf_tracks` extracted as shared utilities from browse.py for reuse in discovery mix
+- `clean_shelf_title` and `get_chart_shelf_tracks` added as shared utilities for reuse in discovery mix
 
 **Fixes**
 

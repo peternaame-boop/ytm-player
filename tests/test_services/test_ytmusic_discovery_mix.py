@@ -141,3 +141,90 @@ class TestGetDiscoveryMix:
             await svc.get_discovery_mix()
 
         assert svc._last_discovery_source == 2
+
+    async def test_charts_mix_reads_weekly_key(self, svc):
+        """_charts_mix must read the 'weekly' key — some regions only serve
+        chart shelves there (e.g. US/UK Top 100 Songs)."""
+        svc._last_discovery_source = 0  # → starts at source 1 (charts)
+
+        with (
+            patch.object(
+                svc,
+                "_call",
+                new_callable=AsyncMock,
+                return_value={"weekly": [{"playlistId": "PLweekly", "title": "Weekly Top Songs"}]},
+            ),
+            patch.object(
+                svc,
+                "get_chart_shelf_tracks",
+                new_callable=AsyncMock,
+                return_value=[{"videoId": "w1", "title": "Weekly Hit"}],
+            ) as mock_tracks,
+        ):
+            seeds, label = await svc.get_discovery_mix()
+
+        assert len(seeds) > 0
+        assert "Weekly Top Songs" in label
+        mock_tracks.assert_called_once_with("PLweekly")
+
+    async def test_charts_mix_reads_videos_key(self, svc):
+        """_charts_mix must read the 'videos' key — Spain and other regions
+        return chart data exclusively under this key."""
+        svc._last_discovery_source = 0  # → starts at source 1 (charts)
+
+        with (
+            patch.object(
+                svc,
+                "_call",
+                new_callable=AsyncMock,
+                return_value={"videos": [{"playlistId": "PLvid", "title": "Top Music Videos"}]},
+            ),
+            patch.object(
+                svc,
+                "get_chart_shelf_tracks",
+                new_callable=AsyncMock,
+                return_value=[{"videoId": "v1", "title": "Video Hit"}],
+            ) as mock_tracks,
+        ):
+            seeds, label = await svc.get_discovery_mix()
+
+        assert len(seeds) > 0
+        assert "Top Music Videos" in label
+        mock_tracks.assert_called_once_with("PLvid")
+
+    async def test_charts_mix_combines_all_chart_keys(self, svc):
+        """_charts_mix should aggregate shelves from daily + weekly + videos,
+        cycling through all of them in round-robin."""
+        svc._last_discovery_source = 0  # → starts at source 1 (charts)
+
+        chart_response = {
+            "daily": [{"playlistId": "PL1", "title": "Daily Top 100 Songs"}],
+            "weekly": [{"playlistId": "PL2", "title": "Weekly Top Songs"}],
+            "videos": [{"playlistId": "PL3", "title": "Top Music Videos"}],
+        }
+
+        seen_labels: list[str] = []
+        for i in range(3):
+            svc._last_discovery_source = 0
+            svc._last_chart_shelf = i - 1  # cycle through shelves 0, 1, 2
+
+            with (
+                patch.object(
+                    svc,
+                    "_call",
+                    new_callable=AsyncMock,
+                    return_value=chart_response,
+                ),
+                patch.object(
+                    svc,
+                    "get_chart_shelf_tracks",
+                    new_callable=AsyncMock,
+                    return_value=[{"videoId": f"t{i}", "title": f"Track {i}"}],
+                ),
+            ):
+                _, label = await svc.get_discovery_mix()
+                seen_labels.append(label)
+
+        assert any("Daily Top 100" in lbl for lbl in seen_labels)
+        assert any("Weekly Top Songs" in lbl for lbl in seen_labels)
+        assert any("Top Music Videos" in lbl for lbl in seen_labels)
