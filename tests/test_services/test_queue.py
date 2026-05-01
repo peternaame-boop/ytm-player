@@ -429,3 +429,19 @@ class TestContextId:
         queue_manager.add(sample_track)
         queue_manager.clear()
         assert queue_manager.current_context_id == "PLABCD"
+
+
+class TestRadioSeeds:
+    def test_default_is_none(self, queue_manager):
+        assert queue_manager.radio_seeds is None
+
+    def test_set_and_read_back(self, queue_manager):
+        seeds = [{"title": "Song A"}, {"title": "Song B"}]
+        queue_manager.radio_seeds = seeds
+        assert queue_manager.radio_seeds is seeds
+
+    def test_clear_resets_to_none(self, queue_manager, sample_track):
+        queue_manager.radio_seeds = [{"title": "Song A"}]
+        queue_manager.add(sample_track)
+        queue_manager.clear()
+        assert queue_manager.radio_seeds is None

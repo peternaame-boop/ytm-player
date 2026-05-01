@@ -307,6 +307,7 @@ class SidebarMixin(YTMHostBase):
         if radio_tracks:
             self.queue.clear()
             self.queue.set_radio_tracks(radio_tracks)
+            self.queue.radio_seeds = [{"title": f"{playlist_name} Playlist"}]
             # Shuffle lock — radio off a playlist still inherits that
             # playlist's identity, so honor its lock.
             self.queue.set_context(playlist_id)

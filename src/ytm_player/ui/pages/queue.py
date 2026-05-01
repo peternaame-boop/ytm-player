@@ -12,6 +12,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, Static
 
 from ytm_player.config.keymap import Action
+from ytm_player.config.settings import get_settings
 from ytm_player.services.player import PlayerEvent
 from ytm_player.ui.widgets.track_table import TrackTable
 
@@ -60,6 +61,12 @@ class QueuePage(Widget):
         content-align: center middle;
         color: $text-muted;
     }
+    .queue-source {
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+        display: none;
+    }
     .track-filter {
         dock: bottom;
         display: none;
@@ -77,6 +84,7 @@ class QueuePage(Widget):
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="queue-header", classes="queue-now-playing")
+        yield Static("", id="queue-source", classes="queue-source")
         yield Label("Queue is empty.", id="queue-empty", classes="queue-empty")
         yield TrackTable(show_album=False, id="queue-table")
         yield Static("", id="queue-footer", classes="queue-footer")
@@ -176,7 +184,26 @@ class QueuePage(Widget):
             table.set_playing(video_id)
 
         self.queue_length = len(tracks)
+        self._update_queue_source()
         self._update_footer()
+
+    def _update_queue_source(self) -> None:
+        """Update the seed source label from QueueManager state."""
+        source = self.query_one("#queue-source", Static)
+        seeds = self.app.queue.radio_seeds  # type: ignore[attr-defined]
+        if seeds and get_settings().ui.show_queue_source:
+            titles = [s.get("title", "Unknown") for s in seeds]
+            if len(titles) <= 3:
+                summary = ", ".join(titles)
+            else:
+                summary = f"{titles[0]}, {titles[1]} + {len(titles) - 2} more"
+            source.update(f"Generated from: {summary}")
+            source.tooltip = "Generated from:\n" + "\n".join(f"  • {t}" for t in titles)
+            source.display = True
+        else:
+            source.update("")
+            source.tooltip = None
+            source.display = False
 
     def _update_footer(self) -> None:
         """Update the footer bar with track count info."""

@@ -306,11 +306,13 @@ class PlaybackMixin(YTMHostBase):
 
         if append:
             self.queue.set_radio_tracks(tracks)
+            self.queue.radio_seeds = seeds
             self._refresh_queue_page()
             return
 
         self.queue.clear()
         self.queue.set_radio_tracks(tracks)
+        self.queue.radio_seeds = seeds
         # Track-seeded radio and discovery mix are ephemeral — clear any
         # prior context so a later shuffle toggle is not persisted to
         # the wrong key (TP-7).  Playlist-seeded radio uses its own
@@ -318,8 +320,7 @@ class PlaybackMixin(YTMHostBase):
         self.queue.set_context(None)
         self._refresh_queue_page()
         if not label:
-            seed_list = "\n".join(f"  • {s.get('title', 'Unknown')}" for s in seeds)
-            label = f"Radio generated from:\n{seed_list}"
+            label = f"Radio from {seeds[0].get('title', 'Unknown')}"
         first = self.queue.next_track()
         if first:
             await self.play_track(first)
@@ -503,8 +504,7 @@ class PlaybackMixin(YTMHostBase):
         if not seeds:
             self.notify("Discovery failed — no content available", severity="warning")
             return
-        seed_list = "\n".join(f"  • {s.get('title', 'Unknown')}" for s in seeds)
-        label = f"Discovery ({source}):\n{seed_list}" if source else None
+        label = f"Discovery ({source})" if source else None
         await self._fetch_and_play_radio(seeds, label=label)
         if self._current_page != "queue":
             await self.navigate_to("queue")

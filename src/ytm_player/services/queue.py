@@ -65,6 +65,8 @@ class QueueManager:
         # per-collection shuffle memory feature — see ShufflePreferences.
         self._current_context_id: str | None = None
 
+        self.radio_seeds: list[dict] | None = None
+
     # -- Properties -------------------------------------------------------
 
     @property
@@ -260,6 +262,7 @@ class QueueManager:
             self._current_index = -1
             self._shuffle_order.clear()
             self._shuffle_position = -1
+            self.radio_seeds = None
 
     def move(self, from_idx: int, to_idx: int) -> None:
         """Move a track from one position to another in the visible order."""
