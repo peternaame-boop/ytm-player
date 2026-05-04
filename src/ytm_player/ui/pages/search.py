@@ -21,7 +21,6 @@ from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.formatting import (
     copy_to_clipboard,
     extract_artist,
-    get_video_id,
     normalize_tracks,
     truncate,
 )
@@ -398,7 +397,6 @@ class SearchPage(Widget):
         self._restore_results = search_results
         self._restore_cursor_row = cursor_row
         self._restoring = False
-        self._subscribed_artist_ids: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -794,54 +792,6 @@ class SearchPage(Widget):
         playlists_panel = self.query_one("#playlists-panel", SearchResultPanel)
         playlists_panel.load_items(results.get("playlists", []))
 
-        if results.get("artists"):
-            self.run_worker(self._load_subscribed_artists(), name="subscriptions", exclusive=True)
-
-    async def _load_subscribed_artists(self) -> None:
-        """Eagerly fetch subscribed artist IDs for subscribe label accuracy."""
-        try:
-            ytmusic = cast("YTMHostBase", self.app).ytmusic
-            assert ytmusic is not None
-            library_artists = await ytmusic.get_library_artists(limit=None)
-            self._subscribed_artist_ids = {
-                a.get("browseId", "") for a in library_artists if a.get("browseId")
-            }
-        except Exception:
-            logger.debug("Failed to load subscribed artists", exc_info=True)
-
-    async def _toggle_artist_subscribe(self, item: dict[str, Any], browse_id: str) -> None:
-        """Subscribe to or unsubscribe from an artist."""
-        from ytm_player.services.ytmusic import mutation_failure_suffix
-
-        host = cast("YTMHostBase", self.app)
-        assert host.ytmusic is not None
-        data = await host.ytmusic.get_artist(browse_id)
-        if not data or not data.get("channelId"):
-            host.notify("Couldn't load artist data.", severity="warning", timeout=3)
-            return
-        channel_id = data["channelId"]
-        is_subscribed = browse_id in self._subscribed_artist_ids
-        if is_subscribed:
-            result = await host.ytmusic.unsubscribe_artist(channel_id)
-        else:
-            result = await host.ytmusic.subscribe_artist(channel_id)
-        if result == "success":
-            if is_subscribed:
-                self._subscribed_artist_ids.discard(browse_id)
-                item["subscribed"] = False
-                host.notify("Unsubscribed", timeout=2)
-            else:
-                self._subscribed_artist_ids.add(browse_id)
-                item["subscribed"] = True
-                host.notify("Subscribed", timeout=2)
-        else:
-            action_verb = "unsubscribe" if is_subscribed else "subscribe"
-            host.notify(
-                f"Couldn't {action_verb} — {mutation_failure_suffix(result)}",
-                severity="error",
-                timeout=3,
-            )
-
     def _clear_stale_results(self) -> None:
         """Empty all result panels.
 
@@ -915,19 +865,15 @@ class SearchPage(Widget):
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected song and populate the queue with search results."""
         event.stop()
-        track = event.track
-        video_id = get_video_id(track)
-        if video_id:
-            table = self.query_one("#songs-table", TrackTable)
-            host = cast("YTMHostBase", self.app)
-            host.queue.clear()
-            host.queue.add_multiple(table.tracks)
-            host.queue.jump_to_real(event.index)
-            # Search results are ephemeral — clear context so a later
-            # shuffle toggle isn't saved against whatever collection
-            # was previously playing (TP-7).
-            host.queue.set_context(None)
-            await host.play_track(track)
+        table = self.query_one("#songs-table", TrackTable)
+        host = cast("YTMHostBase", self.app)
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=None,
+            start_index=event.index,
+            autoplay=False,
+        )
+        await host.play_track(event.track)
 
     async def on_search_result_panel_item_selected(
         self, event: SearchResultPanel.ItemSelected
@@ -976,66 +922,28 @@ class SearchPage(Widget):
                 return
 
             if action_id in ("play_all", "shuffle_play"):
-                browse_id = (
-                    item.get("browseId") or item.get("album_id") or item.get("playlistId") or ""
-                )
-                ctx_type = item_type if item_type in ("album", "playlist") else None
-                if browse_id and ctx_type:
-                    host.run_worker(
-                        host.navigate_to("context", context_type=ctx_type, context_id=browse_id)
-                    )
 
-            elif action_id == "go_to_artist":
-                artists = item.get("artists") or []
-                if isinstance(artists, list) and artists:
-                    artist_id = artists[0].get("id") or artists[0].get("browseId", "")
-                elif item_type == "artist":
-                    artist_id = item.get("browseId") or item.get("artist_id") or ""
-                else:
-                    artist_id = ""
-                if artist_id:
-                    host.run_worker(
-                        host.navigate_to("context", context_type="artist", context_id=artist_id)
-                    )
+                async def _play_and_navigate() -> None:
+                    prev = host.queue.current_track
+                    await host._dispatch_entity_action(action_id, item, item_type)
+                    if (
+                        host.queue.current_track is not None
+                        and host.queue.current_track is not prev
+                    ):
+                        await host.navigate_to("queue")
 
-            elif action_id == "start_radio":
-                browse_id = item.get("browseId") or item.get("artist_id") or ""
-                if not browse_id:
-                    host.notify("No ID available for this item.", severity="warning", timeout=2)
-                elif item_type == "artist":
-                    host.run_worker(host._start_artist_radio(browse_id))
-                elif item_type == "playlist":
-                    host.run_worker(host._start_playlist_radio(item))
+                host.run_worker(_play_and_navigate())
+                return
 
-            elif action_id == "play_top_songs":
-                browse_id = item.get("browseId") or item.get("artist_id") or ""
-                if not browse_id:
-                    host.notify("No ID available for this item.", severity="warning", timeout=2)
-                elif item_type == "artist":
-                    host.run_worker(host._play_artist_top_songs(browse_id))
-                else:
-                    ctx_type = item_type if item_type in ("album", "playlist") else "artist"
-                    host.run_worker(
-                        host.navigate_to("context", context_type=ctx_type, context_id=browse_id)
-                    )
-
-            elif action_id in ("view_albums", "view_similar"):
+            if action_id == "toggle_subscribe":
                 browse_id = item.get("browseId") or item.get("artist_id") or ""
                 if not browse_id:
                     host.notify("No ID available for this item.", severity="warning", timeout=2)
                 else:
-                    host.run_worker(
-                        host.navigate_to("context", context_type="artist", context_id=browse_id)
-                    )
+                    host.run_worker(host._toggle_artist_subscribe_simple(browse_id))
+                return
 
-            elif action_id == "toggle_subscribe":
-                browse_id = item.get("browseId") or item.get("artist_id") or ""
-                if not browse_id:
-                    host.notify("No ID available for this item.", severity="warning", timeout=2)
-                else:
-                    host.run_worker(self._toggle_artist_subscribe(item, browse_id))
-
-            elif action_id == "copy_link":
+            if action_id == "copy_link":
                 browse_id = (
                     item.get("browseId")
                     or item.get("album_id")
@@ -1049,11 +957,11 @@ class SearchPage(Widget):
                         host.notify("Link copied", timeout=2)
                     else:
                         host.notify(link, timeout=5)
+                return
 
-        if item_type == "artist":
-            item["subscribed"] = item.get("browseId", "") in self._subscribed_artist_ids
+            host.run_worker(host._dispatch_entity_action(action_id, item, item_type))
 
-        host.push_screen(ActionsPopup(item, item_type=item_type), _handle_action)
+        host.push_screen(ActionsPopup(item, item_type=item_type, source="search"), _handle_action)
 
     # ------------------------------------------------------------------
     # Vim-style action handler

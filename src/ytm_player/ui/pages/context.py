@@ -577,41 +577,20 @@ class ContextPage(Widget):
 
     async def _start_radio(self) -> None:
         """Start radio seeded from the current playlist."""
-        data = self._data
-        data.setdefault("playlistId", self.context_id)
-        await cast("YTMHostBase", self.app)._start_playlist_radio(data)
+        item = {**self._data, "playlistId": self._data.get("playlistId") or self.context_id}
+        await cast("YTMHostBase", self.app)._start_playlist_radio(item)
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected track and enqueue remaining tracks."""
         event.stop()
         table = self.query_one("#context-tracks", TrackTable)
-        tracks = table.tracks
-        idx = event.index
-
         host = cast("YTMHostBase", self.app)
-
-        # Load all tracks into the queue starting from the selected one.
-        host.queue.clear()
-        host.queue.add_multiple(tracks)
-        host.queue.jump_to_real(idx)
-
-        # Shuffle lock — force shuffle ON if the context (album/artist/
-        # playlist) has the lock set. Lock is one-way enforcement on entry.
-        # set_context(None) is meaningful (clears prior context); the lock
-        # check below is gated on a truthy id, so None never reaches
-        # shuffle_prefs.get.
-        host.queue.set_context(self.context_id)
-        if self.context_id and host.shuffle_prefs.get(self.context_id):
-            if not host.queue.shuffle_enabled:
-                host.queue.toggle_shuffle()
-        try:
-            bar = host.query_one("#playback-bar")
-            bar.update_shuffle(host.queue.shuffle_enabled)  # type: ignore[attr-defined]
-            bar.refresh_shuffle_lock_state()  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-        # Play selected track.
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=self.context_id,
+            start_index=event.index,
+            autoplay=False,
+        )
         await host.play_track(event.track)
 
     async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

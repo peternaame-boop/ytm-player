@@ -597,7 +597,7 @@ class TrackTable(DataTable):
             row_idx = meta.get("row") if meta else None
             if row_idx is not None and 0 <= row_idx < len(self._tracks):
                 track = self._tracks[row_idx]
-                col = self._column_at_x(event.x)
+                col = self._column_at_x(int(event.x + self.scroll_x))
                 col_key = col.key.value if col and col.key else ""
                 if col_key == "artist":
                     self.post_message(self.ArtistRightClicked(track, row_idx))

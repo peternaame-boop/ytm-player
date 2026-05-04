@@ -173,6 +173,51 @@ class TrackActionsMixin(YTMHostBase):
             _handle_action_result,
         )
 
+    def _sync_shuffle_bar(self) -> None:
+        try:
+            bar = self.query_one("#playback-bar")
+            bar.update_shuffle(self.queue.shuffle_enabled)  # type: ignore[attr-defined]
+            bar.refresh_shuffle_lock_state()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    async def _replace_queue_and_play(
+        self,
+        tracks: list[dict],
+        *,
+        entity_id: str | None = None,
+        start_index: int = 0,
+        shuffle: bool | None = None,
+        autoplay: bool = True,
+    ) -> None:
+        if not tracks:
+            self.notify("No tracks found", severity="warning", timeout=3)
+            return
+        if shuffle is True:
+            import random
+
+            tracks = list(tracks)
+            random.shuffle(tracks)
+        self.queue.clear()
+        self.queue.add_multiple(tracks)
+        self.queue.set_context(entity_id)
+        if entity_id and self.shuffle_prefs.get(entity_id):
+            if not self.queue.shuffle_enabled:
+                self.queue.toggle_shuffle()
+        elif shuffle is False:
+            if self.queue.shuffle_enabled:
+                self.queue.toggle_shuffle()
+        self.queue.jump_to_real(start_index)
+        self._refresh_queue_page()
+        self._sync_shuffle_bar()
+        if autoplay and self.queue.current_track is not None:
+            await self.play_track(self.queue.current_track)
+
+    def _append_to_queue(self, tracks: list[dict], label: str) -> None:
+        self.queue.add_multiple(tracks)
+        self._refresh_queue_page()
+        self.notify(f"Added {label} ({len(tracks)} tracks) to queue", timeout=3)
+
     def _refresh_queue_page(self) -> None:
         """Refresh the queue page if it's currently displayed."""
         try:
@@ -241,7 +286,6 @@ class TrackActionsMixin(YTMHostBase):
         item: dict[str, Any] = {
             "browseId": browse_id,
             "artist": artist.get("name", "Unknown Artist"),
-            "resultType": "artist",
         }
 
         def _handle(action_id: str | None) -> None:
@@ -249,14 +293,6 @@ class TrackActionsMixin(YTMHostBase):
                 return
             if action_id == "_back" and back_to:
                 self._show_artist_picker(back_to[0], back_to[1])
-            elif action_id == "start_radio":
-                self.run_worker(self._start_artist_radio(browse_id))
-            elif action_id == "play_top_songs":
-                self.run_worker(self._play_artist_top_songs(browse_id))
-            elif action_id in ("go_to_artist", "view_albums", "view_similar"):
-                self.run_worker(
-                    self.navigate_to("context", context_type="artist", context_id=browse_id)
-                )
             elif action_id == "toggle_subscribe":
                 self.run_worker(self._toggle_artist_subscribe_simple(browse_id))
             elif action_id == "copy_link":
@@ -265,6 +301,8 @@ class TrackActionsMixin(YTMHostBase):
                     self.notify("Link copied", timeout=2)
                 else:
                     self.notify(link, timeout=5)
+            else:
+                self.run_worker(self._dispatch_entity_action(action_id, item, "artist"))
 
         actions: list[tuple[str, str]] | None = None
         if back_to:
@@ -287,7 +325,6 @@ class TrackActionsMixin(YTMHostBase):
         item: dict[str, Any] = {
             "browseId": album_id,
             "title": album_name,
-            "resultType": "album",
         }
         if track.get("artists"):
             item["artists"] = track["artists"]
@@ -295,28 +332,14 @@ class TrackActionsMixin(YTMHostBase):
         def _handle(action_id: str | None) -> None:
             if action_id is None:
                 return
-            if action_id in ("play_all", "shuffle_play"):
-                self.run_worker(
-                    self._play_album(album_id, album_name, shuffle=action_id == "shuffle_play")
-                )
-            elif action_id == "add_to_library":
-                self.run_worker(self._add_album_to_library(album_id, album_name))
-            elif action_id == "add_to_queue":
-                self.run_worker(self._add_album_to_queue(album_id, album_name))
-            elif action_id == "go_to_artist":
-                artists = track.get("artists", [])
-                if isinstance(artists, list) and artists:
-                    artist_id = artists[0].get("id") or artists[0].get("browseId", "")
-                    if artist_id:
-                        self.run_worker(
-                            self.navigate_to("context", context_type="artist", context_id=artist_id)
-                        )
-            elif action_id == "copy_link":
+            if action_id == "copy_link":
                 link = f"https://music.youtube.com/browse/{album_id}"
                 if copy_to_clipboard(link):
                     self.notify("Link copied", timeout=2)
                 else:
                     self.notify(link, timeout=5)
+            else:
+                self.run_worker(self._dispatch_entity_action(action_id, item, "album"))
 
         self.push_screen(ActionsPopup(item, item_type="album"), _handle)
 
@@ -371,12 +394,7 @@ class TrackActionsMixin(YTMHostBase):
             self.notify("No songs found for this artist.", severity="warning", timeout=3)
             return
         artist_name = data.get("name", "Unknown Artist")
-        self.queue.clear()
-        self.queue.set_context(None)
-        self.queue.add_multiple(top_tracks)
-        self.queue.jump_to_real(0)
-        self._refresh_queue_page()
-        await self.play_track(top_tracks[0])
+        await self._replace_queue_and_play(top_tracks, shuffle=None)
         self.notify(f"Playing top songs from {artist_name}", timeout=4)
         songs_browse_id = songs_section.get("browseId") if isinstance(songs_section, dict) else None
         if songs_browse_id:
@@ -396,6 +414,10 @@ class TrackActionsMixin(YTMHostBase):
             all_tracks = normalize_tracks(pl.get("tracks", []) if isinstance(pl, dict) else [])
             full_by_id = {t.get("video_id", ""): t for t in all_tracks if t.get("video_id")}
             existing_ids = {t.get("video_id", "") for t in initial_tracks}
+            # Bail if the queue was replaced while we were fetching.
+            queue_ids = {t.get("video_id", "") for t in self.queue.tracks}
+            if not existing_ids & queue_ids:
+                return
             for qt in self.queue.tracks:
                 vid = qt.get("video_id", "")
                 if vid in full_by_id:
@@ -457,19 +479,7 @@ class TrackActionsMixin(YTMHostBase):
         self.notify("Loading album...", timeout=3)
         data = await self.ytmusic.get_album(album_id)
         tracks = normalize_tracks(data.get("tracks", []) if isinstance(data, dict) else [])
-        if not tracks:
-            self.notify("No tracks found.", severity="warning", timeout=3)
-            return
-        self.queue.clear()
-        self.queue.set_context(None)
-        self.queue.add_multiple(tracks)
-        if shuffle and not self.queue.shuffle_enabled:
-            self.queue.toggle_shuffle()
-        elif not shuffle and self.queue.shuffle_enabled:
-            self.queue.toggle_shuffle()
-        self.queue.jump_to_real(0)
-        self._refresh_queue_page()
-        await self.play_track(tracks[0])
+        await self._replace_queue_and_play(tracks, entity_id=album_id, shuffle=shuffle)
         action = "Shuffling" if shuffle else "Playing"
         self.notify(f"{action}: {album_name}", timeout=4)
 
@@ -481,9 +491,191 @@ class TrackActionsMixin(YTMHostBase):
         if not tracks:
             self.notify("No tracks found.", severity="warning", timeout=3)
             return
-        self.queue.add_multiple(tracks)
-        self._refresh_queue_page()
-        self.notify(f"Added {album_name} ({len(tracks)} tracks) to queue", timeout=3)
+        self._append_to_queue(tracks, album_name)
+
+    async def _dispatch_entity_action(self, action_id: str, item: dict, item_type: str) -> bool:
+        """Dispatch an entity action to the correct method. Returns True if handled."""
+        entity_id = item.get("browseId") or item.get("album_id") or item.get("playlistId") or ""
+        entity_name = item.get("title") or item.get("name") or item.get("artist") or "Unknown"
+
+        if action_id in ("play_all", "shuffle_play"):
+            shuffle = action_id == "shuffle_play"
+            if item_type == "album":
+                if not entity_id:
+                    self.notify("No ID available", severity="error", timeout=2)
+                    return True
+                await self._play_album(entity_id, entity_name, shuffle=shuffle)
+            elif item_type == "playlist":
+                if not entity_id:
+                    self.notify("No ID available", severity="error", timeout=2)
+                    return True
+                await self._play_playlist(entity_id, entity_name, shuffle=shuffle)
+            else:
+                return False
+            return True
+
+        if action_id == "add_to_queue":
+            if item_type == "album":
+                if not entity_id:
+                    self.notify("No ID available", severity="error", timeout=2)
+                    return True
+                await self._add_album_to_queue(entity_id, entity_name)
+            elif item_type == "playlist":
+                if not entity_id:
+                    self.notify("No ID available", severity="error", timeout=2)
+                    return True
+                await self._add_playlist_to_queue(entity_id, entity_name)
+            else:
+                return False
+            return True
+
+        if action_id == "start_radio":
+            if item_type == "artist":
+                if not entity_id:
+                    self.notify("No ID available", severity="error", timeout=2)
+                    return True
+                await self._start_artist_radio(entity_id)
+            elif item_type == "playlist":
+                await self._start_playlist_radio(item)
+            else:
+                return False
+            return True
+
+        if action_id == "play_top_songs":
+            if item_type == "artist":
+                if not entity_id:
+                    self.notify("No ID available", severity="error", timeout=2)
+                    return True
+                await self._play_artist_top_songs(entity_id)
+            else:
+                return False
+            return True
+
+        if action_id in ("go_to_artist", "view_similar"):
+            artists = item.get("artists") or []
+            if isinstance(artists, list) and artists:
+                artist_id = artists[0].get("id") or artists[0].get("browseId", "")
+            else:
+                artist_id = entity_id if item_type == "artist" else ""
+            if not artist_id:
+                self.notify("No ID available", severity="error", timeout=2)
+                return True
+            await self.navigate_to("context", context_type="artist", context_id=artist_id)
+            return True
+
+        if action_id == "go_to_album":
+            album_id = item.get("album_id") or item.get("browseId") or ""
+            if not album_id:
+                self.notify("No ID available", severity="error", timeout=2)
+                return True
+            await self.navigate_to("context", context_type="album", context_id=album_id)
+            return True
+
+        if action_id == "add_to_library":
+            if item_type == "album":
+                if not entity_id:
+                    self.notify("No ID available", severity="error", timeout=2)
+                    return True
+                await self._add_album_to_library(entity_id, entity_name)
+            else:
+                return False
+            return True
+
+        return False
+
+    _PLAYLIST_FIRST_BATCH = 300
+
+    async def _play_playlist(
+        self,
+        playlist_id: str,
+        name: str,
+        *,
+        shuffle: bool | None = None,
+        order: str | None = None,
+    ) -> None:
+        if not self.ytmusic:
+            return
+        try:
+            data = await self.ytmusic.get_playlist(
+                playlist_id, limit=self._PLAYLIST_FIRST_BATCH, order=order
+            )
+            raw_tracks = data.get("tracks", [])
+            tracks = normalize_tracks(raw_tracks)
+            if not tracks:
+                self.notify("Playlist is empty", severity="warning")
+                return
+            await self._replace_queue_and_play(tracks, entity_id=playlist_id, shuffle=shuffle)
+            self.notify(f"Playing: {name}", timeout=4)
+            total_count = data.get("trackCount") or len(raw_tracks)
+            if total_count > len(raw_tracks):
+                self.run_worker(
+                    self._fetch_remaining_for_queue(playlist_id, len(raw_tracks), order=order),
+                    name="fetch-remaining-playlist",
+                )
+        except Exception:
+            logger.exception("Failed to load playlist %s", playlist_id)
+            self.notify("Failed to load playlist", severity="error")
+
+    async def _add_playlist_to_queue(self, playlist_id: str, name: str) -> None:
+        if not self.ytmusic:
+            return
+        try:
+            data = await self.ytmusic.get_playlist(playlist_id)
+            tracks = normalize_tracks(data.get("tracks", []))
+            if tracks:
+                self._append_to_queue(tracks, name)
+            else:
+                self.notify("Playlist is empty", severity="warning", timeout=2)
+        except Exception:
+            logger.debug("Failed to add playlist to queue", exc_info=True)
+            self.notify("Failed to add to queue", severity="error", timeout=2)
+
+    async def _start_playlist_radio(self, item: dict) -> None:
+        """Start radio seeded from a playlist."""
+        playlist_id = item.get("playlistId") or item.get("browseId")
+        if not playlist_id or not self.ytmusic:
+            return
+
+        playlist_name = item.get("title", "playlist")
+        self.notify(f"Starting radio from {playlist_name}...", timeout=3)
+        try:
+            radio_tracks = normalize_tracks(await self.ytmusic.get_playlist_radio(playlist_id))
+        except Exception:
+            logger.exception("Failed to start playlist radio for %r", playlist_id)
+            self.notify("Failed to start radio", severity="error")
+            return
+
+        if radio_tracks:
+            self.queue.clear()
+            self.queue.set_radio_tracks(radio_tracks)
+            self.queue.radio_seeds = [{"title": f"{playlist_name} Playlist"}]
+            self.queue.set_context(playlist_id)
+            if self.shuffle_prefs.get(playlist_id) and not self.queue.shuffle_enabled:
+                self.queue.toggle_shuffle()
+            self._refresh_queue_page()
+            self._sync_shuffle_bar()
+            first = self.queue.next_track()
+            if first:
+                await self.play_track(first)
+                self.notify(f"Playing: Radio from {playlist_name}", timeout=4)
+        else:
+            self.notify("No radio tracks found", severity="warning", timeout=3)
+
+    async def _fetch_remaining_for_queue(
+        self, playlist_id: str, already_have: int, *, order: str | None = None
+    ) -> None:
+        """Background fetch remaining tracks and append to the queue."""
+        if not self.ytmusic:
+            return
+        try:
+            remaining = await self.ytmusic.get_playlist_remaining(
+                playlist_id, already_have, order=order
+            )
+            if remaining:
+                tracks = normalize_tracks(remaining)
+                self.queue.add_multiple(tracks)
+        except Exception:
+            logger.debug("Failed to fetch remaining playlist tracks for queue", exc_info=True)
 
     def on_selection_changed(self, message: Any) -> None:
         """Relay SelectionChanged messages to the SelectionInfoBar.

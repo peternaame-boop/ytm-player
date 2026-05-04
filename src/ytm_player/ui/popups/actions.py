@@ -38,10 +38,10 @@ ALBUM_ACTIONS: list[tuple[str, str]] = [
 ]
 
 ARTIST_ACTIONS: list[tuple[str, str]] = [
+    ("go_to_artist", "Go to Artist"),
     ("play_top_songs", "Play Top Songs"),
     ("start_radio", "Start Radio"),
     ("toggle_subscribe", "Subscribe"),
-    ("view_albums", "View Albums"),
     ("view_similar", "View Similar Artists"),
     ("copy_link", "Copy Link"),
 ]
@@ -68,6 +68,7 @@ def _build_actions(
     item_type: str,
     *,
     in_queue: bool = False,
+    source: str = "default",
 ) -> list[tuple[str, str]]:
     """Return the action list for *item_type*, adjusting labels dynamically.
 
@@ -104,6 +105,10 @@ def _build_actions(
             album = item.get("album")
             if not item.get("album_id") and not (isinstance(album, dict) and album.get("id")):
                 continue
+
+        # Hide "Delete Playlist" in search results (no ownership data available).
+        if action_id == "delete" and source == "search" and item_type == "playlist":
+            continue
 
         result.append((action_id, label))
 
@@ -182,11 +187,12 @@ class ActionsPopup(ModalScreen[str | None]):
         *,
         in_queue: bool = False,
         actions: list[tuple[str, str]] | None = None,
+        source: str = "default",
     ) -> None:
         super().__init__()
         self.item = item
         self.item_type = item_type
-        self._actions = actions or _build_actions(item, item_type, in_queue=in_queue)
+        self._actions = actions or _build_actions(item, item_type, in_queue=in_queue, source=source)
 
     @property
     def _title_text(self) -> str:

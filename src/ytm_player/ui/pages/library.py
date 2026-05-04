@@ -435,29 +435,15 @@ class LibraryPage(Widget):
         """Queue all tracks and start playback from the selected one."""
         event.stop()
         table = self.query_one("#library-tracks", TrackTable)
-        tracks = table.tracks
-        idx = event.index
-
         host = cast("YTMHostBase", self.app)
-        host.queue.clear()
-        host.queue.add_multiple(tracks)
-        host.queue.jump_to_real(idx)
-        # Shuffle lock (per-playlist, replaces TP-7 implicit memory).
-        # set_context() accepts None — that case clears any previous context;
-        # the lock check below is gated on a truthy id, so None never reaches
-        # shuffle_prefs.get.
-        host.queue.set_context(self._active_playlist_id)
         if self._active_playlist_id:
-            locked = bool(host.shuffle_prefs.get(self._active_playlist_id))
-            if locked and not host.queue.shuffle_enabled:
-                host.queue.toggle_shuffle()
             host._active_library_playlist_id = self._active_playlist_id
-        # Sync the playback bar's shuffle button enabled/disabled state.
-        try:
-            bar = host.query_one("#playback-bar")
-            bar.refresh_shuffle_lock_state()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=self._active_playlist_id,
+            start_index=event.index,
+            autoplay=False,
+        )
         await host.play_track(event.track)
 
     # ------------------------------------------------------------------
