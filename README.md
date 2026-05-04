@@ -1,11 +1,27 @@
-# ytm-player
+<p align="center">
+  <img src="https://raw.githubusercontent.com/peternaame-boop/ytm-player/master/docs/images/header.svg" alt="ytm-player — YouTube Music in your terminal — synced lyrics, vim keys, mpv backend. Runs on Linux, macOS, Windows. Free-tier supported." width="720" />
+</p>
 
-[![PyPI](https://img.shields.io/pypi/v/ytm-player)](https://pypi.org/project/ytm-player/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/peternaame-boop/ytm-player/blob/master/LICENSE)
-[![CI](https://github.com/peternaame-boop/ytm-player/actions/workflows/ci.yml/badge.svg)](https://github.com/peternaame-boop/ytm-player/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://ytm-player.com"><img src="https://raw.githubusercontent.com/peternaame-boop/ytm-player/master/docs/images/website-button.svg" alt="Visit ytm-player.com" width="240" /></a>
+</p>
 
-A full-featured YouTube Music player for the terminal. Browse your library, search, queue tracks, and control playback — all from a TUI with vim-style keybindings. Runs on Linux, macOS, and Windows.
+<p align="center">
+  <a href="https://pypi.org/project/ytm-player/"><img src="https://img.shields.io/pypi/v/ytm-player?style=for-the-badge&logo=pypi&color=ff4e45&labelColor=0f0f0f&logoColor=ff4e45" alt="PyPI"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-ff4e45?style=for-the-badge&logo=python&labelColor=0f0f0f&logoColor=ff4e45" alt="Python 3.10+"></a>
+  <a href="https://github.com/peternaame-boop/ytm-player/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/peternaame-boop/ytm-player/ci.yml?style=for-the-badge&logo=githubactions&labelColor=0f0f0f&logoColor=ff4e45" alt="CI"></a>
+  <a href="https://github.com/peternaame-boop/ytm-player/blob/master/LICENSE"><img src="https://img.shields.io/github/license/peternaame-boop/ytm-player?style=for-the-badge&logo=opensourceinitiative&color=ff4e45&labelColor=0f0f0f&logoColor=ff4e45" alt="License"></a>
+</p>
+
+<p align="center">
+  <a href="#install"><img src="https://img.shields.io/badge/Install-ff4e45?style=for-the-badge&labelColor=0f0f0f" alt="Install"></a>&nbsp;
+  <a href="#quickstart"><img src="https://img.shields.io/badge/Quickstart-ff4e45?style=for-the-badge&labelColor=0f0f0f" alt="Quickstart"></a>&nbsp;
+  <a href="#documentation"><img src="https://img.shields.io/badge/Documentation-ff4e45?style=for-the-badge&labelColor=0f0f0f" alt="Documentation"></a>&nbsp;
+  <a href="https://github.com/peternaame-boop/ytm-player/blob/master/CONTRIBUTING.md"><img src="https://img.shields.io/badge/Contributing-ff4e45?style=for-the-badge&labelColor=0f0f0f" alt="Contributing"></a>&nbsp;
+  <a href="https://github.com/peternaame-boop/ytm-player/blob/master/CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-ff4e45?style=for-the-badge&labelColor=0f0f0f" alt="Changelog"></a>
+</p>
+
+---
 
 ![ytm-player demo](https://raw.githubusercontent.com/peternaame-boop/ytm-player/master/docs/images/ytm-demo.gif)
 
@@ -68,7 +84,7 @@ Windows: replace `ytm` with `py -m ytm_player`.
 
 ## Contributors
 
-Thanks to [@dmnmsc](https://github.com/dmnmsc), [@Villoh](https://github.com/Villoh), [@valkyrieglasc](https://github.com/valkyrieglasc), [@dsafxP](https://github.com/dsafxP), [@Thayrov](https://github.com/Thayrov), [@glywil](https://github.com/glywil), [@Kineforce](https://github.com/Kineforce), [@CarterSnich](https://github.com/CarterSnich), [@Tohbuu](https://github.com/Tohbuu), [@nitsujri](https://github.com/nitsujri), [@uhs-robert](https://github.com/uhs-robert), [@moschi](https://github.com/moschi), and [@firedev](https://github.com/firedev) for bug reports, fixes, packaging, and platform support.
+Thanks to [@dmnmsc](https://github.com/dmnmsc), [@Villoh](https://github.com/Villoh), [@valkyrieglasc](https://github.com/valkyrieglasc), [@dsafxP](https://github.com/dsafxP), [@Thayrov](https://github.com/Thayrov), [@glywil](https://github.com/glywil), [@Kineforce](https://github.com/Kineforce), [@CarterSnich](https://github.com/CarterSnich), [@Tohbuu](https://github.com/Tohbuu), [@nitsujri](https://github.com/nitsujri), [@uhs-robert](https://github.com/uhs-robert), [@moschi](https://github.com/moschi), [@firedev](https://github.com/firedev), [@wgordon17](https://github.com/wgordon17), [@gitiy1](https://github.com/gitiy1), [@hanandewa5](https://github.com/hanandewa5), [@aimar-a](https://github.com/aimar-a), and [@Gimar250](https://github.com/Gimar250) for bug reports, fixes, packaging, and platform support.
 
 ## Changelog
 
