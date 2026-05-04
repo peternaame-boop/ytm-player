@@ -2,27 +2,36 @@
 
 from __future__ import annotations
 
-from textual.command import DiscoveryHit, Hit, Provider
+from typing import TYPE_CHECKING
+
+from textual.command import DiscoveryHit, Hit, Hits, Provider
+
+if TYPE_CHECKING:
+    from ytm_player.app._app import YTMPlayerApp
 
 
 class YTMCommandProvider(Provider):
     """Custom command provider for ytm-player specific actions."""
 
-    async def discover(self) -> None:
+    @property
+    def _host(self) -> YTMPlayerApp:
+        return self.app  # type: ignore[return-value]
+
+    async def discover(self) -> Hits:
         """Yield discovery hits for ytm-player commands."""
         yield DiscoveryHit(
             "Theme: Set Current as Default",
-            self.app.action_set_current_theme_as_default,
+            self._host.action_set_current_theme_as_default,
             help="Save the active theme to config.toml",
         )
 
-    async def search(self, query: str) -> None:
+    async def search(self, query: str) -> Hits:
         """Fuzzy search ytm-player commands."""
         matcher = self.matcher(query)
         commands = [
             (
                 "Theme: Set Current as Default",
-                self.app.action_set_current_theme_as_default,
+                self._host.action_set_current_theme_as_default,
                 "Save the active theme to config.toml",
             ),
         ]

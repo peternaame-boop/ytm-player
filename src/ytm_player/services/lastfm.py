@@ -51,7 +51,7 @@ class LastFMService:
             return False
 
         try:
-            import pylast
+            import pylast  # type: ignore[reportMissingImports]
         except ImportError:
             logger.info("pylast not installed — Last.fm scrobbling disabled")
             return False

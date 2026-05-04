@@ -58,9 +58,15 @@ System dependency: `mpv` must be installed (`sudo pacman -S mpv` on Arch).
 - **Python 3.10 compatibility shims:** Three stdlib symbols added in 3.11+ are backported via `sys.version_info >= (3, 11)` checks (which Pyright narrows correctly): `tomllib` (in `config/keymap.py`, `config/settings.py`, `ui/theme.py`, `app/_app.py`, `tests/test_config/test_settings.py`) falls back to `tomli`; `typing.Self` (in the first three of those files) falls back to `typing_extensions.Self`; `enum.StrEnum` (in `services/queue.py`, `services/player.py`) falls back to a small `(str, Enum)` polyfill mirroring stdlib's `auto()` lowercase-name behaviour. `tomli` and `typing_extensions` are conditional dependencies (`python_version < "3.11"`) so 3.11+ users don't pull them.
 - **LC_NUMERIC quirk:** `cli.py` forces `LC_NUMERIC=C` at import time — mpv segfaults without it. Don't remove this.
 
-## Pre-commit Checklist
+## Pre-commit Hooks
 
-**MANDATORY before every commit — run BOTH:**
+The repo uses [pre-commit](https://pre-commit.com/). After cloning, install hooks once:
+```bash
+pre-commit install
+```
+This sets up both pre-commit (ruff-format, ruff, pyright) and pre-push (pytest) hooks automatically via `default_install_hook_types` in `.pre-commit-config.yaml`.
+
+**Manual fallback** — if hooks aren't installed, run BOTH before every commit:
 ```bash
 ruff format src/ tests/
 ruff check src/ tests/

@@ -3,6 +3,7 @@
 Exposes ytm-player on the session bus so desktop environments and media key
 daemons can control playback.
 """
+# pyright: reportPossiblyUnboundVariable=false
 
 from __future__ import annotations
 
@@ -13,9 +14,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 try:
-    from dbus_next import Variant
-    from dbus_next.aio import MessageBus
-    from dbus_next.service import PropertyAccess, ServiceInterface, dbus_property, method, signal
+    from dbus_fast import Variant  # type: ignore[reportMissingImports]
+    from dbus_fast.aio import MessageBus  # type: ignore[reportMissingImports]
+    from dbus_fast.service import (  # type: ignore[reportMissingImports]
+        PropertyAccess,
+        ServiceInterface,
+        dbus_property,
+        method,
+        signal,
+    )
 
     _DBUS_AVAILABLE = True
 except (ImportError, ValueError):
@@ -42,7 +49,7 @@ def _empty_metadata() -> dict[str, Variant]:
 
 try:
     if not _DBUS_AVAILABLE:
-        raise ImportError("dbus-next not available")
+        raise ImportError("dbus-fast not available")
 
     # ------------------------------------------------------------------ #
     #  org.mpris.MediaPlayer2  (root interface)
@@ -205,13 +212,13 @@ try:
                 await cb()
 
         @method()
-        async def Seek(self, offset: "x"):  # noqa: N802
+        async def Seek(self, offset: "x"):  # noqa: N802  # type: ignore[reportUndefinedVariable]
             cb = self._callbacks.get("seek")
             if cb:
                 await cb(offset)
 
         @method()
-        async def SetPosition(self, track_id: "o", position: "x"):  # noqa: N802
+        async def SetPosition(self, track_id: "o", position: "x"):  # noqa: N802  # type: ignore[reportUndefinedVariable]
             cb = self._callbacks.get("set_position")
             if cb:
                 await cb(position)
@@ -219,7 +226,7 @@ try:
         # --- Signals ---------------------------------------------------
 
         @signal()
-        def Seeked(self) -> "x":
+        def Seeked(self) -> "x":  # type: ignore[reportUndefinedVariable]
             return self._position_us
 
         # --- Internal helpers for state updates ------------------------
@@ -232,7 +239,7 @@ try:
             art_url: str,
             length_us: int,
         ) -> None:
-            # Sanitize: dbus-next crashes on None values in Variant().
+            # Sanitize: dbus-fast crashes on None values in Variant().
             # Track dicts can have explicit None (e.g. "album": None),
             # and dict.get("key", "") returns None when key exists with
             # None value — so we must guard here.
@@ -253,7 +260,7 @@ try:
 
 except (ImportError, ValueError):
     _DBUS_AVAILABLE = False
-    logger.debug("MPRIS D-Bus interfaces unavailable (dbus-next incompatible)", exc_info=True)
+    logger.debug("MPRIS D-Bus interfaces unavailable (dbus-fast incompatible)", exc_info=True)
 
 
 class MPRISService:
@@ -277,7 +284,7 @@ class MPRISService:
         set_position, quit).
         """
         if not _DBUS_AVAILABLE:
-            logger.debug("dbus-next is not installed — MPRIS disabled")
+            logger.debug("dbus-fast is not installed — MPRIS disabled")
             return
 
         try:
@@ -291,10 +298,10 @@ class MPRISService:
         self._root_iface = _MediaPlayer2Interface(player_callbacks)
         self._player_iface = _PlayerInterface(player_callbacks)
 
-        self._bus.export(OBJECT_PATH, self._root_iface)
-        self._bus.export(OBJECT_PATH, self._player_iface)
+        self._bus.export(OBJECT_PATH, self._root_iface)  # type: ignore[reportOptionalMemberAccess]
+        self._bus.export(OBJECT_PATH, self._player_iface)  # type: ignore[reportOptionalMemberAccess]
 
-        await self._bus.request_name(BUS_NAME)
+        await self._bus.request_name(BUS_NAME)  # type: ignore[reportOptionalMemberAccess]
         self._running = True
         logger.info("MPRIS service registered as %s", BUS_NAME)
 
@@ -358,7 +365,7 @@ class MPRISService:
         """Emit org.freedesktop.DBus.Properties.PropertiesChanged.
 
         *changed* maps property names to their **raw Python values** (not
-        Variant-wrapped) — dbus-next's ``emit_properties_changed`` handles
+        Variant-wrapped) — dbus-fast's ``emit_properties_changed`` handles
         the Variant wrapping internally.
         """
         if self._player_iface is None:

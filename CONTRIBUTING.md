@@ -11,21 +11,16 @@ cd ytm-player
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[spotify,mpris,discord,lastfm,transliteration,dev]"
+pre-commit install
 ```
 
 System dependency: `mpv` must be installed system-wide (`sudo pacman -S mpv` on Arch, `brew install mpv` on macOS).
 
-## Pre-commit checklist
+## Pre-commit hooks
 
-**MANDATORY before every commit — run BOTH in this order:**
+The repo uses [pre-commit](https://pre-commit.com/) to run ruff and pyright on commit and pytest on push. `pre-commit install` sets up both hook types automatically (configured via `default_install_hook_types` in `.pre-commit-config.yaml`).
 
-```bash
-ruff format src/ tests/
-ruff check src/ tests/
-```
-
-`ruff check` alone is NOT enough. `ruff format` catches line-length and
-style issues `ruff check` does not.
+If you need to skip hooks for a WIP commit, use `git commit --no-verify` — but make sure CI passes before requesting review.
 
 ## Testing
 
