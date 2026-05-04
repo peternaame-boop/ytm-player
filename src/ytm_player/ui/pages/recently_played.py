@@ -221,9 +221,8 @@ class RecentlyPlayedPage(Widget):
         if not tracks:
             return
         seeds = random.sample(tracks, min(5, len(tracks)))
-        seed_list = "\n".join(f"  • {s.get('title', 'Unknown')}" for s in seeds)
         host = cast("YTMHostBase", self.app)
-        await host._fetch_and_play_radio(seeds, label=f"Radio: Recently Played\n{seed_list}")
+        await host._fetch_and_play_radio(seeds, label="Radio: Recently Played")
 
     def on_track_table_filter_requested(self, event: TrackTable.FilterRequested) -> None:
         event.stop()

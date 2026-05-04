@@ -145,6 +145,32 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
     return normalized
 
 
+def clean_shelf_title(raw: str) -> str:
+    """Normalise a YouTube chart shelf title for compact display.
+
+    Strips country suffixes and applies preferred short labels.
+    Does NOT strip brand prefixes (e.g. "Coachella 2026:") —
+    event pills need the prefix to stay visually distinguishable
+    from country chart pills.
+    """
+    from ytm_player.services.regions import CHART_REGIONS
+
+    s = raw.strip()
+    if " - " in s:
+        head, tail = s.rsplit(" - ", 1)
+        if any(tail.strip() == name for _, name in CHART_REGIONS):
+            s = head.strip()
+    for _, name in CHART_REGIONS:
+        suffix = " " + name
+        if s.endswith(suffix):
+            s = s[: -len(suffix)].strip()
+            break
+    s = re.sub(r"\bDaily Top 100 Songs\b", "Daily Top 100", s)
+    s = re.sub(r"\bDaily Top Music Videos\b", "Daily Top Videos", s)
+    s = re.sub(r"\bDaily Top Songs on Shorts\b", "Daily Top Songs (Shorts)", s)
+    return s
+
+
 def format_ago(timestamp: datetime) -> str:
     now = datetime.now(timezone.utc)
     if timestamp.tzinfo is None:

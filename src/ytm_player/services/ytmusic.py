@@ -150,7 +150,8 @@ class YTMusicService:
         # Serializes get_playlist(order=...) monkey-patches so concurrent
         # calls don't stack patches on client._send_request.
         self._order_lock = asyncio.Lock()
-        self._last_discovery_source: int = -1
+        self._last_discovery_source: int = 0
+        self._last_chart_shelf: int = 0
 
     @property
     def client(self) -> YTMusic:
@@ -487,6 +488,24 @@ class YTMusicService:
             )
             return []
 
+    async def get_chart_shelf_tracks(
+        self, playlist_id: str, limit: int = 25
+    ) -> list[dict[str, Any]]:
+        """Resolve a chart shelf playlist into tracks.
+
+        OLAK5-prefixed playlists use ``get_watch_playlist`` because
+        ytmusicapi's ``parse_audio_playlist`` dereferences
+        ``tracks[0]['album']`` which is None for these auto-generated
+        playlists, raising TypeError.
+        """
+        if playlist_id.startswith("OLAK5"):
+            return await self.get_watch_playlist(playlist_id=playlist_id, limit=limit)
+        playlist = await self.get_playlist(playlist_id, limit=limit)
+        if isinstance(playlist, dict):
+            raw = playlist.get("tracks", []) or []
+            return raw if isinstance(raw, list) else []
+        return []
+
     async def get_radio(self, video_ids: str | list[str], limit: int = 25) -> list[dict]:
         """Fetch radio tracks from one or more seeds and return a deduplicated mix.
 
@@ -531,32 +550,47 @@ class YTMusicService:
         return normalize_tracks(pool[:limit])
 
     async def get_discovery_mix(self) -> tuple[list[dict], str]:
-        """Select seed tracks from one of seven sources for discovery playback.
+        """Select seed tracks from one of six sources for discovery playback.
 
-        Rotates sources — avoids repeating the last-used source.
-        Returns (seed_tracks, label).  On failure, tries a different
-        source as fallback.  Returns ([], "") if all fail.
+        Round-robins through sources so each press of D cycles to the
+        next source.  On failure, skips to the next in sequence.
+        Returns (seed_tracks, label).  Returns ([], "") if all fail.
         """
         import random
 
-        sources = [1, 2, 3, 4, 5, 6, 7]
+        total = 6
+        start = (self._last_discovery_source % total) + 1
+        sources = [(start + i - 1) % total + 1 for i in range(total)]
 
-        if self._last_discovery_source in sources and len(sources) > 1:
-            sources.remove(self._last_discovery_source)
+        async def _charts_mix() -> tuple[list[dict], str]:
+            from ytm_player.config.settings import get_settings
 
-        random.shuffle(sources)
-
-        async def _home_mix() -> tuple[list[dict], str]:
-            shelves = await self._call(self.client.get_home, limit=3)
-            all_playable: list[dict] = []
-            for shelf in shelves:
-                items = shelf.get("contents", []) if isinstance(shelf, dict) else []
-                all_playable.extend(i for i in items if isinstance(i, dict) and i.get("videoId"))
-            if not all_playable:
+            region = get_settings().ui.region
+            charts = await self._call(self.client.get_charts, country=region)
+            shelves: list[dict] = []
+            for key in ("daily", "weekly", "videos"):
+                arr = charts.get(key)
+                if isinstance(arr, list):
+                    shelves.extend(s for s in arr if isinstance(s, dict))
+            if not shelves:
                 return [], ""
-            sampled = random.sample(all_playable, min(3, len(all_playable)))
-            label = sampled[0].get("title", "Home")
-            return sampled, f"Radio: {label}"
+            idx = (self._last_chart_shelf + 1) % len(shelves)
+            self._last_chart_shelf = idx
+            shelf = shelves[idx]
+            playlist_id = shelf.get("playlistId", "")
+            from ytm_player.utils.formatting import clean_shelf_title
+
+            shelf_title = clean_shelf_title(shelf.get("title", "Charts"))
+            if not playlist_id:
+                return [], ""
+            tracks = await self.get_chart_shelf_tracks(playlist_id)
+            playable = [
+                t for t in tracks if isinstance(t, dict) and (t.get("videoId") or t.get("video_id"))
+            ]
+            if not playable:
+                return [], ""
+            sampled = random.sample(playable, min(3, len(playable)))
+            return sampled, f"{region} {shelf_title}"
 
         async def _trending_mix() -> tuple[list[dict], str]:
             result = await self._call(self.client.get_explore)
@@ -571,51 +605,18 @@ class YTMusicService:
             if not playable:
                 return [], ""
             sampled = random.sample(playable, min(3, len(playable)))
-            label = sampled[0].get("title", "Trending")
-            return sampled, f"Radio: {label}"
+            return sampled, "Trending"
 
-        async def _mood_mix() -> tuple[list[dict], str]:
-            categories_dict = await self._call(self.client.get_mood_categories)
-            if not categories_dict or not isinstance(categories_dict, dict):
+        async def _home_mix() -> tuple[list[dict], str]:
+            shelves = await self._call(self.client.get_home, limit=3)
+            all_playable: list[dict] = []
+            for shelf in shelves:
+                items = shelf.get("contents", []) if isinstance(shelf, dict) else []
+                all_playable.extend(i for i in items if isinstance(i, dict) and i.get("videoId"))
+            if not all_playable:
                 return [], ""
-            section = random.choice(list(categories_dict.values()))
-            if not section:
-                return [], ""
-            category = random.choice(section)
-            params = category.get("params", "")
-            if not params:
-                return [], ""
-            playlists = await self._call(self.client.get_mood_playlists, params)
-            if not playlists:
-                return [], ""
-            playlist = random.choice(playlists)
-            playlist_id = playlist.get("playlistId", "")
-            if not playlist_id:
-                return [], ""
-            wl = await self._call(
-                self.client.get_watch_playlist, playlistId=playlist_id, shuffle=True
-            )
-            items = wl.get("tracks", []) if isinstance(wl, dict) else []
-            playable = [t for t in items if isinstance(t, dict) and t.get("videoId")]
-            if not playable:
-                return [], ""
-            sampled = random.sample(playable, min(3, len(playable)))
-            playlist_title = playlist.get("title", "")
-            label = sampled[0].get("title", playlist_title or "Mood")
-            return sampled, f"Radio: {label}"
-
-        async def _charts_mix() -> tuple[list[dict], str]:
-            charts = await self._call(self.client.get_charts)
-            videos = charts.get("videos", {})
-            items = videos.get("items", videos) if isinstance(videos, dict) else videos
-            if not items:
-                return [], ""
-            sampled = random.sample(items, min(3, len(items)))
-            playable = [v for v in sampled if v.get("videoId")]
-            if not playable:
-                return [], ""
-            label = playable[0].get("title", "Charts")
-            return playable, f"Radio: {label}"
+            sampled = random.sample(all_playable, min(3, len(all_playable)))
+            return sampled, "For You"
 
         async def _liked_songs_mix() -> tuple[list[dict], str]:
             liked = await self._call(self.client.get_liked_songs, limit=50)
@@ -624,8 +625,7 @@ class YTMusicService:
             if not playable:
                 return [], ""
             sampled = random.sample(playable, min(3, len(playable)))
-            label = sampled[0].get("title", "Liked songs")
-            return sampled, f"Radio: {label}"
+            return sampled, "Your Liked Songs"
 
         async def _artist_mix() -> tuple[list[dict], str]:
             artists = await self._call(self.client.get_library_artists, limit=25)
@@ -643,8 +643,7 @@ class YTMusicService:
                 return [], ""
             sampled = random.sample(playable, min(3, len(playable)))
             artist_name = artist.get("artist", "Artist")
-            label = sampled[0].get("title", artist_name)
-            return sampled, f"{artist_name}: {label}"
+            return sampled, f"Artist: {artist_name}"
 
         async def _history_mix() -> tuple[list[dict], str]:
             history = await self._call(self.client.get_history)
@@ -655,17 +654,15 @@ class YTMusicService:
                 return [], ""
             recent = playable[:20]
             sampled = random.sample(recent, min(3, len(recent)))
-            label = sampled[0].get("title", "History")
-            return sampled, f"Radio: {label}"
+            return sampled, "Recently Played"
 
         _source_fns: dict[int, Any] = {
-            1: _trending_mix,
-            2: _mood_mix,
-            3: _charts_mix,
-            4: _home_mix,
-            5: _liked_songs_mix,
-            6: _artist_mix,
-            7: _history_mix,
+            1: _charts_mix,
+            2: _trending_mix,
+            3: _home_mix,
+            4: _liked_songs_mix,
+            5: _artist_mix,
+            6: _history_mix,
         }
 
         for source in sources:

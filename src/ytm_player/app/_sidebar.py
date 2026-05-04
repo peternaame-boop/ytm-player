@@ -295,7 +295,8 @@ class SidebarMixin(YTMHostBase):
         if not playlist_id or not self.ytmusic:
             return
 
-        self.notify("Starting radio...", timeout=3)
+        playlist_name = item.get("title", "playlist")
+        self.notify(f"Starting radio from {playlist_name}...", timeout=3)
         try:
             radio_tracks = normalize_tracks(await self.ytmusic.get_playlist_radio(playlist_id))
         except Exception:
@@ -306,6 +307,7 @@ class SidebarMixin(YTMHostBase):
         if radio_tracks:
             self.queue.clear()
             self.queue.set_radio_tracks(radio_tracks)
+            self.queue.radio_seeds = [{"title": f"{playlist_name} Playlist"}]
             # Shuffle lock — radio off a playlist still inherits that
             # playlist's identity, so honor its lock.
             self.queue.set_context(playlist_id)
@@ -320,6 +322,7 @@ class SidebarMixin(YTMHostBase):
             first = self.queue.next_track()
             if first:
                 await self.play_track(first)
+                self.notify(f"Playing: Radio from {playlist_name}", timeout=4)
         else:
             self.notify("No radio tracks found", severity="warning", timeout=3)
 

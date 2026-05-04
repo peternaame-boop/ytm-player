@@ -11,7 +11,7 @@ from ytm_player.app._base import YTMHostBase
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import get_video_id
+from ytm_player.utils.formatting import get_video_id, normalize_tracks
 
 logger = logging.getLogger(__name__)
 
@@ -306,18 +306,24 @@ class PlaybackMixin(YTMHostBase):
 
         if append:
             self.queue.set_radio_tracks(tracks)
+            self.queue.radio_seeds = seeds
             self._refresh_queue_page()
             return
 
         self.queue.clear()
+        normalized_seeds = normalize_tracks(seeds)
+        if normalized_seeds:
+            self.queue.add_multiple(normalized_seeds)
         self.queue.set_radio_tracks(tracks)
+        self.queue.radio_seeds = seeds
         # Track-seeded radio and discovery mix are ephemeral — clear any
         # prior context so a later shuffle toggle is not persisted to
         # the wrong key (TP-7).  Playlist-seeded radio uses its own
         # set_context() in _start_playlist_radio.
         self.queue.set_context(None)
         self._refresh_queue_page()
-        label = label or f"Radio generated from {seeds[0].get('title', 'Unknown')}"
+        if not label:
+            label = f"Radio from {seeds[0].get('title', 'Unknown')}"
         first = self.queue.next_track()
         if first:
             await self.play_track(first)
@@ -497,12 +503,14 @@ class PlaybackMixin(YTMHostBase):
         if not self.ytmusic:
             return
         self.notify("Loading discovery mix...", timeout=3)
-        seeds, label = await self.ytmusic.get_discovery_mix()
+        seeds, source = await self.ytmusic.get_discovery_mix()
         if not seeds:
             self.notify("Discovery failed — no content available", severity="warning")
             return
+        label = f"Discovery ({source})" if source else None
         await self._fetch_and_play_radio(seeds, label=label)
-        await self.navigate_to("queue")
+        if self._current_page != "queue":
+            await self.navigate_to("queue")
 
     def _on_volume_change(self, volume: int) -> None:
         """Handle volume change events."""

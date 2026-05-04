@@ -321,3 +321,133 @@ class TestToggleLikeCurrent:
         msg = host.notify.call_args.args[0]
         # The user must see *some* mention of re-running setup.
         assert "setup" in msg.lower()
+
+
+class TestFetchAndPlayRadioSeedFirst:
+    """Seeds should lead the queue when starting a radio (YTM native UX)."""
+
+    async def test_seed_tracks_prepended_to_queue(self):
+        from ytm_player.services.queue import QueueManager
+
+        host = _fresh_playback_host()
+        host.queue = QueueManager()
+        host.ytmusic = MagicMock()
+        host.ytmusic.get_radio = AsyncMock(
+            return_value=[
+                {
+                    "video_id": "r1",
+                    "title": "Radio 1",
+                    "artist": "",
+                    "artists": [],
+                    "album": "",
+                    "album_id": "",
+                    "duration": 200,
+                    "thumbnail_url": "",
+                    "is_video": False,
+                },
+                {
+                    "video_id": "r2",
+                    "title": "Radio 2",
+                    "artist": "",
+                    "artists": [],
+                    "album": "",
+                    "album_id": "",
+                    "duration": 200,
+                    "thumbnail_url": "",
+                    "is_video": False,
+                },
+            ]
+        )
+        host.play_track = AsyncMock()
+        host._refresh_queue_page = MagicMock()
+
+        seeds = [
+            {"videoId": "s1", "title": "Seed 1", "artists": [{"name": "A"}]},
+            {"videoId": "s2", "title": "Seed 2", "artists": [{"name": "B"}]},
+        ]
+        await host._fetch_and_play_radio(seeds, label="Test Radio")
+
+        tracks = host.queue.tracks
+        assert tracks[0]["video_id"] == "s1"
+        assert tracks[1]["video_id"] == "s2"
+        assert tracks[2]["video_id"] == "r1"
+        assert tracks[3]["video_id"] == "r2"
+        played = host.play_track.call_args[0][0]
+        assert played["video_id"] == "s1"
+
+    async def test_radio_tracks_matching_seeds_are_deduplicated(self):
+        from ytm_player.services.queue import QueueManager
+
+        host = _fresh_playback_host()
+        host.queue = QueueManager()
+        host.ytmusic = MagicMock()
+        host.ytmusic.get_radio = AsyncMock(
+            return_value=[
+                {
+                    "video_id": "s1",
+                    "title": "Seed 1 (dup)",
+                    "artist": "",
+                    "artists": [],
+                    "album": "",
+                    "album_id": "",
+                    "duration": 200,
+                    "thumbnail_url": "",
+                    "is_video": False,
+                },
+                {
+                    "video_id": "r1",
+                    "title": "Radio 1",
+                    "artist": "",
+                    "artists": [],
+                    "album": "",
+                    "album_id": "",
+                    "duration": 200,
+                    "thumbnail_url": "",
+                    "is_video": False,
+                },
+            ]
+        )
+        host.play_track = AsyncMock()
+        host._refresh_queue_page = MagicMock()
+
+        seeds = [{"videoId": "s1", "title": "Seed 1", "artists": [{"name": "A"}]}]
+        await host._fetch_and_play_radio(seeds, label="Test")
+
+        tracks = host.queue.tracks
+        assert len(tracks) == 2
+        assert tracks[0]["video_id"] == "s1"
+        assert tracks[1]["video_id"] == "r1"
+
+    async def test_append_mode_does_not_prepend_seeds(self):
+        from ytm_player.services.queue import QueueManager
+
+        host = _fresh_playback_host()
+        host.queue = QueueManager()
+        host.queue.add({"video_id": "existing", "title": "Existing"})
+        host.queue.next_track()
+        host.ytmusic = MagicMock()
+        host.ytmusic.get_radio = AsyncMock(
+            return_value=[
+                {
+                    "video_id": "r1",
+                    "title": "Radio 1",
+                    "artist": "",
+                    "artists": [],
+                    "album": "",
+                    "album_id": "",
+                    "duration": 200,
+                    "thumbnail_url": "",
+                    "is_video": False,
+                },
+            ]
+        )
+        host.play_track = AsyncMock()
+        host._refresh_queue_page = MagicMock()
+
+        seeds = [{"videoId": "s1", "title": "Seed 1", "artists": [{"name": "A"}]}]
+        await host._fetch_and_play_radio(seeds, append=True)
+
+        tracks = host.queue.tracks
+        assert tracks[0]["video_id"] == "existing"
+        assert tracks[1]["video_id"] == "r1"
+        host.play_track.assert_not_called()

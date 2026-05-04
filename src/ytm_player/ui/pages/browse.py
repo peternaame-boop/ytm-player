@@ -16,7 +16,12 @@ from textual.widgets import Label, ListItem, ListView, Static
 from ytm_player.config.keymap import Action
 from ytm_player.config.settings import get_settings
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import extract_artist, get_video_id, normalize_tracks, truncate
+from ytm_player.utils.formatting import (
+    extract_artist,
+    get_video_id,
+    normalize_tracks,
+    truncate,
+)
 
 if TYPE_CHECKING:
     from ytm_player.app._base import YTMHostBase
@@ -654,14 +659,7 @@ class ChartsSection(Widget):
         try:
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
-            tracks: list[dict[str, Any]] = []
-            if playlist_id.startswith("OLAK5"):
-                tracks = await ytmusic.get_watch_playlist(playlist_id=playlist_id, limit=100)
-            else:
-                playlist = await ytmusic.get_playlist(playlist_id)
-                if isinstance(playlist, dict):
-                    raw = playlist.get("tracks", []) or []
-                    tracks = raw if isinstance(raw, list) else []
+            tracks = await ytmusic.get_chart_shelf_tracks(playlist_id, limit=100)
         except Exception:
             logger.exception("Failed to load playlist for chart shelf %r", playlist_id)
             self._show_error("Failed to load chart playlist — try again later.")

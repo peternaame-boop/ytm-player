@@ -144,6 +144,14 @@ A focused fix release. The Charts page region selector was effectively non-funct
 - **TrackTable migration on Queue, Liked Songs, Recently Played.** Three pages migrated from raw `DataTable` to `TrackTable`. Gains right-click context menus, play indicators, column resize, filtering, and sorting — for free, on three pages that previously rolled those manually. Also retires the `on_mouse_down` right-click workaround we added to QueuePage in v1.9.0 (TrackTable already wires this up). Thanks @wgordon17 (#74).
 - **`[▶ Start Radio]` button** added to Liked Songs and Recently Played page headers — seeds a radio from 5 random tracks in the collection. Thanks @wgordon17 (#74).
 - **Shuffle-lock integration** on Liked Songs and Recently Played — selecting a track applies the per-collection shuffle preference. Thanks @wgordon17 (#74).
+- Discovery mix now cycles sources in fixed order (Charts → Trending → For You → Your Liked Songs → Artist → Recently Played) instead of random selection — guarantees variety across consecutive presses of `D`
+- Radio notifications now list all seed track names as a bulleted list instead of showing only the first seed or a generic label
+- Playlist radio notification now includes the playlist name (e.g. "Playing: Radio from My Playlist")
+
+**Changed**
+
+- Mood source removed from discovery mix — upstream removed Moods & Genres tab; the source was failing silently
+- `clean_shelf_title` and `get_chart_shelf_tracks` added as shared utilities for reuse in discovery mix
 
 **Fixes**
 

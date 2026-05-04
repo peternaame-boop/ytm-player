@@ -434,9 +434,10 @@ class SearchPage(Widget):
         mode_label.update(display)
 
         # Restore previous search results if navigating back.
-        if self._restore_results and any(self._restore_results.values()):
+        has_restored = bool(self._restore_results and any(self._restore_results.values()))
+        if has_restored:
             self._restoring = True
-            self._search_results = self._restore_results
+            self._search_results = self._restore_results  # type: ignore[assignment]
             self._last_query = self._restore_query or ""
             search_input = self.query_one("#search-input", Input)
             search_input.value = self._last_query
@@ -456,8 +457,7 @@ class SearchPage(Widget):
         # results from the page-state cache, leave focus on whatever the
         # user might want to interact with (results table) so navigation
         # back doesn't steal focus.
-        has_restored_query = bool(self._restore_results and any(self._restore_results.values()))
-        if not has_restored_query:
+        if not has_restored:
             try:
                 search_input = self.query_one("#search-input", Input)
                 search_input.focus()
@@ -514,14 +514,20 @@ class SearchPage(Widget):
         # types something different, those rows are stale — clear them so
         # that pressing Escape (which focuses the songs-table when it has
         # rows) doesn't strand the user on results from a previous query.
-        # Only clear when there's actually something on screen, so we don't
-        # rebuild empty panels on every keystroke.
-        if query != self._last_query and any(self._search_results.values()):
+        # Skip clearing while a search is in flight — the worker will
+        # populate fresh results when it finishes, and resetting _last_query
+        # mid-flight causes the "press Enter twice" bug.
+        if query != self._last_query and any(self._search_results.values()) and not self.is_loading:
             self._clear_stale_results()
 
         if not query:
             self._hide_suggestions()
             self._show_recent_searches()
+            return
+
+        # Don't fetch suggestions while a search is already in flight —
+        # the overlay would cover incoming results.
+        if self.is_loading:
             return
 
         # Cancel any pending debounce.
@@ -541,6 +547,11 @@ class SearchPage(Widget):
         if not query:
             return
 
+        # Cancel any pending suggestion debounce so it doesn't re-show
+        # the overlay after we hide it.
+        if self._debounce_timer is not None:
+            self._debounce_timer.stop()
+            self._debounce_timer = None
         self._hide_suggestions()
         self._last_query = query
         self.run_worker(self._execute_search(query), name="search", exclusive=True)
@@ -605,6 +616,10 @@ class SearchPage(Widget):
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
             suggestions = await ytmusic.get_search_suggestions(query)
+            # Don't show suggestions if a search was submitted while we
+            # were fetching — the overlay would cover the incoming results.
+            if self.is_loading:
+                return
             overlay = self.query_one("#suggestion-overlay", SuggestionList)
             overlay.show_suggestions(suggestions)
         except Exception:
@@ -646,6 +661,12 @@ class SearchPage(Widget):
             idx = list_view.index
             if idx is not None and 0 <= idx < len(overlay.suggestions):
                 query = overlay.suggestions[idx]
+                # Cancel pending debounce and suppress the on_input_changed
+                # that fires from setting the input value programmatically.
+                if self._debounce_timer is not None:
+                    self._debounce_timer.stop()
+                    self._debounce_timer = None
+                self._restoring = True
                 search_input = self.query_one("#search-input", Input)
                 search_input.value = query
                 self._hide_suggestions()
@@ -668,6 +689,7 @@ class SearchPage(Widget):
                 results = await self._search_all(query)
 
             self._search_results = results
+            self._last_query = query
             self._populate_results(results)
 
             # Log the search to history.
@@ -689,6 +711,7 @@ class SearchPage(Widget):
             # focus-change side effect, etc). Clear the loading indicator
             # so the UI doesn't lie about an in-flight search, then re-raise
             # so the worker tears down properly.
+            logger.debug("search: worker cancelled for query=%r", query)
             self._update_loading("")
             raise
         except Exception:

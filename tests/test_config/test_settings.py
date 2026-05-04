@@ -44,6 +44,22 @@ def test_settings_load_respects_show_selection_info_false(tmp_config_dir):
     assert s.ui.show_selection_info is False
 
 
+def test_ui_settings_show_queue_source_default():
+    """show_queue_source defaults to True."""
+    from ytm_player.config.settings import UISettings
+
+    ui = UISettings()
+    assert ui.show_queue_source is True
+
+
+def test_settings_load_respects_show_queue_source_false(tmp_config_dir):
+    """show_queue_source = false in config.toml is honoured."""
+    config_file = tmp_config_dir / "config.toml"
+    config_file.write_text("[ui]\nshow_queue_source = false\n", encoding="utf-8")
+    s = Settings.load(config_file)
+    assert s.ui.show_queue_source is False
+
+
 class TestSaveLoadRoundTrip:
     def test_round_trip(self, tmp_config_dir):
         path = tmp_config_dir / "config.toml"
