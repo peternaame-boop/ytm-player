@@ -84,6 +84,33 @@ class SidebarMixin(YTMHostBase):
         except Exception:
             logger.debug("Failed to toggle album art visibility", exc_info=True)
 
+    # ── Visualizer toggle ────────────────────────────────────────────
+
+    def _toggle_visualizer(self) -> None:
+        """Toggle the audio visualizer widget above the playback bar."""
+        try:
+            from ytm_player.ui.widgets.visualizer import Visualizer
+
+            viz = self.query_one("#visualizer", Visualizer)
+            viz.toggle()
+            state = "on" if viz.enabled else "off"
+            self.notify(f"Visualizer: {state} ({viz.mode})", timeout=2)
+        except Exception:
+            logger.debug("Failed to toggle visualizer", exc_info=True)
+
+    def _cycle_visualizer_mode(self) -> None:
+        """Cycle to the next visualizer mode (registry-backed in Phase 2)."""
+        try:
+            from ytm_player.ui.widgets.visualizer import Visualizer
+
+            viz = self.query_one("#visualizer", Visualizer)
+            # Phase 1 ships one mode; cycle is a no-op until Phase 2 lands
+            # the mode registry. Toast the current mode so the keybinding
+            # discoverably "does something" even at this stage.
+            self.notify(f"Visualizer mode: {viz.mode}", timeout=2)
+        except Exception:
+            logger.debug("Failed to cycle visualizer mode", exc_info=True)
+
     # ── Sidebar message handlers ─────────────────────────────────────
 
     def on_header_bar_toggle_playlist_sidebar(

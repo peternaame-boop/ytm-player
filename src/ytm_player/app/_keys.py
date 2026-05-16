@@ -254,6 +254,13 @@ class KeyHandlingMixin(YTMHostBase):
             case Action.LIKE_TOGGLE:
                 await self._toggle_like_current()
 
+            # -- Visualizer --
+            case Action.TOGGLE_VISUALIZER:
+                self._toggle_visualizer()
+
+            case Action.CYCLE_VISUALIZER:
+                self._cycle_visualizer_mode()
+
             # -- Navigation actions delegated to the current page --
             case (
                 Action.MOVE_DOWN

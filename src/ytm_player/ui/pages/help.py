@@ -75,6 +75,9 @@ ACTION_DESCRIPTIONS: dict[Action, str] = {
     Action.REVERSE_SORT: "Reverse sort order",
     # Search
     Action.TOGGLE_SEARCH_MODE: "Toggle search mode",
+    # Visualizer
+    Action.TOGGLE_VISUALIZER: "Toggle the audio visualizer on/off",
+    Action.CYCLE_VISUALIZER: "Cycle through visualizer modes",
 }
 
 ACTION_CATEGORIES: dict[str, list[Action]] = {
@@ -140,6 +143,10 @@ ACTION_CATEGORIES: dict[str, list[Action]] = {
     ],
     "Search": [
         Action.TOGGLE_SEARCH_MODE,
+    ],
+    "Visualizer": [
+        Action.TOGGLE_VISUALIZER,
+        Action.CYCLE_VISUALIZER,
     ],
 }
 

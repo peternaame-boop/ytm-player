@@ -92,6 +92,10 @@ class Action(str, Enum):
     # Search
     TOGGLE_SEARCH_MODE = "toggle_search_mode"
 
+    # Visualizer
+    TOGGLE_VISUALIZER = "toggle_visualizer"
+    CYCLE_VISUALIZER = "cycle_visualizer"
+
 
 class MatchResult(Enum):
     NO_MATCH = "no_match"
@@ -162,6 +166,9 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "reverse_sort": ["s r"],
     # Search
     "toggle_search_mode": ["M-v"],
+    # Visualizer
+    "toggle_visualizer": ["v"],
+    "cycle_visualizer": ["V"],
 }
 
 

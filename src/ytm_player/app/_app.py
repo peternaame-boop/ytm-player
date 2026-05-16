@@ -48,6 +48,7 @@ from ytm_player.ui.selection_info_bar import SelectionInfoBar
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
 from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
 from ytm_player.ui.theme import DEFAULT_LYRIC_CURRENT, ThemeColors, get_theme
+from ytm_player.ui.widgets.visualizer import Visualizer
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +460,7 @@ class YTMPlayerApp(
         yield HeaderBar(id="app-header")
         with Vertical(id="bottom-stack"):
             yield SelectionInfoBar(id="selection-info-bar")
+            yield Visualizer(id="visualizer")
             yield PlaybackBar(id="playback-bar")
             yield FooterBar(id="app-footer")
         with Horizontal(id="app-body"):
