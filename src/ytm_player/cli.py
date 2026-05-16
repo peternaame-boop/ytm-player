@@ -360,6 +360,91 @@ def search(query: tuple[str, ...], filter_type: str | None, limit: int, compact_
 
 
 # ---------------------------------------------------------------------------
+# Stations group (radio-browser.info — standalone; play requires TUI later)
+# ---------------------------------------------------------------------------
+
+
+def _print_stations(stations: list[Any], compact_json: bool) -> None:
+    payload = [
+        {
+            "uuid": s.uuid,
+            "name": s.name,
+            "url": s.url,
+            "country": s.country,
+            "country_code": s.country_code,
+            "language": s.language,
+            "tags": s.tags,
+            "codec": s.codec,
+            "bitrate": s.bitrate,
+            "votes": s.votes,
+        }
+        for s in stations
+    ]
+    _json_output(payload, compact=compact_json)
+
+
+@main.group(invoke_without_command=True)
+@click.pass_context
+def stations(ctx: click.Context) -> None:
+    """Browse internet radio stations (radio-browser.info)."""
+    if ctx.invoked_subcommand is None:
+        # Default: top voted.
+        from ytm_player.services.radio_browser import RadioBrowser
+
+        try:
+            result = RadioBrowser().top_voted(limit=50)
+        except Exception as exc:
+            _error(f"radio-browser request failed: {exc}")
+        compact = ctx.obj.get("compact", False)
+        _print_stations(result, compact)
+
+
+@stations.command("search")
+@click.argument("query", nargs=-1, required=True)
+@click.option("--country", default="", help="ISO country code filter (US, GB, DE, …).")
+@click.option("--tag", default="", help="Genre / tag filter (jazz, lofi, classical, …).")
+@click.option("--limit", "-l", type=int, default=50, show_default=True)
+@click.option("--json", "compact_json", is_flag=True, help="Compact JSON output.")
+def stations_search(
+    query: tuple[str, ...], country: str, tag: str, limit: int, compact_json: bool
+) -> None:
+    """Search radio-browser.info by name (and optional country / tag)."""
+    from ytm_player.services.radio_browser import RadioBrowser
+
+    name = " ".join(query)
+    try:
+        result = RadioBrowser().search(name=name, country_code=country, tag=tag, limit=limit)
+    except Exception as exc:
+        _error(f"radio-browser request failed: {exc}")
+    _print_stations(result, compact_json)
+
+
+@stations.command("top")
+@click.option("--by", type=click.Choice(["votes", "clicks"]), default="votes", show_default=True)
+@click.option("--limit", "-l", type=int, default=50, show_default=True)
+@click.option("--json", "compact_json", is_flag=True, help="Compact JSON output.")
+def stations_top(by: str, limit: int, compact_json: bool) -> None:
+    """Show top-ranked stations (--by votes or clicks)."""
+    from ytm_player.services.radio_browser import RadioBrowser
+
+    rb = RadioBrowser()
+    try:
+        result = rb.top_clicked(limit) if by == "clicks" else rb.top_voted(limit)
+    except Exception as exc:
+        _error(f"radio-browser request failed: {exc}")
+    _print_stations(result, compact_json)
+
+
+@stations.command("favorites")
+@click.option("--json", "compact_json", is_flag=True, help="Compact JSON output.")
+def stations_favorites(compact_json: bool) -> None:
+    """List locally-favorited stations."""
+    from ytm_player.services.station_favorites import StationFavorites
+
+    _print_stations(StationFavorites().list(), compact_json)
+
+
+# ---------------------------------------------------------------------------
 # Queue group (require TUI running)
 # ---------------------------------------------------------------------------
 

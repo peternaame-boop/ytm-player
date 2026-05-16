@@ -63,6 +63,7 @@ class Action(str, Enum):
     JUMP_TO_CURRENT = "jump_to_current"
     QUEUE = "queue"
     HELP = "help"
+    STATIONS = "stations"
 
     # Sidebars
     TOGGLE_SIDEBAR = "toggle_sidebar"
@@ -142,6 +143,7 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "jump_to_current": ["g c"],
     "queue": ["z"],
     "help": ["?", "C-h"],
+    "stations": ["g R"],
     # Sidebars
     "toggle_sidebar": ["C-e"],
     "toggle_transliteration": ["T"],

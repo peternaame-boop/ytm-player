@@ -29,6 +29,7 @@ PAGE_NAMES = (
     "help",
     "liked_songs",
     "recently_played",
+    "stations",
 )
 
 _MAX_NAV_STACK = 20
@@ -210,6 +211,7 @@ class NavigationMixin(YTMHostBase):
         from ytm_player.ui.pages.queue import QueuePage
         from ytm_player.ui.pages.recently_played import RecentlyPlayedPage
         from ytm_player.ui.pages.search import SearchPage
+        from ytm_player.ui.pages.stations import StationsPage
 
         page_map: dict[str, type[Widget]] = {
             "library": LibraryPage,
@@ -220,6 +222,7 @@ class NavigationMixin(YTMHostBase):
             "help": HelpPage,
             "liked_songs": LikedSongsPage,
             "recently_played": RecentlyPlayedPage,
+            "stations": StationsPage,
         }
         page_cls = page_map.get(page_name)
         if page_cls is None:

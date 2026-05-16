@@ -95,6 +95,11 @@ class PlayerEvent(StrEnum):
     ERROR = auto()
     VOLUME_CHANGE = auto()
     PAUSE_CHANGE = auto()
+    # Stream metadata changed (ICY title/name for internet radio, ID3 for
+    # local files). Payload is the raw mpv `metadata` property dict — keys
+    # are lowercased, values are strings. The most useful key for stations
+    # is `icy-title` (current song); `icy-name` is the station name.
+    METADATA_CHANGE = auto()
 
 
 # Type alias for callback functions.
@@ -210,6 +215,7 @@ class Player:
         # Register mpv property observers and event handlers.
         instance.observe_property("time-pos", self._on_time_pos_change)
         instance.observe_property("pause", self._on_pause_change)
+        instance.observe_property("metadata", self._on_metadata_change)
 
         @instance.event_callback("end-file")
         def _on_end_file(event: Any) -> None:
@@ -336,6 +342,16 @@ class Player:
     def _on_pause_change(self, _name: str, value: bool | None) -> None:
         if value is not None:
             self._dispatch(PlayerEvent.PAUSE_CHANGE, value)
+
+    def _on_metadata_change(self, _name: str, value: dict | None) -> None:
+        """Forward mpv stream metadata changes (ICY title/name, ID3, …).
+
+        For internet radio, mpv refires this every time the broadcast
+        rolls over to a new song — that's how stations update titles.
+        We pass an empty dict on clears so listeners can blank the title.
+        """
+        payload = value if isinstance(value, dict) else {}
+        self._dispatch(PlayerEvent.METADATA_CHANGE, payload)
 
     # ── Properties ──────────────────────────────────────────────────
 

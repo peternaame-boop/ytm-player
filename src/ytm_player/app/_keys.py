@@ -209,6 +209,8 @@ class KeyHandlingMixin(YTMHostBase):
                 await self.navigate_to("liked_songs")
             case Action.RECENTLY_PLAYED:
                 await self.navigate_to("recently_played")
+            case Action.STATIONS:
+                await self.navigate_to("stations")
             case Action.CURRENT_CONTEXT:
                 track = self.queue.current_track
                 if track:

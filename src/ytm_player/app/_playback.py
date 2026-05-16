@@ -230,6 +230,80 @@ class PlaybackMixin(YTMHostBase):
             )
             await self.mac_media.update_playback_status("Playing")
 
+    async def play_station(self, station: Any) -> None:
+        """Play an internet radio station (radio-browser.info entry).
+
+        Unlike play_track this bypasses StreamResolver entirely — radio
+        streams are direct HTTP URLs that mpv handles natively. The
+        station's UUID is also reported back to radio-browser as a click,
+        which feeds their community ranking. Errors there are swallowed.
+
+        ``station`` is a ``radio_browser.Station``; typed loosely so the
+        mixin doesn't drag the radio_browser import into the type stub
+        graph.
+        """
+        if not self.player:
+            self.notify(
+                "Player is still starting up. Please try again in a moment.", severity="error"
+            )
+            return
+
+        track = station.to_track_dict()
+        # Clear the queue so a station is genuinely "playing the station"
+        # rather than getting auto-advanced into a YT track when the
+        # connection blips. Stations are never enqueued.
+        self.queue.clear()
+        self.queue.set_context(None)
+        self._refresh_queue_page()
+
+        # Render station info in the playback bar immediately.
+        try:
+            bar = self.query_one("#playback-bar", PlaybackBar)
+            bar.update_track(track)
+            bar.update_playback_state(is_playing=False, is_paused=False)
+        except Exception:
+            logger.debug("Playback bar not ready during play_station", exc_info=True)
+
+        try:
+            await self.player.play(station.url, track)
+        except Exception:
+            logger.exception("Failed to play station %s", station.name)
+            self.notify(
+                f"Could not play {station.name} — stream may be offline.",
+                severity="error",
+                timeout=4,
+            )
+            return
+
+        # Fire-and-forget click log to help radio-browser rankings.
+        try:
+            from ytm_player.services.radio_browser import RadioBrowser
+
+            asyncio.get_running_loop().run_in_executor(None, RadioBrowser().log_click, station.uuid)
+        except Exception:
+            logger.debug("radio-browser click-log failed", exc_info=True)
+
+        # MPRIS / Discord / Last.fm presence — duration is unknown for
+        # live streams so we send 0, which clients treat as indefinite.
+        if self.mpris:
+            await self.mpris.update_metadata(
+                title=track.get("title") or "",
+                artist=track.get("artist") or "",
+                album="",
+                art_url=track.get("thumbnail_url") or "",
+                length_us=0,
+            )
+            await self.mpris.update_playback_status("Playing")
+        if self.discord and self.discord.is_connected:
+            await self.discord.update(
+                title=track.get("title") or "",
+                artist=track.get("artist") or "",
+                album="",
+                duration=0,
+            )
+
+        self.notify(f"Streaming: {track.get('title')}", timeout=3)
+
     async def _toggle_play_pause(self) -> None:
         """Toggle play/pause, starting playback from queue if player is idle."""
         if self.player and self.player.current_track is None and self.queue.current_track:
@@ -519,6 +593,40 @@ class PlaybackMixin(YTMHostBase):
             bar.update_volume(volume)
         except Exception:
             logger.debug("Failed to update volume display", exc_info=True)
+
+    def _on_metadata_change(self, metadata: dict) -> None:
+        """Update the playback bar title with ICY tags for live streams.
+
+        Only relevant when the current track is a station — we leave
+        YouTube Music tracks alone so a stray ID3 tag on a cached audio
+        file can't overwrite the rich title/artist we already have.
+        """
+        if not self.player or not self.player.current_track:
+            return
+        track = self.player.current_track
+        if not track.get("is_station"):
+            return
+        icy_title = ""
+        for key in ("icy-title", "title"):
+            val = metadata.get(key) if isinstance(metadata, dict) else None
+            if isinstance(val, str) and val.strip():
+                icy_title = val.strip()
+                break
+        if not icy_title:
+            return
+        # Cache on the live track dict so other consumers see the update.
+        track["icy_title"] = icy_title
+        try:
+            bar = self.query_one("#playback-bar", PlaybackBar)
+            bar.update_track(
+                {
+                    **track,
+                    "title": icy_title,
+                    "artist": track.get("title") or track.get("artist") or "Radio",
+                }
+            )
+        except Exception:
+            logger.debug("Failed to push ICY title to playback bar", exc_info=True)
 
     def _on_pause_change(self, paused: bool) -> None:
         """Handle pause/resume events."""

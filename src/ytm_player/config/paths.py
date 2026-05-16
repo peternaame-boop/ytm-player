@@ -70,6 +70,11 @@ SHUFFLE_PREFS_FILE = CONFIG_DIR / "shuffle_prefs.json"
 UPDATE_CHECK_CACHE = CONFIG_DIR / "update_check.json"
 HISTORY_DB = CONFIG_DIR / "history.db"
 
+# Internet radio stations (separate from YouTube Music's "Start Radio"
+# algorithmic radio — see CLAUDE.md "Naming convention" note for the
+# distinction).
+STATIONS_FILE = CONFIG_DIR / "stations.json"
+
 # Log files (rotated by RotatingFileHandler).
 LOG_DIR = CONFIG_DIR / "logs"
 LOG_FILE = LOG_DIR / "ytm.log"

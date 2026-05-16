@@ -602,6 +602,7 @@ class YTMPlayerApp(
         self.player.on(PlayerEvent.TRACK_CHANGE, self._on_track_change)
         self.player.on(PlayerEvent.VOLUME_CHANGE, self._on_volume_change)
         self.player.on(PlayerEvent.PAUSE_CHANGE, self._on_pause_change)
+        self.player.on(PlayerEvent.METADATA_CHANGE, self._on_metadata_change)
 
         # Poll playback position on a timer (avoids cross-thread issues).
         self._poll_timer = self.set_interval(_POSITION_POLL_INTERVAL, self._poll_position)
