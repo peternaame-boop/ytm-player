@@ -77,8 +77,12 @@ class Visualizer(Widget):
     ) -> None:
         super().__init__(name=name, id=id, classes=classes)
         settings = get_settings().visualizer
-        self.enabled = settings.enabled
-        self.mode = settings.mode
+
+        # Initialize every instance attribute BEFORE touching the reactive
+        # `enabled` / `mode` descriptors. Textual fires the matching watcher
+        # the first time a reactive is set, and the watcher reaches into
+        # _timer / _meter / _modes — so those must exist by then or the
+        # whole compose() chain crashes (Textual issues #ytm-player-cliamp).
         self._fps = max(15, min(60, settings.fps))
         self._height_rows = max(2, min(20, settings.height))
         self._frame: int = 0
@@ -88,6 +92,11 @@ class Visualizer(Widget):
         self._modes: dict[str, VisualizerMode] = dict(BUILTIN_MODES)
         self._mode_order: list[str] = list(BUILTIN_MODE_ORDER)
         self._load_plugins()
+
+        # Now safe to assign reactives — watchers can read any _*  attr.
+        self.enabled = settings.enabled
+        self.mode = settings.mode
+
         # Reserve height for layout even before first paint.
         self.styles.height = self._height_rows
         if not self.enabled:
@@ -157,6 +166,12 @@ class Visualizer(Widget):
     # ── reactives ─────────────────────────────────────────────────────
 
     def watch_enabled(self, value: bool) -> None:
+        # The reactive fires once during __init__ (before the widget is
+        # mounted). on_mount() is the place that wires the timer for the
+        # initial enabled state, so the pre-mount watcher is a no-op —
+        # otherwise set_interval() would be called outside an app context.
+        if not self.is_mounted:
+            return
         if value:
             self.remove_class("-hidden")
             self._start()
@@ -166,6 +181,8 @@ class Visualizer(Widget):
             self.refresh()
 
     def watch_mode(self, value: str) -> None:
+        if not self.is_mounted:
+            return
         if value in self._modes:
             self._init_mode(value)
         self.refresh()
