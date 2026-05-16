@@ -99,15 +99,13 @@ class SidebarMixin(YTMHostBase):
             logger.debug("Failed to toggle visualizer", exc_info=True)
 
     def _cycle_visualizer_mode(self) -> None:
-        """Cycle to the next visualizer mode (registry-backed in Phase 2)."""
+        """Cycle to the next registered visualizer mode."""
         try:
             from ytm_player.ui.widgets.visualizer import Visualizer
 
             viz = self.query_one("#visualizer", Visualizer)
-            # Phase 1 ships one mode; cycle is a no-op until Phase 2 lands
-            # the mode registry. Toast the current mode so the keybinding
-            # discoverably "does something" even at this stage.
-            self.notify(f"Visualizer mode: {viz.mode}", timeout=2)
+            new_mode = viz.cycle_mode()
+            self.notify(f"Visualizer mode: {new_mode}", timeout=2)
         except Exception:
             logger.debug("Failed to cycle visualizer mode", exc_info=True)
 
