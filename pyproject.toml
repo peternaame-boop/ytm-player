@@ -60,6 +60,11 @@ lastfm = [
 transliteration = [
     "anyascii>=0.3.0",
 ]
+viz = [
+    "soundcard>=0.4.3",
+    "numpy>=1.24",
+]
+stations = []  # radio-browser.info is plain HTTP/JSON via stdlib urllib — no extra deps
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

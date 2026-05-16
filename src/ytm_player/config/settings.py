@@ -125,6 +125,27 @@ class LoggingSettings:
     keep_crashes: int = 10  # max number of crash files to keep
 
 
+@dataclass
+class VisualizerSettings:
+    enabled: bool = False
+    mode: str = "spectrum_bars"  # spectrum_bars, mirror_bars, pixel_spectrum,
+    #                              waveform, oscilloscope, vu_meter, or a plugin name
+    bands: int = 32  # 8-128 FFT bins after log-binning
+    fps: int = 30  # 15-60 redraw rate
+    height: int = 6  # cell rows reserved between page area and playback bar
+    smoothing: float = 0.65  # 0.0 (snappy) - 0.95 (smooth); attack/release weight
+    capture_device: str = "auto"  # "auto" = default-sink monitor; or PipeWire/Pulse node name
+
+
+@dataclass
+class StationsSettings:
+    enabled: bool = True
+    server: str = "auto"  # "auto" = DNS round-robin via all.api.radio-browser.info
+    request_timeout: int = 8  # seconds per radio-browser HTTP call
+    cache_ttl_seconds: int = 3600  # in-memory list cache TTL
+    user_agent: str = ""  # blank = "ytm-player/<version>" auto-set; override if asked by the API
+
+
 SECTION_MAP: dict[str, type] = {
     "general": GeneralSettings,
     "playback": PlaybackSettings,
@@ -138,6 +159,8 @@ SECTION_MAP: dict[str, type] = {
     "discord": DiscordSettings,
     "lastfm": LastFMSettings,
     "logging": LoggingSettings,
+    "visualizer": VisualizerSettings,
+    "stations": StationsSettings,
 }
 
 
@@ -155,6 +178,8 @@ class Settings:
     discord: DiscordSettings = field(default_factory=DiscordSettings)
     lastfm: LastFMSettings = field(default_factory=LastFMSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
+    visualizer: VisualizerSettings = field(default_factory=VisualizerSettings)
+    stations: StationsSettings = field(default_factory=StationsSettings)
 
     @classmethod
     def load(cls, path: Path = CONFIG_FILE) -> Self:
