@@ -41,6 +41,8 @@ result
 
 # Temp / scratch
 *.tmp
+headers.txt
+cert_check.md
 
 # Local-only changelog HTML renderings (kept out of the repo)
 v*-changelog.html

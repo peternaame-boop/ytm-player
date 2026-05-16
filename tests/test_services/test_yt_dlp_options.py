@@ -4,6 +4,7 @@ from pathlib import Path
 from ytm_player.config.settings import YtDlpSettings
 from ytm_player.services.yt_dlp_options import (
     apply_configured_yt_dlp_options,
+    normalize_cafile,
     normalize_cookiefile,
     normalize_js_runtimes,
     normalize_remote_components,
@@ -86,3 +87,31 @@ def test_apply_configured_options_skips_unset_fields():
     settings = YtDlpSettings()
     opts = apply_configured_yt_dlp_options({"quiet": True}, settings)
     assert opts == {"quiet": True}
+
+
+def test_normalize_cafile_expands_home():
+    got = normalize_cafile("~/certs/corporate.pem")
+    assert got is not None
+    p = Path(got)
+    assert p.name == "corporate.pem"
+    assert p.is_absolute()
+
+
+def test_normalize_cafile_empty_and_none():
+    assert normalize_cafile("") is None
+    assert normalize_cafile(None) is None
+
+
+def test_apply_configured_options_sets_cafile():
+    settings = YtDlpSettings(ca_bundle="~/certs/corporate.pem")
+    opts = apply_configured_yt_dlp_options({"quiet": True}, settings)
+    # ca_bundle triggers no-certifi so yt-dlp uses system/SSL_CERT_FILE certs.
+    assert "cafile" not in opts
+    assert opts["compat_opts"] == {"no-certifi"}
+    assert opts["quiet"] is True
+
+
+def test_apply_configured_options_omits_cafile_when_unset():
+    settings = YtDlpSettings()
+    opts = apply_configured_yt_dlp_options({"quiet": True}, settings)
+    assert "cafile" not in opts
