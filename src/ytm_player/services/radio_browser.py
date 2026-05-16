@@ -196,7 +196,7 @@ class RadioBrowser:
         try:
             with urlopen(req, timeout=self._timeout) as resp:
                 payload = resp.read()
-        except (HTTPError, URLError, TimeoutError, socket.timeout) as exc:
+        except (HTTPError, URLError, TimeoutError, socket.timeout, OSError) as exc:
             raise RadioBrowserError(f"GET {path} failed: {exc}") from exc
         try:
             return json.loads(payload.decode("utf-8"))
@@ -214,7 +214,7 @@ class RadioBrowser:
         try:
             with urlopen(req, timeout=self._timeout) as resp:
                 resp.read()
-        except (HTTPError, URLError, TimeoutError, socket.timeout) as exc:
+        except (HTTPError, URLError, TimeoutError, socket.timeout, OSError) as exc:
             logger.debug("RadioBrowser POST %s failed: %s", path, exc)
 
     def _cached(self, key: str) -> Any | None:

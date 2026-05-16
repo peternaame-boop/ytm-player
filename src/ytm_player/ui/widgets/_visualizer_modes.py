@@ -420,8 +420,11 @@ class VuMeter(VisualizerMode):
         else:
             self._peak_hold *= self._peak_hold_decay
 
-        bar_cols = max(0, int(round(level * (cols - 2))))
-        peak_col = max(0, int(round(self._peak_hold * (cols - 2))))
+        # Inner column span is cols-2 cells (after the │ │ borders) — peak
+        # marker must land at most at the last inner column, not one past it.
+        inner = max(0, cols - 2)
+        bar_cols = max(0, min(inner, int(round(level * inner))))
+        peak_col = max(0, min(inner - 1, int(round(self._peak_hold * inner)))) if inner else 0
         mid_row = rows // 2
         out = Text()
         for r in range(rows):

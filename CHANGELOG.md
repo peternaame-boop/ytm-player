@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+The first user-visible borrow from a sibling TUI — both features inspired by [bjarneo/cliamp](https://github.com/bjarneo/cliamp) (MIT). No vendored code; the algorithms (FFT binning, Braille rendering, radio-browser.info usage) are general-purpose and re-implemented to fit Textual/python-mpv.
+
+**New features**
+
+- **Audio visualizer above the playback bar** — six built-in modes (`spectrum_bars`, `mirror_bars`, `pixel_spectrum`, `waveform`, `oscilloscope`, `vu_meter`) plus a Python plugin loader at `~/.config/ytm-player/visualizers/*.py`. Toggled with `v`; modes cycle with `V`. PipeWire/PulseAudio monitor capture → Hann-windowed FFT → log-binned bands at 30 FPS. Off by default; enable in `[visualizer]` or via the keybinding. New optional extra: `pip install ytm-player[viz]` (adds `soundcard` + `numpy`).
+- **Internet radio stations** — new `Stations` page (key `g R`) backed by [radio-browser.info](https://www.radio-browser.info/) (~30k community-curated stations). Four tabs: Top Voted / Most Played / Favorites / Search. Local favorites persist to `~/.config/ytm-player/stations.json`. ICY (`icy-title`) metadata flows through a new `Player.METADATA_CHANGE` event and updates the playback bar live as the station rolls between songs. New CLI subcommand `ytm stations [search QUERY | top --by votes|clicks | favorites]` for scripting. **Distinct from YT Music's "Start Radio"** — see the naming-convention note in [CLAUDE.md](CLAUDE.md).
+
+**Plumbing / contracts**
+
+- New `Settings.visualizer` and `Settings.stations` sections (TOML-backed, see [docs/configuration.md](docs/configuration.md)).
+- New mpv property observer for `metadata` exposes ICY tags via `PlayerEvent.METADATA_CHANGE`.
+- New extras: `viz` (soundcard + numpy), `stations` (stdlib-only).
+- 46 new unit tests across `test_audio_meter`, `test_radio_browser`, `test_station_favorites`, `test_visualizer_modes`.
+
 ### v1.9.1 (2026-04-30)
 
 This is the third and final wave of major updates in a rapid release cycle — quieter cadence ahead.

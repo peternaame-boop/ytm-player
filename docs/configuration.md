@@ -126,6 +126,68 @@ max_bytes = 1048576          # 1 MB per log file before rotation
 backup_count = 5             # number of rotated logs to keep
 ```
 
+### `[visualizer]`
+
+Audio visualizer that lives above the playback bar. Requires the extras:
+`pip install ytm-player[viz]` (pulls in `soundcard` + `numpy`). With the
+extras missing the widget renders blank instead of crashing.
+
+```toml
+[visualizer]
+enabled = false              # toggled at runtime with `v`
+mode = "spectrum_bars"       # spectrum_bars | mirror_bars | pixel_spectrum
+                             # | waveform | oscilloscope | vu_meter
+                             # | <name of a custom plugin>
+bands = 32                   # 8-128 log-binned FFT bins
+fps = 30                     # 15-60 redraw rate
+height = 6                   # cell rows reserved between page and playback bar
+smoothing = 0.65             # 0.0 (snappy) - 0.95 (smooth); release side only
+capture_device = "auto"      # "auto" = default-sink monitor;
+                             # or PipeWire/Pulse node name to pin a specific source
+```
+
+Drop a Python file under `~/.config/ytm-player/visualizers/` to register
+a custom mode — it joins the `V` cycle alongside the built-ins. Minimal
+example:
+
+```python
+# ~/.config/ytm-player/visualizers/heartbeat.py
+from rich.text import Text
+from ytm_player.ui.widgets._visualizer_modes import VisualizerMode, FrameContext
+
+class Heartbeat(VisualizerMode):
+    name = "heartbeat"
+    def render(self, ctx: FrameContext) -> Text:
+        beat = "♥" if ctx.rms > 0.3 else " "
+        return Text("\n".join(beat.center(ctx.cols) for _ in range(ctx.rows)))
+```
+
+> **Audio capture trade-off**: `auto` taps the system's default-sink
+> monitor, so notifications and other apps mix into the visualizer. For
+> mpv-only isolation, load a PipeWire `module-combine-sink` and point
+> `capture_device` at its monitor.
+
+### `[stations]`
+
+Internet-radio station catalogue powered by radio-browser.info. This is
+intentionally distinct from YouTube Music's algorithmic "Start Radio"
+feature; the latter remains accessible via the track-actions menu and
+the existing `[▶ Start Radio]` buttons.
+
+```toml
+[stations]
+enabled = true
+server = "auto"              # "auto" = DNS round-robin via all.api.radio-browser.info
+                             # override with a specific host like "https://de1.api.radio-browser.info"
+request_timeout = 8          # seconds per API call
+cache_ttl_seconds = 3600     # in-memory listing cache TTL
+user_agent = ""              # blank → auto-set to "ytm-player/<version>"
+```
+
+The Stations page (key `g R`) shows four tabs: Top Voted / Most Played /
+Favorites / Search. Favorites persist to `~/.config/ytm-player/stations.json`.
+Press `f` (or `l`) on a row to toggle favorite; `enter` plays.
+
 ## `theme.toml`
 
 Base colors (primary, background, etc.) come from the active Textual theme — switch themes with `Ctrl+P`. The `theme.toml` file overrides app-specific colors only:

@@ -58,6 +58,15 @@ System dependency: `mpv` must be installed (`sudo pacman -S mpv` on Arch).
 - **Python 3.10 compatibility shims:** Three stdlib symbols added in 3.11+ are backported via `sys.version_info >= (3, 11)` checks (which Pyright narrows correctly): `tomllib` (in `config/keymap.py`, `config/settings.py`, `ui/theme.py`, `app/_app.py`, `tests/test_config/test_settings.py`) falls back to `tomli`; `typing.Self` (in the first three of those files) falls back to `typing_extensions.Self`; `enum.StrEnum` (in `services/queue.py`, `services/player.py`) falls back to a small `(str, Enum)` polyfill mirroring stdlib's `auto()` lowercase-name behaviour. `tomli` and `typing_extensions` are conditional dependencies (`python_version < "3.11"`) so 3.11+ users don't pull them.
 - **LC_NUMERIC quirk:** `cli.py` forces `LC_NUMERIC=C` at import time — mpv segfaults without it. Don't remove this.
 
+## Naming convention: YouTube-Music *radio* vs. internet *stations*
+
+Two unrelated features share an English word — keep them lexically separate so they don't bleed into each other:
+
+- **YT Music "radio"** = algorithmic recommendations seeded from a track / playlist / artist (YouTube's own feature). Lives in `app/_track_actions.py:_fetch_and_play_radio`, `services/ytmusic.get_radio`, `_start_playlist_radio`, and the `[▶ Start Radio]` buttons on Liked Songs / Recently Played. Action enum: `start_radio` (not in keymap — invoked from the actions popup).
+- **Internet broadcasting "stations"** = radio-browser.info catalogue of live ICY/Shoutcast streams. Lives in `services/radio_browser.py`, `services/station_favorites.py`, `ui/pages/stations.py`, `app/_playback.play_station()`. Action enum: `STATIONS` (key `g R`). Track dicts have `is_station: True` and `video_id="station:<uuid>"`.
+
+When adding code: use *radio* only when discussing the YT algorithmic feature; use *stations* (or *broadcast stations*) for the radio-browser feature. Naming both "radio" is the documented anti-pattern.
+
 ## Pre-commit Checklist
 
 **MANDATORY before every commit — run BOTH:**

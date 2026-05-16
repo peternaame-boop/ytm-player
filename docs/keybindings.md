@@ -16,7 +16,10 @@
 | `g b` | Go to Browse |
 | `g y` | Go to Liked Songs |
 | `g r` | Go to Recently Played |
+| `g R` | Go to Stations (internet radio — distinct from YT Music's "Start Radio") |
 | `z` | Go to Queue |
+| `v` | Toggle audio visualizer above the playback bar |
+| `V` | Cycle visualizer mode (spectrum_bars → mirror_bars → pixel_spectrum → waveform → oscilloscope → vu_meter → plugins…) |
 | `g L` | Toggle lyrics sidebar |
 | `Ctrl+e` | Toggle playlist sidebar |
 | `Ctrl+a` | Toggle album art in playback bar |

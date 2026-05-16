@@ -23,8 +23,11 @@ src/ytm_player/
 ├── services/           # Backend services
 │   ├── auth.py         #   Browser cookie auth (multi-account aware)
 │   ├── ytmusic.py      #   YouTube Music API wrapper
-│   ├── player.py       #   mpv audio playback
+│   ├── player.py       #   mpv audio playback (ICY metadata observer for stations)
 │   ├── stream.py       #   yt-dlp stream URL resolution
+│   ├── audio_meter.py  #   Visualizer audio capture + FFT (PipeWire monitor; opt-in [viz])
+│   ├── radio_browser.py     # radio-browser.info HTTP client for the Stations page
+│   ├── station_favorites.py # Local favorites list for internet radio stations
 │   ├── queue.py        #   Playback queue with shuffle/repeat
 │   ├── history.py      #   SQLite play/search history
 │   ├── cache.py        #   LRU audio file cache
@@ -43,11 +46,13 @@ src/ytm_player/
 │   ├── playback_bar.py # Persistent bottom bar (track info, progress, controls, heart)
 │   ├── theme.py        # Textual theme integration + app-specific color overrides
 │   ├── sidebars/       # Persistent playlist sidebar (left) and lyrics sidebar (right)
-│   ├── pages/          # Library, Search, Browse, Context, Queue, Liked Songs, Recently Played, Help
+│   ├── pages/          # Library, Search, Browse, Context, Queue, Liked Songs, Recently Played, Stations, Help
 │                       #   Queue/Liked/Recent share the project's TrackTable widget
 │                       #   (right-click context menu, filter, sort, play indicator)
+│                       #   Stations uses DataTable (no YT-specific columns)
 │   ├── popups/         # Actions menu, playlist picker, Spotify import, country picker (charts region — 68 entries with Global default)
-│   └── widgets/        # TrackTable, PlaybackProgress, AlbumArt
+│   └── widgets/        # TrackTable, PlaybackProgress, AlbumArt, Visualizer (cliamp-style audio viz; opt-in [viz])
+│                       #   visualizer modes live in _visualizer_modes.py; user plugins discovered via _visualizer_plugins.py
 └── utils/              # Terminal detection, formatting, BiDi text, transliteration
 ```
 

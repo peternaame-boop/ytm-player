@@ -24,6 +24,8 @@ A full-featured YouTube Music player for the terminal. Browse your library, sear
 - **Session resume** — last-playing track + queue restored on launch
 - **Local cache** — LRU audio cache for offline-like replay of previously heard tracks
 - **Discord + Last.fm** — Rich Presence and scrobbling
+- **Audio visualizer** — six built-in modes (spectrum bars, mirrored, pixel-gradient, waveform, oscilloscope, VU meter) with a Python plugin loader; toggle with `v`, cycle with `V`. Opt-in via `pip install ytm-player[viz]`
+- **Internet radio stations** — `g R` opens the radio-browser.info catalogue (~30k stations) with Top Voted / Most Played / Favorites / Search tabs. ICY metadata updates the playback bar live
 
 ## Requirements
 

@@ -30,7 +30,7 @@ class StationFavorites:
 
     _instance: StationFavorites | None = None
 
-    def __new__(cls) -> StationFavorites:
+    def __new__(cls, *_args, **_kwargs) -> StationFavorites:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
