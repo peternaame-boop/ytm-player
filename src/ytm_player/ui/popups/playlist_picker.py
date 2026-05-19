@@ -14,6 +14,7 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerState
 
 from ytm_player.config.paths import RECENT_PLAYLISTS_FILE
+from ytm_player.ui.popups.confirm_popup import ConfirmPopup
 from ytm_player.ui.popups.create_playlist_popup import CreatePlaylistPopup
 
 if TYPE_CHECKING:
@@ -334,14 +335,14 @@ class PlaylistPicker(ModalScreen[str | None]):
             self.notify("Failed to create playlist", severity="error")
             status.update("Error")
 
-    def _add_to_playlist(self, playlist_id: str, title: str) -> None:
+    def _add_to_playlist(self, playlist_id: str, title: str, duplicates: bool = False) -> None:
         """Add tracks to an existing playlist."""
         self.run_worker(
-            self._do_add(playlist_id, title),
+            self._do_add(playlist_id, title, duplicates=duplicates),
             name="add_to_playlist",
         )
 
-    async def _do_add(self, playlist_id: str, title: str) -> None:
+    async def _do_add(self, playlist_id: str, title: str, duplicates: bool = False) -> None:
         status = self.query_one("#picker-status", Static)
         status.update(f"Adding to '{title}'...")
 
@@ -350,7 +351,28 @@ class PlaylistPicker(ModalScreen[str | None]):
 
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
-            result = await ytmusic.add_playlist_items(playlist_id, self.video_ids)
+            result = await ytmusic.add_playlist_items(
+                playlist_id, self.video_ids, duplicates=duplicates
+            )
+            if result == "duplicate":
+                status.update("Already in playlist")
+                track_word = "track is" if len(self.video_ids) == 1 else "tracks are"
+
+                def _on_duplicate_confirm(confirmed: bool | None) -> None:
+                    if confirmed:
+                        self._add_to_playlist(playlist_id, title, duplicates=True)
+                    else:
+                        self.dismiss(None)
+
+                self.app.push_screen(
+                    ConfirmPopup(
+                        f"This {track_word} already in '{title}'.\nAdd anyway?",
+                        confirm_label="Add anyway",
+                        cancel_label="Cancel",
+                    ),
+                    _on_duplicate_confirm,
+                )
+                return
             if result != "success":
                 self.notify(
                     f"Couldn't add to '{title}' — {mutation_failure_suffix(result)}",

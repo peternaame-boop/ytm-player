@@ -223,7 +223,7 @@ class TrackActionsMixin(YTMHostBase):
         try:
             library = self.query_one(LibraryPage)
             table = library.query_one("#library-tracks", TrackTable)
-            removed = table.remove_track(video_id)
+            removed = table.remove_track(video_id, set_video_id=set_video_id)
             if removed:
                 library.update_track_count()
             # Update sidebar count.

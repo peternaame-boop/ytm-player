@@ -58,12 +58,14 @@ _EXPECTED_MUTATION_EXCEPTIONS = (
 # - "auth_expired":  HTTP 401/403 from the server (cookies/session stale)
 # - "network":       requests.RequestException or asyncio.TimeoutError
 # - "server_error":  any other YTMusicServerError (4xx/5xx other than auth)
+# - "duplicate":     track already exists in the playlist (add_playlist_items only)
 MutationResult = Literal[
     "success",
     "auth_required",
     "auth_expired",
     "network",
     "server_error",
+    "duplicate",
 ]
 
 # ytmusicapi formats _send_request errors as:
@@ -114,6 +116,7 @@ _MUTATION_TOAST_SUFFIX: dict[MutationResult, str] = {
     "auth_expired": "session expired, run `ytm setup` to sign in again",
     "network": "check your connection",
     "server_error": "YouTube Music had a problem, try again",
+    "duplicate": "track already in playlist",
 }
 
 
@@ -717,16 +720,36 @@ class YTMusicService:
             logger.exception("rate_song failed for %r rating=%r (kind=%s)", video_id, rating, kind)
             return kind
 
-    async def add_playlist_items(self, playlist_id: str, video_ids: list[str]) -> MutationResult:
+    async def add_playlist_items(
+        self, playlist_id: str, video_ids: list[str], duplicates: bool = False
+    ) -> MutationResult:
         """Add songs to an existing playlist.
 
+        Args:
+            duplicates: When ``True`` the tracks are added even if they already
+                exist in the playlist (mirrors the ytmusicapi ``duplicates``
+                flag).  When ``False`` (default) the server rejects the request
+                and this method returns ``"duplicate"``.
+
         Returns:
-            ``"success"`` if the server accepted the add, otherwise one of
-            ``"auth_required"``, ``"auth_expired"``, ``"network"``,
-            ``"server_error"``. Unexpected exceptions propagate.
+            ``"success"`` if the server accepted the add, ``"duplicate"`` if
+            one or more tracks already exist and *duplicates* is ``False``,
+            or one of ``"auth_required"``, ``"auth_expired"``, ``"network"``,
+            ``"server_error"`` on failure.
         """
         try:
-            await self._call(self.client.add_playlist_items, playlist_id, video_ids)
+            result = await self._call(
+                self.client.add_playlist_items,
+                playlist_id,
+                video_ids,
+                duplicates=duplicates,
+            )
+            # ytmusicapi returns a dict with "status": "STATUS_SUCCEEDED" on
+            # success.  When a duplicate is detected (and duplicates=False) the
+            # server returns an error dict without raising an exception.
+            if isinstance(result, dict) and "SUCCEEDED" not in result.get("status", ""):
+                logger.debug("add_playlist_items duplicate detected for playlist=%r", playlist_id)
+                return "duplicate"
             return "success"
         except _EXPECTED_MUTATION_EXCEPTIONS as exc:
             kind = _classify_mutation_failure(exc)

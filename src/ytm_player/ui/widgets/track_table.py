@@ -230,14 +230,25 @@ class TrackTable(DataTable):
         self._fill_title_column()
         self._invalidate_table()
 
-    def remove_track(self, video_id: str) -> bool:
-        """Remove the track with *video_id* from the table.
+    def remove_track(self, video_id: str, set_video_id: str = "") -> bool:
+        """Remove a track from the table.
+
+        When *set_video_id* is provided it is used as the primary key so that
+        duplicate tracks (same ``video_id``, different ``setVideoId``) are
+        removed correctly.  Falls back to matching by ``video_id`` alone when
+        *set_video_id* is empty.
 
         Returns ``True`` if the track was found and removed.
         """
+
+        def _matches(t: dict) -> bool:
+            if set_video_id:
+                return t.get("setVideoId") == set_video_id
+            return t.get("video_id") == video_id
+
         # Find in visible tracks first (handles filtered view).
         for visible_idx, track in enumerate(self._tracks):
-            if track.get("video_id") == video_id:
+            if _matches(track):
                 # Remove from DataTable.
                 row_key = self._row_keys[visible_idx]
                 try:
@@ -251,13 +262,25 @@ class TrackTable(DataTable):
 
                 # Remove from all tracks.
                 for all_idx, t in enumerate(self._all_tracks):
-                    if t.get("video_id") == video_id:
+                    if _matches(t):
                         self._all_tracks.pop(all_idx)
                         # Rebuild filtered map from scratch — simplest correct approach.
                         self._filtered_map = [
                             i for i, trk in enumerate(self._all_tracks) if trk in self._tracks
                         ]
                         break
+
+                # Re-number all remaining tracks so the # column stays
+                # contiguous after the removal.
+                for new_idx, t in enumerate(self._all_tracks):
+                    t["_original_index"] = new_idx
+
+                # Refresh the # cell for every visible row that shifted.
+                for vis_idx, (rk, t) in enumerate(zip(self._row_keys, self._tracks)):
+                    try:
+                        self.update_cell(rk, "index", str(t["_original_index"] + 1))
+                    except Exception:
+                        pass
 
                 self._fill_title_column()
                 self._invalidate_table()
