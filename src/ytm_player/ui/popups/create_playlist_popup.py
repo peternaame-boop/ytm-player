@@ -32,6 +32,7 @@ class CreatePlaylistPopup(ModalScreen[tuple[str, str, str] | None]):
     DEFAULT_CSS = """
     CreatePlaylistPopup {
         align: center middle;
+        height: 100%;
     }
 
     CreatePlaylistPopup > Vertical {

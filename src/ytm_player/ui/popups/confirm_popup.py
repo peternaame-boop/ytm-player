@@ -24,6 +24,7 @@ class ConfirmPopup(ModalScreen[bool]):
     DEFAULT_CSS = """
     ConfirmPopup {
         align: center middle;
+        height: 100%;
     }
 
     ConfirmPopup > Vertical {
@@ -51,6 +52,7 @@ class ConfirmPopup(ModalScreen[bool]):
         width: 1fr;
         margin: 0 1;
     }
+
     """
 
     def __init__(
@@ -68,8 +70,8 @@ class ConfirmPopup(ModalScreen[bool]):
         with Vertical():
             yield Static(self._message, id="confirm-message")
             with Horizontal():
-                yield Button(self._confirm_label, variant="error", id="confirm-yes")
                 yield Button(self._cancel_label, variant="default", id="confirm-no")
+                yield Button(self._confirm_label, variant="primary", id="confirm-yes")
 
     def on_mount(self) -> None:
         self.query_one("#confirm-no", Button).focus()
