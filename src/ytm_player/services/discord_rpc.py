@@ -66,6 +66,7 @@ class DiscordRPC:
         album: str = "",
         duration: int = 0,
         position: float = 0,
+        thumbnail_url: str = "",
     ) -> None:
         """Update the Discord presence with current track info."""
         if not self._connected or not self._rpc:
@@ -73,16 +74,20 @@ class DiscordRPC:
 
         self._start_time = time.time() - position
 
-        details = title[:128] if title else "Unknown Track"
-        state = artist[:128] if artist else "Unknown Artist"
+        try:
+            from pypresence import ActivityType  # type: ignore[attr-defined]
+
+            activity_type = ActivityType.LISTENING
+        except (ImportError, AttributeError):
+            activity_type = None
 
         kwargs: dict = {
-            "details": details,
-            "state": state,
-            "large_image": "ytm_icon",
-            "large_text": album[:128] if album else "YouTube Music",
-            "small_image": "play",
-            "small_text": "Playing",
+            "activity_type": activity_type,
+            "details": (title or "Unknown Track")[:128],
+            "state": (artist or "Unknown Artist")[:128],
+            "large_image": thumbnail_url or "ytm_icon",
+            "large_text": (album or "YouTube Music")[:128],
+            "start": int(self._start_time),
         }
 
         if duration > 0:
