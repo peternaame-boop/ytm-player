@@ -196,6 +196,7 @@ class PlaybackMixin(YTMHostBase):
                 artist=track.get("artist") or "",
                 album=track.get("album") or "",
                 duration=stream_info.duration,
+                thumbnail_url=track.get("thumbnail_url") or "",
             )
 
         # Send Last.fm "Now Playing".
@@ -564,6 +565,7 @@ class PlaybackMixin(YTMHostBase):
                                 artist=track.get("artist", ""),
                                 album=track.get("album", ""),
                                 position=p.position,
+                                thumbnail_url=track.get("thumbnail_url") or "",
                             )
                         )
                     )
