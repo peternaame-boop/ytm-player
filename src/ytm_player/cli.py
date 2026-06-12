@@ -19,7 +19,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import click
 import requests.exceptions
@@ -353,7 +353,8 @@ def search(query: tuple[str, ...], filter_type: str | None, limit: int, compact_
     auth = AuthManager(cookies_file=settings.yt_dlp.cookies_file)
     try:
         ytm = auth.create_ytmusic_client(user=settings.general.brand_account_id or None)
-        results = ytm.search(search_query, filter=filter_type, limit=limit)
+        # click.Choice guarantees one of ytmusicapi's accepted filter literals
+        results = ytm.search(search_query, filter=cast("Any", filter_type), limit=limit)
     except Exception as exc:
         _error(f"Search failed: {exc}")
 

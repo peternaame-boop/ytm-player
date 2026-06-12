@@ -84,6 +84,7 @@
             aiosqlite
             click
             pillow         # album art (moved from optional to core in v1.3.1)
+            packaging
           ];
 
           optional-dependencies = with python.pkgs; {
@@ -119,6 +120,7 @@
           pythonImportsCheck = [
             "ytm_player"
             "ytm_player.cli"
+            "ytm_player.services.update_check"
           ];
 
           meta = {
