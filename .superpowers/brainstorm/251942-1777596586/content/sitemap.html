@@ -1,0 +1,60 @@
+<h2>Section 1 of 7 — Site map</h2>
+<p class="subtitle">Concrete URLs that will exist after option 2 (hybrid) lands. Total: ~45 routes, all static, all indexable.</p>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1.5rem;font-family:'JetBrains Mono',monospace;font-size:0.85rem;line-height:1.85;color:#e0e0e0">
+  <div style="color:#ff4e45;margin-bottom:0.85rem;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em">root</div>
+  <div>/ <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem;margin-left:1rem">— landing + tabbed docs (your single-page UX, all content in DOM)</span></div>
+
+  <div style="color:#ff4e45;margin:1.25rem 0 0.5rem;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em">install — 7 routes</div>
+  <div>/install/                <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— index w/ all platforms</span></div>
+  <div>/install/pip             <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— PyPI (default)</span></div>
+  <div>/install/arch            <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— AUR via yay</span></div>
+  <div>/install/macos           <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— Homebrew</span></div>
+  <div>/install/windows         <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— Scoop + libmpv DLL</span></div>
+  <div>/install/nixos           <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— flake input</span></div>
+  <div>/install/gentoo          <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— GURU overlay</span></div>
+
+  <div style="color:#ff4e45;margin:1.25rem 0 0.5rem;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em">docs — 7 routes</div>
+  <div>/docs/configure          <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— config.toml + theme.toml ref</span></div>
+  <div>/docs/keys               <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— full keybindings tables</span></div>
+  <div>/docs/cli                <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— full subcommand ref</span></div>
+  <div>/docs/spotify-import     <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— complete how-to</span></div>
+  <div>/docs/troubleshoot       <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— mpv/auth/MPRIS/etc.</span></div>
+  <div>/docs/architecture       <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— for contributors</span></div>
+  <div>/docs/contributing       <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— PR + dev setup</span></div>
+
+  <div style="color:#ff4e45;margin:1.25rem 0 0.5rem;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em">changelog — 1 + ~30 routes</div>
+  <div>/changelog/              <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— index, latest 5 expanded, rest collapsed</span></div>
+  <div>/changelog/v1.9.2        <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— per-version page (long-tail SEO)</span></div>
+  <div>/changelog/v1.9.1        <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— …generated for every existing tag</span></div>
+  <div style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem;margin-left:0.5rem">… (~30 entries, auto-generated from CHANGELOG.md sections)</div>
+
+  <div style="color:#ff4e45;margin:1.25rem 0 0.5rem;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em">comparisons — 4 routes</div>
+  <div>/vs/spotify-tui          <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— feature table + verdict</span></div>
+  <div>/vs/cmus                 <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— same</span></div>
+  <div>/vs/ncmpcpp              <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— same</span></div>
+  <div>/vs/youtube-music-desktop <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— same</span></div>
+
+  <div style="color:#ff4e45;margin:1.25rem 0 0.5rem;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.08em">utility</div>
+  <div>/sitemap.xml             <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— auto-generated</span></div>
+  <div>/robots.txt              <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— allow all, point at sitemap</span></div>
+  <div>/og-default.png          <span style="color:#666;font-family:Inter,sans-serif;font-size:0.82rem">— synced lyrics screenshot (per marketing agent)</span></div>
+</div>
+
+<div class="section" style="margin-top:1.5rem;padding:1rem 1.25rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.88rem;line-height:1.55">
+  <strong style="color:#ff4e45">Key invariants:</strong><br>
+  <span style="color:#aaa">• Every <code style="color:#ff4e45;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">/install/*</code> and <code style="color:#ff4e45;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">/docs/*</code> route is generated from the SAME markdown source as the tabbed content on /. One source, two presentations.</span><br>
+  <span style="color:#aaa">• <code style="color:#ff4e45;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">/changelog/v*</code> pages are auto-generated from <code style="color:#ff4e45;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">CHANGELOG.md</code> sections — no manual upkeep when you ship a new release.</span><br>
+  <span style="color:#aaa">• Comparison pages (<code style="color:#ff4e45;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">/vs/*</code>) are the only routes with hand-written content unique to this site. Everything else mirrors the public repo.</span>
+</div>
+
+<div class="options" style="margin-top:1.5rem">
+  <div class="option" data-choice="ok" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>Looks right</h3><p>Move on to section 2 (page composition)</p></div>
+  </div>
+  <div class="option" data-choice="changes" onclick="toggleSelect(this)">
+    <div class="letter">✎</div>
+    <div class="content"><h3>Changes</h3><p>Tell me what to add / drop / rename</p></div>
+  </div>
+</div>

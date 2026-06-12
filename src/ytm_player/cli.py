@@ -111,6 +111,17 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
     ctx.ensure_object(dict)
     ctx.obj["compact"] = compact_json
 
+    # Apply corporate CA bundle if configured (e.g. Zscaler SSL inspection).
+    # SSL_CERT_FILE is read by Python's ssl module (used by yt-dlp);
+    # REQUESTS_CA_BUNDLE is read by the requests library (used by ytmusicapi).
+    # Use setdefault so user-supplied env vars take precedence.
+    from ytm_player.services.yt_dlp_options import normalize_cafile
+
+    _ca = normalize_cafile(settings.yt_dlp.ca_bundle)
+    if _ca:
+        os.environ.setdefault("SSL_CERT_FILE", _ca)
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", _ca)
+
     if debug and ctx.invoked_subcommand is not None:
         # Subcommands don't get file logging (multi-process safety),
         # but with --debug we still want to see something. Stderr is OK

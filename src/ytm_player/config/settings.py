@@ -47,6 +47,7 @@ class PlaybackSettings:
 @dataclass
 class YtDlpSettings:
     cookies_file: str = ""
+    ca_bundle: str = ""
     remote_components: str | list[str] = ""
     js_runtimes: str | list[str] = ""
 

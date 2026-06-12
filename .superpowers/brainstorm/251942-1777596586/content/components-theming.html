@@ -1,0 +1,106 @@
+<h2>Section 5 of 7 — Components + theming + design system</h2>
+<p class="subtitle">Tokens, typography, what gets built, what hydrates.</p>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem">
+  <div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">design tokens (CSS vars in :root)</div>
+    <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;line-height:1.75;color:#aaa">
+      <div><span style="color:#ff4e45">--bg</span>:        #0f0f0f</div>
+      <div><span style="color:#ff4e45">--surface</span>:   #1a1a1a</div>
+      <div><span style="color:#ff4e45">--surface-2</span>: #222</div>
+      <div><span style="color:#ff4e45">--border</span>:    #2a2a2a</div>
+      <div><span style="color:#ff4e45">--fg</span>:        #ffffff</div>
+      <div><span style="color:#ff4e45">--muted</span>:     #aaaaaa</div>
+      <div><span style="color:#ff4e45">--dim</span>:       #666666</div>
+      <div><span style="color:#ff4e45">--primary</span>:   #ff0000</div>
+      <div><span style="color:#ff4e45">--accent</span>:    #ff4e45</div>
+      <div><span style="color:#ff4e45">--success</span>:   #2ecc71</div>
+      <div><span style="color:#ff4e45">--warning</span>:   #f39c12</div>
+    </div>
+    <div style="margin-top:0.85rem;padding-top:0.85rem;border-top:1px solid #2a2a2a;color:#666;font-size:0.78rem;line-height:1.55">
+      Mirrors <code style="color:#ff4e45">src/ytm_player/ui/theme.py</code> defaults — intentional. Anyone running ytm-player sees the same red/coral on the website.
+    </div>
+  </div>
+
+  <div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">typography</div>
+    <div style="font-size:0.85rem;color:#aaa;line-height:1.55">
+      <strong style="color:#fff">Body / headings:</strong> Inter (variable, 400-700), tracking -0.02em on headings ≥1.5rem<br>
+      <strong style="color:#fff">Mono:</strong> JetBrains Mono (or Geist Mono — both free)<br>
+      <strong style="color:#fff">Mono usage rule:</strong> code, terminal blocks, kbd chips, version numbers, URLs/paths, ASCII section dividers<br>
+      <strong style="color:#fff">No third face.</strong>
+    </div>
+    <div style="margin-top:0.85rem;padding-top:0.85rem;border-top:1px solid #2a2a2a">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#666;margin-bottom:0.4rem">size scale (rem)</div>
+      <div style="font-size:0.78rem;color:#aaa;line-height:1.6;font-family:'JetBrains Mono',monospace">
+        body 1.0 · small 0.85 · h3 1.1 · h2 1.6 · h1 clamp(2.5, 6vw, 4)
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.5rem">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">component inventory</div>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;font-size:0.82rem;color:#aaa;line-height:1.55">
+    <div>
+      <strong style="color:#fff">Layouts</strong>
+      <ul style="margin:0.4rem 0 0 1rem;padding:0;font-family:'JetBrains Mono',monospace;font-size:0.78rem">
+        <li>BaseLayout</li>
+        <li>HomeLayout</li>
+        <li>DocsLayout</li>
+        <li>ChangelogLayout</li>
+        <li>InstallLayout</li>
+        <li>ComparisonLayout</li>
+        <li>LegalLayout</li>
+      </ul>
+    </div>
+    <div>
+      <strong style="color:#fff">Static (Astro)</strong>
+      <ul style="margin:0.4rem 0 0 1rem;padding:0;font-family:'JetBrains Mono',monospace;font-size:0.78rem">
+        <li>Topbar</li>
+        <li>Footer</li>
+        <li>Hero</li>
+        <li>TerminalChrome</li>
+        <li>InstallCommand</li>
+        <li>OSTabs (server-rendered)</li>
+        <li>FeatureStrip</li>
+        <li>Breadcrumbs</li>
+        <li>PrevNextNav</li>
+        <li>Kbd, Badge, Button</li>
+        <li>FormatNote (callout)</li>
+        <li>AuthorBio</li>
+      </ul>
+    </div>
+    <div>
+      <strong style="color:#fff">Islands (hydrated)</strong>
+      <ul style="margin:0.4rem 0 0 1rem;padding:0;font-family:'JetBrains Mono',monospace;font-size:0.78rem">
+        <li>SearchModal <span style="color:#ff4e45">client:idle</span></li>
+        <li>OSTabSelector <span style="color:#ff4e45">client:load</span></li>
+        <li>CopyButton <span style="color:#ff4e45">client:visible</span></li>
+        <li>KeyFilter <span style="color:#ff4e45">client:visible</span></li>
+        <li>ThemePlayground <span style="color:#ff4e45">client:visible</span></li>
+        <li>ChangelogAccordion <span style="color:#ff4e45">client:visible</span></li>
+        <li>ScrollProgress <span style="color:#ff4e45">client:idle</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div style="margin-top:1rem;padding-top:0.85rem;border-top:1px solid #2a2a2a;color:#666;font-size:0.78rem;line-height:1.55">
+    Islands use <strong style="color:#fff">Preact</strong>, not React — saves ~30KB gzipped. None of these need React-specific libs.
+  </div>
+</div>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.5rem">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">where the theme switcher lives — REVISED</div>
+  <div style="font-size:0.85rem;color:#aaa;line-height:1.6">
+    <strong style="color:#fff">Killed</strong> as a site-wide chrome dropdown (designer agent's call — reads gimmicky, dilutes brand, every theme looks half-baked because none gets the real polish pass).<br><br>
+    <strong style="color:#fff">Reframed</strong> as the demo of the theming feature itself. The switcher lives ONLY inside the theme.toml playground in the Configure tab / <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px">/docs/configure</code> page. Switching a preset re-skins the mock track row (already in the prototype) AND a small "site preview strip" showing what the rest of the site would look like in that theme.<br><br>
+    <strong style="color:#fff">Site itself stays locked</strong> to the ytm coral palette. That's your brand. Charm.sh is always Charm-pink. Be Charm.
+  </div>
+</div>
+
+<div class="section" style="padding:1rem 1.25rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.88rem;line-height:1.55">
+  <strong style="color:#ff4e45">TUI flourishes worth keeping (per designer agent):</strong>
+  <span style="color:#aaa"> kbd chips as styled <code style="background:#1a1a1a;padding:0.05rem 0.3rem;color:#ff4e45;border-radius:3px">&lt;kbd&gt;</code> not images, blinking block cursor in hero only (never repeated elsewhere — becomes noise), ASCII section dividers <code style="background:#1a1a1a;padding:0.05rem 0.3rem;color:#ff4e45;border-radius:3px">── 03 ── KEYBINDINGS ──────────</code>, status-bar footer pinned to viewport bottom showing <code style="background:#1a1a1a;padding:0.05rem 0.3rem;color:#ff4e45;border-radius:3px">NORMAL  ytm-player v1.9.2  ●  17 sections</code>. <strong style="color:#fff">Skipped:</strong> CRT curvature, scanlines, phosphor glow, matrix rain, glitch effects, fake CLI prompts wrapping marketing copy.</span>
+</div>

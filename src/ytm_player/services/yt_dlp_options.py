@@ -87,11 +87,35 @@ def normalize_js_runtimes(
     return result or None
 
 
+def normalize_cafile(value: str | os.PathLike[str] | None) -> str | None:
+    """Return expanded CA bundle path, or None when unset."""
+    if value is None:
+        return None
+    if isinstance(value, os.PathLike):
+        return str(Path(value).expanduser())
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return str(Path(stripped).expanduser())
+
+
 def apply_configured_yt_dlp_options(opts: dict, yt_dlp_settings: YtDlpSettings) -> dict:
     """Mutate and return yt-dlp options with app-configured extras."""
     cookies_file = normalize_cookiefile(yt_dlp_settings.cookies_file)
     if cookies_file:
         opts["cookiefile"] = cookies_file
+
+    # When a custom CA bundle is configured (e.g. for Zscaler), tell yt-dlp to
+    # skip its bundled certifi CA store and use the system/SSL_CERT_FILE certs
+    # instead.  SSL_CERT_FILE is set at app startup in cli.py.
+    ca_bundle = normalize_cafile(yt_dlp_settings.ca_bundle)
+    if ca_bundle:
+        if not Path(ca_bundle).is_file():
+            logger.warning("Configured [yt_dlp] ca_bundle does not exist: %s", ca_bundle)
+        compat = list(opts.get("compat_opts", []))
+        if "no-certifi" not in compat:
+            compat.append("no-certifi")
+        opts["compat_opts"] = set(compat)
 
     remote_components = normalize_remote_components(yt_dlp_settings.remote_components)
     if remote_components:
