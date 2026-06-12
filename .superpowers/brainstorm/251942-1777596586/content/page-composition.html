@@ -1,0 +1,194 @@
+<h2>Section 2 of 7 — Page composition</h2>
+<p class="subtitle">What's on each page type, top to bottom. Homepage is the load-bearing one.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">/ — homepage (your single-page tabbed UX)</div>
+    <div class="mockup-body" style="padding:0;background:#0f0f0f">
+      <!-- topbar -->
+      <div style="background:#000;border-bottom:1px solid #2a2a2a;padding:0.6rem 1rem;display:flex;justify-content:space-between;align-items:center;font-family:'JetBrains Mono',monospace;font-size:0.75rem">
+        <span><span style="color:#ff4e45">▶</span> ytm-player</span>
+        <span style="color:#666">Install · Docs · Changelog · vs · ⌘K · GitHub</span>
+      </div>
+      <!-- hero -->
+      <div style="padding:1.5rem 1rem;text-align:center;border-bottom:1px solid #1a1a1a">
+        <div style="font-size:1.4rem;font-weight:600;margin-bottom:0.3rem"><span style="color:#ff4e45">▶</span> ytm-player</div>
+        <div style="color:#aaa;font-size:0.78rem;margin-bottom:0.4rem">YouTube Music in your terminal — synced lyrics, vim keys, mpv</div>
+        <div style="color:#666;font-family:mono;font-size:0.7rem;margin-bottom:0.85rem">Linux · macOS · Windows · Free-tier supported</div>
+        <!-- terminal -->
+        <div style="background:#000;border:1px solid #2a2a2a;border-radius:6px;height:140px;margin:0 auto 0.85rem;max-width:85%;display:flex;align-items:center;justify-content:center;color:#666;font-family:mono;font-size:0.7rem;position:relative">
+          [hero video — 15-20s loop, 1400×720]
+          <div style="position:absolute;top:0.4rem;left:0.5rem;display:flex;gap:0.25rem">
+            <span style="width:8px;height:8px;background:#ff5f56;border-radius:50%"></span>
+            <span style="width:8px;height:8px;background:#ffbd2e;border-radius:50%"></span>
+            <span style="width:8px;height:8px;background:#27c93f;border-radius:50%"></span>
+          </div>
+        </div>
+        <!-- install row, OS-tabbed -->
+        <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:6px;max-width:85%;margin:0 auto;font-family:mono;font-size:0.7rem">
+          <div style="display:flex;border-bottom:1px solid #2a2a2a">
+            <span style="padding:0.3rem 0.6rem;color:#ff4e45;border-bottom:1px solid #ff4e45">PyPI</span>
+            <span style="padding:0.3rem 0.6rem;color:#666">Arch</span>
+            <span style="padding:0.3rem 0.6rem;color:#666">macOS</span>
+            <span style="padding:0.3rem 0.6rem;color:#666">Windows</span>
+            <span style="padding:0.3rem 0.6rem;color:#666">Nix</span>
+            <span style="padding:0.3rem 0.6rem;color:#666">Gentoo</span>
+          </div>
+          <div style="padding:0.5rem 0.75rem;text-align:left"><span style="color:#ff4e45">$</span> pip install ytm-player <span style="float:right;color:#666">copy</span></div>
+        </div>
+      </div>
+      <!-- mini comparison strip -->
+      <div style="padding:0.85rem 1rem;border-bottom:1px solid #1a1a1a;background:#0a0a0a">
+        <div style="font-size:0.7rem;color:#aaa;text-align:center;font-family:mono">
+          ✓ synced lyrics &nbsp; ✓ vim keys &nbsp; ✓ free-tier &nbsp; ✓ MPRIS/macOS/Win &nbsp; ✓ Spotify import &nbsp; ✓ 18+ themes
+        </div>
+      </div>
+      <!-- tabbed docs -->
+      <div style="padding:1rem 1rem 0.5rem;border-bottom:1px solid #1a1a1a">
+        <div style="display:flex;gap:0;border-bottom:1px solid #2a2a2a;font-size:0.72rem;font-family:mono">
+          <span style="padding:0.4rem 0.55rem;color:#ff4e45;border-bottom:1px solid #ff4e45">Install</span>
+          <span style="padding:0.4rem 0.55rem;color:#666">Configure</span>
+          <span style="padding:0.4rem 0.55rem;color:#666">Keys</span>
+          <span style="padding:0.4rem 0.55rem;color:#666">CLI</span>
+          <span style="padding:0.4rem 0.55rem;color:#666">Spotify</span>
+          <span style="padding:0.4rem 0.55rem;color:#666">Troubleshoot</span>
+          <span style="padding:0.4rem 0.55rem;color:#666">Architecture</span>
+        </div>
+        <div style="padding:0.85rem 0.5rem;color:#aaa;font-size:0.72rem;line-height:1.55">
+          [active tab content — full markdown rendered, all panels in DOM via CSS-only tabs]
+          <br><br>
+          <span style="color:#666">Each tab also has a canonical sibling at /docs/&lt;topic&gt; or /install/&lt;platform&gt;</span>
+        </div>
+      </div>
+      <!-- recent changelog teaser -->
+      <div style="padding:1rem;border-bottom:1px solid #1a1a1a">
+        <div style="font-size:0.85rem;font-weight:600;margin-bottom:0.4rem">Recent releases <span style="float:right;color:#ff4e45;font-size:0.72rem">View all →</span></div>
+        <div style="font-family:mono;font-size:0.72rem;color:#aaa">v1.9.2 · 2026-05-01 · charts region fix + TrackTable migration</div>
+        <div style="font-family:mono;font-size:0.72rem;color:#aaa">v1.9.1 · 2026-04-30 · radio everywhere, shuffle lock, full diag infra</div>
+        <div style="font-family:mono;font-size:0.72rem;color:#aaa">v1.8.0 · 2026-04-28 · audit-driven cleanup, Pyright 218→93</div>
+      </div>
+      <!-- footer -->
+      <div style="padding:0.85rem 1rem;text-align:center;font-size:0.68rem;color:#666;font-family:mono">
+        MIT · GitHub · PyPI · AUR · Nix · Gentoo · made by naame.co
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">/docs/keys — canonical SEO route (mirrors a tab from /)</div>
+    <div class="mockup-body" style="padding:0;background:#0f0f0f">
+      <div style="background:#000;border-bottom:1px solid #2a2a2a;padding:0.6rem 1rem;display:flex;justify-content:space-between;font-family:mono;font-size:0.75rem">
+        <span><span style="color:#ff4e45">▶</span> ytm-player</span>
+        <span style="color:#666">Install · Docs · Changelog · ⌘K</span>
+      </div>
+      <!-- breadcrumbs -->
+      <div style="padding:0.65rem 1rem;border-bottom:1px solid #1a1a1a;font-family:mono;font-size:0.7rem;color:#666">
+        <span style="color:#ff4e45">/</span> Home <span style="color:#ff4e45"> ›</span> Docs <span style="color:#ff4e45"> ›</span> Keys
+      </div>
+      <!-- title -->
+      <div style="padding:1.25rem 1rem 0.85rem">
+        <div style="font-size:1.4rem;font-weight:600">Keybindings</div>
+        <div style="color:#aaa;font-size:0.8rem;margin-top:0.35rem">All ~50 vim-style bindings, grouped by surface</div>
+      </div>
+      <!-- filter input -->
+      <div style="padding:0 1rem 0.75rem">
+        <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:5px;padding:0.4rem 0.65rem;font-family:mono;font-size:0.72rem;color:#666">
+          🔍 Filter bindings…
+        </div>
+      </div>
+      <!-- grouped tables -->
+      <div style="padding:0 1rem">
+        <div style="font-size:0.78rem;color:#ff4e45;margin-bottom:0.3rem;font-family:mono;text-transform:uppercase;letter-spacing:0.06em">── Library</div>
+        <div style="font-family:mono;font-size:0.7rem;color:#aaa;line-height:1.65;border-bottom:1px solid #1a1a1a;padding-bottom:0.5rem">
+          <span style="color:#fff">j / ↓</span> &nbsp;move down<br>
+          <span style="color:#fff">k / ↑</span> &nbsp;move up<br>
+          <span style="color:#fff">g s</span> &nbsp;jump to search<br>
+          …
+        </div>
+        <div style="font-size:0.78rem;color:#ff4e45;margin:0.85rem 0 0.3rem;font-family:mono;text-transform:uppercase;letter-spacing:0.06em">── Playback bar</div>
+        <div style="font-family:mono;font-size:0.7rem;color:#aaa;line-height:1.65">
+          <span style="color:#fff">space</span> &nbsp;play / pause<br>
+          <span style="color:#fff">l</span> &nbsp;like / unlike current<br>
+          …
+        </div>
+      </div>
+      <div style="padding:1rem;font-size:0.7rem;color:#666;border-top:1px solid #1a1a1a;margin-top:1rem">
+        ← Configure &nbsp;|&nbsp; CLI →
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="split" style="margin-top:1rem">
+  <div class="mockup">
+    <div class="mockup-header">/install/arch — canonical install route</div>
+    <div class="mockup-body" style="padding:0;background:#0f0f0f">
+      <div style="background:#000;border-bottom:1px solid #2a2a2a;padding:0.6rem 1rem;font-family:mono;font-size:0.75rem"><span style="color:#ff4e45">▶</span> ytm-player</div>
+      <div style="padding:0.6rem 1rem;border-bottom:1px solid #1a1a1a;font-family:mono;font-size:0.7rem;color:#666">
+        <span style="color:#ff4e45">/</span> Home <span style="color:#ff4e45">›</span> Install <span style="color:#ff4e45">›</span> Arch Linux
+      </div>
+      <div style="padding:1.25rem 1rem">
+        <div style="font-size:1.3rem;font-weight:600;margin-bottom:0.4rem">Install on Arch Linux</div>
+        <div style="color:#aaa;font-size:0.78rem;margin-bottom:1rem">Via the AUR package <code style="color:#ff4e45;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px;font-size:0.85em">ytm-player-git</code>, maintained alongside this repo.</div>
+        <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:5px;padding:0.55rem 0.75rem;font-family:mono;font-size:0.78rem;margin-bottom:1rem">
+          <span style="color:#ff4e45">$</span> yay -S ytm-player-git
+        </div>
+        <div style="color:#aaa;font-size:0.75rem;line-height:1.55">
+          • System dep: <code style="color:#ff4e45;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">mpv</code> (auto-pulled)<br>
+          • CachyOS / Manjaro: same command works<br>
+          • PKGBUILD source: <span style="color:#666">…</span>
+        </div>
+        <div style="margin-top:1rem;padding-top:0.85rem;border-top:1px solid #1a1a1a;font-size:0.72rem;color:#666;font-family:mono">
+          Other platforms: PyPI · macOS · Windows · NixOS · Gentoo
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">/changelog/v1.9.2 — canonical version route</div>
+    <div class="mockup-body" style="padding:0;background:#0f0f0f">
+      <div style="background:#000;border-bottom:1px solid #2a2a2a;padding:0.6rem 1rem;font-family:mono;font-size:0.75rem"><span style="color:#ff4e45">▶</span> ytm-player</div>
+      <div style="padding:0.6rem 1rem;border-bottom:1px solid #1a1a1a;font-family:mono;font-size:0.7rem;color:#666">
+        <span style="color:#ff4e45">/</span> Home <span style="color:#ff4e45">›</span> Changelog <span style="color:#ff4e45">›</span> v1.9.2
+      </div>
+      <div style="padding:1.25rem 1rem">
+        <div style="font-family:mono;color:#ff4e45;font-size:1.3rem;font-weight:600">v1.9.2</div>
+        <div style="color:#aaa;font-size:0.75rem;font-family:mono;margin-bottom:1rem">2026-05-01 · pip install ytm-player==1.9.2</div>
+        <div style="color:#aaa;font-size:0.78rem;line-height:1.6">
+          Charts page region fix + TrackTable migration on Queue / Liked Songs / Recently Played…
+        </div>
+        <div style="font-size:0.78rem;margin:0.85rem 0 0.3rem;color:#fff">Charts</div>
+        <div style="color:#aaa;font-size:0.72rem;line-height:1.55">
+          • Events visually separated from country charts<br>
+          • Region picker expanded 17 → 68; default flipped to ZZ<br>
+          …
+        </div>
+        <div style="margin-top:1rem;padding-top:0.85rem;border-top:1px solid #1a1a1a;font-size:0.7rem;color:#666;font-family:mono">
+          ← v1.9.1 &nbsp;|&nbsp; v2.0.0 (unreleased) →
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:1.5rem;padding:1rem 1.25rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.88rem;line-height:1.6">
+  <strong style="color:#ff4e45">Notable composition decisions:</strong><br>
+  <span style="color:#aaa">• <strong>Hero is short</strong> — title, tagline, video, install row, that's it. No CTAs button row competing with the install command itself.</span><br>
+  <span style="color:#aaa">• <strong>Mini comparison strip</strong> below the hero — 6 checkmarks in mono, single row. Replaces a heavier "features grid" section.</span><br>
+  <span style="color:#aaa">• <strong>Tabs always all-in-DOM</strong> via CSS only — Ctrl+F finds everything across all tabs without switching.</span><br>
+  <span style="color:#aaa">• <strong>Recent releases teaser</strong> on / shows latest 3, links to <code style="color:#ff4e45;background:#1a1a1a;padding:0.05rem 0.25rem;border-radius:3px">/changelog/</code>. Full inline changelog NOT on the homepage anymore — too much weight, breaks page momentum (designer agent's point about 700 lines being a wall).</span><br>
+  <span style="color:#aaa">• <strong>Breadcrumbs on every non-/ route</strong> — needed for SEO BreadcrumbList schema and for visitor orientation.</span><br>
+  <span style="color:#aaa">• <strong>Prev/Next on docs and changelog routes</strong> — keeps people moving through related content without going back to an index.</span>
+</div>
+
+<div class="options" style="margin-top:1.5rem">
+  <div class="option" data-choice="ok" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>Looks right</h3><p>Section 3 — content pipeline (how docs come from the public repo)</p></div>
+  </div>
+  <div class="option" data-choice="changes" onclick="toggleSelect(this)">
+    <div class="letter">✎</div>
+    <div class="content"><h3>Changes</h3><p>Tell me what to rework</p></div>
+  </div>
+</div>

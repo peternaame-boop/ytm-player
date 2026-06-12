@@ -1,0 +1,86 @@
+<h2>Section 3 of 7 — Content pipeline</h2>
+<p class="subtitle">How markdown in the public ytm-player repo becomes static HTML on ytm-player.com.</p>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1.5rem 1.25rem;margin-bottom:1.5rem">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:1rem">build-time flow</div>
+  <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;font-family:'JetBrains Mono',monospace;font-size:0.78rem;line-height:1.4">
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;padding:0.5rem 0.75rem;border-radius:5px;color:#aaa">
+      <span style="color:#ff4e45">github.com/peternaame-boop/<br>ytm-player</span><br>
+      <span style="color:#666;font-size:0.72rem">@ pinned tag (v1.9.2)</span>
+    </div>
+    <div style="color:#ff4e45">→</div>
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;padding:0.5rem 0.75rem;border-radius:5px;color:#aaa">
+      Astro build script<br>
+      <span style="color:#666;font-size:0.72rem">fetch raw md files</span>
+    </div>
+    <div style="color:#ff4e45">→</div>
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;padding:0.5rem 0.75rem;border-radius:5px;color:#aaa">
+      remark + rehype<br>
+      <span style="color:#666;font-size:0.72rem">md → HTML AST</span>
+    </div>
+    <div style="color:#ff4e45">→</div>
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;padding:0.5rem 0.75rem;border-radius:5px;color:#aaa">
+      Astro routes<br>
+      <span style="color:#666;font-size:0.72rem">getStaticPaths()</span>
+    </div>
+    <div style="color:#ff4e45">→</div>
+    <div style="background:#1a1a1a;border:1px solid #ff4e45;padding:0.5rem 0.75rem;border-radius:5px;color:#fff">
+      dist/<br>
+      <span style="color:#666;font-size:0.72rem">~52 static pages</span>
+    </div>
+    <div style="color:#ff4e45">→</div>
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;padding:0.5rem 0.75rem;border-radius:5px;color:#aaa">
+      Cloudflare Pages<br>
+      <span style="color:#666;font-size:0.72rem">edge deploy</span>
+    </div>
+  </div>
+
+  <div style="margin-top:1.25rem;font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:1rem">rebuild triggers</div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#aaa;line-height:1.7">
+    <span style="color:#ff4e45">1.</span> Push tag <code style="color:#fff;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">vX.Y.Z</code> on ytm-player repo<br>
+    &nbsp;&nbsp;&nbsp;<span style="color:#666">→ GitHub Action POSTs to CF Pages deploy hook → site rebuilds with new tag pinned</span><br>
+    <span style="color:#ff4e45">2.</span> Push to <code style="color:#fff;background:#1a1a1a;padding:0.1rem 0.3rem;border-radius:3px">docs/</code> on ytm-player repo (between releases)<br>
+    &nbsp;&nbsp;&nbsp;<span style="color:#666">→ Action POSTs to deploy hook → site rebuilds with same tag (docs may be ahead of tag)</span><br>
+    <span style="color:#ff4e45">3.</span> Push to website repo<br>
+    &nbsp;&nbsp;&nbsp;<span style="color:#666">→ CF Pages auto-rebuilds (built-in)</span>
+  </div>
+</div>
+
+<div class="pros-cons" style="margin-bottom:1.5rem">
+  <div class="pros">
+    <h4>Key decisions</h4>
+    <ul style="font-size:0.85rem;line-height:1.55;margin-left:1.25rem;color:#aaa">
+      <li><strong style="color:#fff">Pin to release tag, not master.</strong> A docs edit upstream doesn't silently change prod. <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">PINNED_TAG=v1.9.2</code> in env. Rebuild on tag push bumps it automatically.</li>
+      <li><strong style="color:#fff">Local dev cache.</strong> First build fetches from GitHub; subsequent builds read from <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">.cache/ytm-docs/</code>. Cleared by CI on every prod build.</li>
+      <li><strong style="color:#fff">Markdown stack:</strong> <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">remark-parse → remark-gfm → remark-rehype → rehype-shiki → rehype-stringify</code>. Shiki for syntax highlight (theme: ynh-coral matching the site).</li>
+      <li><strong style="color:#fff">CHANGELOG splitter.</strong> Custom node script parses <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">### vX.Y.Z (YYYY-MM-DD)</code> headings, emits one Astro page per version. Same regex you already use in <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">publish.yml</code> to extract release notes.</li>
+      <li><strong style="color:#fff">No CMS, no frontmatter on the source side.</strong> The .md files in the public repo stay raw markdown; all metadata (route, title, OG image, position in tab order) lives in a small <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">site/content-config.ts</code> in the website repo.</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <h4>Failure modes (handled)</h4>
+    <ul style="font-size:0.85rem;line-height:1.55;margin-left:1.25rem;color:#aaa">
+      <li><strong style="color:#fff">GitHub down at build time.</strong> Build script falls back to last cached fetch under <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">.cache/ytm-docs/</code> (committed in CI for this exact case) and emits a warning, doesn't fail.</li>
+      <li><strong style="color:#fff">Tag doesn't exist.</strong> Build fails loudly with the missing tag name (better than silently shipping stale content).</li>
+      <li><strong style="color:#fff">Malformed CHANGELOG section.</strong> Splitter logs the bad heading, skips that version, ships the rest.</li>
+      <li><strong style="color:#fff">Doc upstream renamed.</strong> Build fails with "expected docs/keys.md, got 404." Forces an explicit fix in the website repo's content-config.</li>
+      <li><strong style="color:#fff">CF Pages build timeout.</strong> Static site, 52 pages, no image processing → typical build ~30-45s. Well under any limit.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section" style="padding:1rem 1.25rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.88rem;line-height:1.55">
+  <strong style="color:#ff4e45">One thing worth noting:</strong>
+  <span style="color:#aaa">The website repo never directly imports anything from the ytm-player repo at runtime — only at build time. The deployed site is fully self-contained static HTML. The ytm-player repo could be deleted tomorrow and ytm-player.com would keep working until the next rebuild.</span>
+</div>
+
+<div class="options" style="margin-top:1.5rem">
+  <div class="option" data-choice="ok" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>Looks right</h3><p>Section 4 — hero + asset strategy</p></div>
+  </div>
+  <div class="option" data-choice="changes" onclick="toggleSelect(this)">
+    <div class="letter">✎</div>
+    <div class="content"><h3>Changes</h3><p>Tell me what to rework</p></div>
+  </div>
+</div>

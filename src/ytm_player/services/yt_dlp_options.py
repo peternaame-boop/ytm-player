@@ -110,6 +110,8 @@ def apply_configured_yt_dlp_options(opts: dict, yt_dlp_settings: YtDlpSettings) 
     # instead.  SSL_CERT_FILE is set at app startup in cli.py.
     ca_bundle = normalize_cafile(yt_dlp_settings.ca_bundle)
     if ca_bundle:
+        if not Path(ca_bundle).is_file():
+            logger.warning("Configured [yt_dlp] ca_bundle does not exist: %s", ca_bundle)
         compat = list(opts.get("compat_opts", []))
         if "no-certifi" not in compat:
             compat.append("no-certifi")

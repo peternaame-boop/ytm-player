@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ytm-player — B+ prototype</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --surface: #1a1a1a;
+    --surface-2: #222;
+    --border: #2a2a2a;
+    --fg: #ffffff;
+    --muted: #aaaaaa;
+    --dim: #666;
+    --primary: #ff0000;
+    --accent: #ff4e45;
+    --success: #2ecc71;
+    --warning: #f39c12;
+  }
+  /* theme presets — re-skin the whole page (FLOURISH +2) */
+  body[data-theme="catppuccin"] {
+    --bg: #1e1e2e; --surface: #313244; --surface-2: #45475a; --border: #585b70;
+    --fg: #cdd6f4; --muted: #a6adc8; --dim: #6c7086;
+    --primary: #cba6f7; --accent: #f5c2e7;
+  }
+  body[data-theme="gruvbox"] {
+    --bg: #282828; --surface: #3c3836; --surface-2: #504945; --border: #665c54;
+    --fg: #ebdbb2; --muted: #a89984; --dim: #7c6f64;
+    --primary: #fb4934; --accent: #fabd2f;
+  }
+  body[data-theme="nord"] {
+    --bg: #2e3440; --surface: #3b4252; --surface-2: #434c5e; --border: #4c566a;
+    --fg: #eceff4; --muted: #d8dee9; --dim: #81a1c1;
+    --primary: #88c0d0; --accent: #5e81ac;
+  }
+  body[data-theme="dracula"] {
+    --bg: #282a36; --surface: #44475a; --surface-2: #6272a4; --border: #6272a4;
+    --fg: #f8f8f2; --muted: #bd93f9; --dim: #6272a4;
+    --primary: #ff79c6; --accent: #50fa7b;
+  }
+  body[data-theme="tokyonight"] {
+    --bg: #1a1b26; --surface: #24283b; --surface-2: #414868; --border: #414868;
+    --fg: #c0caf5; --muted: #a9b1d6; --dim: #565f89;
+    --primary: #7aa2f7; --accent: #bb9af7;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.55;
+    font-size: 16px;
+    scroll-behavior: smooth;
+    transition: background 0.4s, color 0.4s;
+  }
+  code, pre, .mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--fg); }
+
+  /* custom cursor on interactive zones (FLOURISH +3c) */
+  .interactive-zone, .interactive-zone *, button, a {
+    cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='18' viewBox='0 0 12 18'><rect width='10' height='16' x='1' y='1' fill='%23ff4e45' opacity='0.85'/></svg>") 2 2, pointer;
+  }
+
+  /* ================== topbar ================== */
+  .topbar {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(15,15,15,0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 0.85rem 1.5rem;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem;
+    transition: background 0.4s;
+  }
+  body[data-theme="catppuccin"] .topbar { background: rgba(30,30,46,0.85); }
+  body[data-theme="gruvbox"] .topbar { background: rgba(40,40,40,0.85); }
+  body[data-theme="nord"] .topbar { background: rgba(46,52,64,0.85); }
+  body[data-theme="dracula"] .topbar { background: rgba(40,42,54,0.85); }
+  body[data-theme="tokyonight"] .topbar { background: rgba(26,27,38,0.85); }
+
+  .topbar .brand {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    font-size: 1rem;
+  }
+  .topbar .brand .glyph { color: var(--accent); }
+  .topbar nav { display: flex; gap: 1.5rem; font-size: 0.9rem; flex: 1; margin-left: 2rem; }
+  .topbar nav a { color: var(--muted); }
+  .topbar nav a:hover { color: var(--fg); }
+
+  .topbar-controls { display: flex; gap: 0.6rem; align-items: center; }
+
+  .search-trigger {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.4rem 0.85rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 0.6rem;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+  .search-trigger:hover { color: var(--fg); border-color: var(--accent); }
+  .search-trigger .kbd-mini {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+  }
+
+  .theme-switcher {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .theme-switcher:focus { outline: 1px solid var(--accent); }
+
+  .proto-toggle {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-family: 'JetBrains Mono', monospace;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .proto-toggle:hover { color: var(--fg); border-color: var(--accent); }
+
+  /* ================== hero ================== */
+  .hero {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 3rem;
+    text-align: center;
+  }
+  .hero h1 {
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 1rem;
+  }
+  .hero h1 .glyph { color: var(--accent); }
+  .hero .tagline {
+    font-size: 1.2rem;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+    max-width: 640px;
+    margin-left: auto; margin-right: auto;
+  }
+  .hero .platforms {
+    color: var(--dim);
+    font-size: 0.85rem;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 2.5rem;
+  }
+
+  /* terminal hero */
+  .terminal-hero {
+    max-width: 900px;
+    margin: 0 auto 2.5rem;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .terminal-chrome {
+    background: var(--surface);
+    padding: 0.6rem 1rem;
+    display: flex; align-items: center; gap: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .term-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .term-dot.r { background: #ff5f56; }
+  .term-dot.y { background: #ffbd2e; }
+  .term-dot.g { background: #27c93f; }
+  .term-title {
+    margin-left: 1rem;
+    color: var(--dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+  }
+  .terminal-body {
+    background: #0a0a0a;
+    min-height: 460px;
+    position: relative;
+  }
+  .term-prompt {
+    padding: 1rem 1.25rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--fg);
+    position: absolute; top: 0; left: 0; right: 0;
+    z-index: 2;
+    transition: opacity 0.4s ease;
+  }
+  .term-prompt .dollar { color: var(--accent); }
+  .term-prompt .cursor {
+    display: inline-block;
+    width: 8px; height: 1.1em;
+    background: var(--fg);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .term-demo {
+    width: 100%;
+    display: block;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+  .term-demo.show { opacity: 1; }
+
+  /* OS-aware install row (FLOURISH +1) */
+  .install-section {
+    max-width: 720px;
+    margin: 0 auto 2rem;
+  }
+  .os-tabs {
+    display: flex;
+    gap: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
+  }
+  .os-tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 0.55rem 0.75rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .os-tab:hover { color: var(--fg); }
+  .os-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: rgba(255,78,69,0.05);
+  }
+  .os-tab .auto-badge {
+    background: var(--accent);
+    color: var(--bg);
+    padding: 0.05rem 0.35rem;
+    border-radius: 8px;
+    font-size: 0.65rem;
+    margin-left: 0.4rem;
+    font-weight: 600;
+  }
+  .install-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    padding: 0.85rem 1rem;
+    display: flex; align-items: center; gap: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.95rem;
+  }
+  .install-row .dollar { color: var(--accent); }
+  .install-row .cmd { flex: 1; color: var(--fg); }
+  .install-row .copy-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 0.35rem 0.75rem;
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .install-row .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .install-row .copy-btn.copied { color: var(--success); border-color: var(--success); }
+
+  .ctas {
+    display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;
+  }
+  .btn {
+    padding: 0.85rem 1.75rem;
+    border-radius: 8px;
+    font-weight: 500;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-decoration: none;
+    display: inline-block;
+    border: none;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+  }
+  .btn-primary:hover { background: var(--primary); color: var(--bg); }
+  .btn-secondary {
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ================== tabs ================== */
+  .docs-section {
+    max-width: 1000px;
+    margin: 4rem auto;
+    padding: 0 1.5rem;
+  }
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2rem;
+    overflow-x: auto;
+    flex-wrap: wrap;
+  }
+  .tab {
+    padding: 0.85rem 1.25rem;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 0.95rem;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .tab:hover { color: var(--fg); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* scroll-triggered reveals (FLOURISH +3a) */
+  .tab-panel { display: none; min-height: 400px; }
+  .tab-panel.active { display: block; }
+  .reveal {
+    opacity: 0;
+    transform: translateY(12px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+  }
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .tab-panel h2 {
+    font-size: 1.6rem;
+    margin-bottom: 1.25rem;
+    font-weight: 600;
+  }
+  .tab-panel h3 {
+    font-size: 1.1rem;
+    margin: 1.5rem 0 0.75rem;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .tab-panel p { margin-bottom: 1rem; color: var(--muted); }
+  .tab-panel ul { margin: 0 0 1rem 1.5rem; color: var(--muted); }
+  .tab-panel li { margin-bottom: 0.4rem; }
+  .tab-panel code {
+    background: var(--surface);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.88em;
+    color: var(--accent);
+  }
+  .tab-panel pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    margin: 1rem 0;
+  }
+  .tab-panel pre code { background: none; padding: 0; color: var(--fg); }
+
+  /* keybinding cheat-sheet */
+  .keys-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0.5rem;
+    margin: 1.5rem 0;
+  }
+  .key-row {
+    display: flex; align-items: center; gap: 0.85rem;
+    padding: 0.65rem 0.85rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    transition: all 0.18s;
+  }
+  .key-row.hit {
+    background: rgba(255,78,69,0.15);
+    border-color: var(--accent);
+    transform: translateX(4px);
+  }
+  .kbd {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    min-width: 32px;
+    text-align: center;
+    color: var(--fg);
+    flex-shrink: 0;
+  }
+  .key-row.hit .kbd {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  .key-action { font-size: 0.9rem; color: var(--muted); }
+  .key-row.hit .key-action { color: var(--fg); }
+  .keys-hint {
+    color: var(--dim);
+    font-size: 0.85rem;
+    font-family: 'JetBrains Mono', monospace;
+    margin: 1rem 0;
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    border-radius: 6px;
+    border-left: 3px solid var(--accent);
+  }
+
+  /* theme.toml playground */
+  .theme-playground {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin: 1.5rem 0;
+  }
+  @media (max-width: 720px) { .theme-playground { grid-template-columns: 1fr; } }
+  .theme-config {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .theme-config .label-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 0.65rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+  }
+  .theme-config input[type="color"] {
+    background: transparent;
+    border: 1px solid var(--border);
+    width: 36px; height: 28px;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .theme-preview {
+    background: var(--mock-bg, #0f0f0f);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: var(--mock-fg, #fff);
+    transition: all 0.2s;
+  }
+  .preview-row {
+    display: flex; gap: 0.75rem; padding: 0.4rem 0;
+    border-bottom: 1px solid var(--mock-border, #2a2a2a);
+  }
+  .preview-row.playing { color: var(--mock-accent, #ff4e45); }
+  .preview-row .num { color: var(--mock-muted, #aaa); width: 1.5rem; }
+  .preview-row .title { flex: 1; }
+  .preview-row .dur { color: var(--mock-muted, #aaa); }
+  .preview-bar {
+    margin-top: 0.85rem;
+    background: var(--mock-surface, #1a1a1a);
+    border-radius: 4px;
+    overflow: hidden;
+    height: 4px;
+  }
+  .preview-bar-fill {
+    background: var(--mock-primary, #ff0000);
+    width: 35%;
+    height: 100%;
+  }
+  .preview-now {
+    margin-top: 0.6rem;
+    color: var(--mock-muted, #aaa);
+    font-size: 0.78rem;
+    display: flex; justify-content: space-between;
+  }
+  .preview-now .now-title { color: var(--mock-accent, #ff4e45); }
+
+  /* changelog inline (FLOURISH +5) */
+  .changelog-section {
+    max-width: 1000px;
+    margin: 4rem auto;
+    padding: 0 1.5rem;
+  }
+  .changelog-section h2 {
+    font-size: 1.4rem;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+  .changelog-section .subtitle {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-bottom: 1.5rem;
+  }
+  .changelog-entry {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+  }
+  .changelog-entry .ver {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    display: flex; align-items: baseline; gap: 0.75rem;
+  }
+  .changelog-entry .date {
+    font-size: 0.78rem;
+    color: var(--dim);
+    font-weight: 400;
+  }
+  .changelog-entry .summary { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.75rem; }
+  .changelog-entry ul { margin: 0 0 0 1.25rem; color: var(--muted); font-size: 0.88rem; }
+  .changelog-entry li { margin-bottom: 0.3rem; }
+
+  /* search modal (FLOURISH +4) */
+  .search-modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(6px);
+    z-index: 200;
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 12vh;
+  }
+  .search-modal.open { display: flex; }
+  .search-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: 92%;
+    max-width: 600px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .search-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    padding: 1.1rem 1.5rem;
+    color: var(--fg);
+    font-size: 1.05rem;
+    font-family: inherit;
+    outline: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .search-results {
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+  .search-result {
+    padding: 0.85rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .search-result:hover, .search-result.selected {
+    background: var(--surface-2);
+  }
+  .search-result .res-title {
+    color: var(--fg);
+    font-weight: 500;
+    font-size: 0.95rem;
+    margin-bottom: 0.2rem;
+  }
+  .search-result .res-meta {
+    font-size: 0.78rem;
+    color: var(--dim);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .search-result mark {
+    background: rgba(255,78,69,0.3);
+    color: var(--fg);
+    padding: 0 1px;
+    border-radius: 2px;
+  }
+  .search-empty { padding: 1.5rem; color: var(--dim); text-align: center; font-size: 0.9rem; }
+  .search-footer {
+    padding: 0.65rem 1.5rem;
+    border-top: 1px solid var(--border);
+    color: var(--dim);
+    font-size: 0.75rem;
+    display: flex; gap: 1rem;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* footer */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 2rem 1.5rem;
+    text-align: center;
+    color: var(--dim);
+    font-size: 0.85rem;
+  }
+  footer .links { margin-bottom: 0.75rem; }
+  footer .links a { margin: 0 0.6rem; color: var(--muted); }
+  footer .links a:hover { color: var(--accent); }
+
+  .flourish-badge {
+    display: inline-block;
+    background: rgba(255,78,69,0.12);
+    color: var(--accent);
+    border: 1px solid rgba(255,78,69,0.3);
+    padding: 0.15rem 0.55rem;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-family: 'JetBrains Mono', monospace;
+    margin-left: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="glyph">▶</span> ytm-player</div>
+  <nav>
+    <a href="#install">Install</a>
+    <a href="#docs">Docs</a>
+    <a href="#changelog">Changelog</a>
+    <a href="https://github.com/peternaame-boop/ytm-player" target="_blank">GitHub</a>
+  </nav>
+  <div class="topbar-controls">
+    <button class="search-trigger" onclick="openSearch()">
+      <span>Search docs…</span>
+      <span class="kbd-mini">⌘K</span>
+    </button>
+    <select class="theme-switcher" id="themeSelect">
+      <option value="">Default (red)</option>
+      <option value="catppuccin">Catppuccin Mocha</option>
+      <option value="gruvbox">Gruvbox Dark</option>
+      <option value="nord">Nord</option>
+      <option value="dracula">Dracula</option>
+      <option value="tokyonight">Tokyo Night</option>
+    </select>
+    <button class="proto-toggle" onclick="window.parent.postMessage({switchTo:'b'},'*')">← View Pure B</button>
+  </div>
+</div>
+
+<section class="hero">
+  <h1><span class="glyph">▶</span> ytm-player</h1>
+  <p class="tagline">A full-featured YouTube Music player for the terminal. Vim keys, synced lyrics, mpv backend.</p>
+  <p class="platforms">Linux · macOS · Windows · Free-tier supported</p>
+
+  <div class="terminal-hero">
+    <div class="terminal-chrome">
+      <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
+      <span class="term-title">~/projects — ytm</span>
+    </div>
+    <div class="terminal-body">
+      <div class="term-prompt" id="termPrompt">
+        <span class="dollar">$</span> <span id="termTyped"></span><span class="cursor"></span>
+      </div>
+      <img class="term-demo" id="termDemo"
+           src="https://raw.githubusercontent.com/peternaame-boop/ytm-player/master/docs/images/ytm-demo.gif"
+           alt="ytm-player demo">
+    </div>
+  </div>
+
+  <!-- FLOURISH +1: OS auto-detect -->
+  <div class="install-section" id="install">
+    <div class="os-tabs interactive-zone" id="osTabs">
+      <button class="os-tab" data-os="pip">PyPI <span class="auto-badge" style="display:none">auto</span></button>
+      <button class="os-tab" data-os="aur">Arch (AUR) <span class="auto-badge" style="display:none">auto</span></button>
+      <button class="os-tab" data-os="brew">Homebrew <span class="auto-badge" style="display:none">auto</span></button>
+      <button class="os-tab" data-os="scoop">Scoop <span class="auto-badge" style="display:none">auto</span></button>
+      <button class="os-tab" data-os="nix">Nix <span class="auto-badge" style="display:none">auto</span></button>
+    </div>
+    <div class="install-row">
+      <span class="dollar">$</span>
+      <span class="cmd" id="installCmd">pip install ytm-player</span>
+      <button class="copy-btn" onclick="copyInstall(this)">copy</button>
+    </div>
+  </div>
+
+  <div class="ctas">
+    <a href="#docs" class="btn btn-primary">Get started →</a>
+    <a href="https://github.com/peternaame-boop/ytm-player" target="_blank" class="btn btn-secondary">GitHub</a>
+  </div>
+</section>
+
+<section class="docs-section" id="docs">
+  <div class="tab-bar">
+    <button class="tab active" data-tab="install">Install</button>
+    <button class="tab" data-tab="config">Configure</button>
+    <button class="tab" data-tab="keys">Keys</button>
+    <button class="tab" data-tab="cli">CLI</button>
+    <button class="tab" data-tab="spotify">Spotify</button>
+    <button class="tab" data-tab="trouble">Troubleshoot</button>
+    <button class="tab" data-tab="arch">Architecture</button>
+  </div>
+
+  <div class="tab-panel active" data-panel="install">
+    <h2 class="reveal">Install</h2>
+    <p class="reveal">Pick the channel that matches your setup. mpv is required system-wide on every platform.</p>
+    <h3 class="reveal">PyPI (any platform)</h3>
+<pre class="reveal"><code>pip install ytm-player</code></pre>
+    <h3 class="reveal">Arch Linux (AUR)</h3>
+<pre class="reveal"><code>yay -S ytm-player-git</code></pre>
+    <h3 class="reveal">NixOS</h3>
+    <p class="reveal">Add the flake input from <code>github:peternaame-boop/ytm-player</code> and pull <code>packages.ytm-player</code>.</p>
+    <h3 class="reveal">Gentoo (GURU overlay)</h3>
+<pre class="reveal"><code>emerge media-sound/ytm-player</code></pre>
+    <p class="reveal">System dep on every platform: <code>mpv</code>. On Arch: <code>sudo pacman -S mpv</code>.</p>
+  </div>
+
+  <div class="tab-panel" data-panel="config">
+    <h2 class="reveal">Configure</h2>
+    <p class="reveal">Configuration lives at <code>~/.config/ytm-player/config.toml</code> on Linux/macOS or <code>%APPDATA%\ytm-player\config.toml</code> on Windows.</p>
+    <h3 class="reveal">Theme playground <span class="flourish-badge">flourish 3</span></h3>
+    <p class="reveal">Tweak the colors below — the mock track row reflects your changes in real time. Same variables live in your <code>theme.toml</code>.</p>
+    <div class="theme-playground reveal interactive-zone">
+      <div class="theme-config">
+        <div class="label-row"><span>background</span><input type="color" value="#0f0f0f" data-var="--mock-bg"></div>
+        <div class="label-row"><span>surface</span><input type="color" value="#1a1a1a" data-var="--mock-surface"></div>
+        <div class="label-row"><span>foreground</span><input type="color" value="#ffffff" data-var="--mock-fg"></div>
+        <div class="label-row"><span>primary</span><input type="color" value="#ff0000" data-var="--mock-primary"></div>
+        <div class="label-row"><span>accent</span><input type="color" value="#ff4e45" data-var="--mock-accent"></div>
+        <div class="label-row"><span>muted</span><input type="color" value="#aaaaaa" data-var="--mock-muted"></div>
+        <div class="label-row"><span>border</span><input type="color" value="#2a2a2a" data-var="--mock-border"></div>
+      </div>
+      <div class="theme-preview" id="themePreview">
+        <div class="preview-row playing">
+          <span class="num">1</span><span class="title">▶ Bohemian Rhapsody</span><span class="dur">5:55</span>
+        </div>
+        <div class="preview-row">
+          <span class="num">2</span><span class="title">Don't Stop Me Now</span><span class="dur">3:29</span>
+        </div>
+        <div class="preview-row">
+          <span class="num">3</span><span class="title">Somebody to Love</span><span class="dur">4:56</span>
+        </div>
+        <div class="preview-bar"><div class="preview-bar-fill"></div></div>
+        <div class="preview-now">
+          <span class="now-title">Bohemian Rhapsody</span><span>2:04 / 5:55</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-panel="keys">
+    <h2 class="reveal">Keys</h2>
+    <p class="reveal">Vim-style. Press any key on this page to see what it does <span class="flourish-badge">flourish 2</span></p>
+    <div class="keys-hint reveal" id="keyHint">Press a key — for example j, k, space, ?, /, l, q…</div>
+    <div class="keys-grid reveal">
+      <div class="key-row" data-keys="j ArrowDown"><span class="kbd">j</span><span class="key-action">Move down</span></div>
+      <div class="key-row" data-keys="k ArrowUp"><span class="kbd">k</span><span class="key-action">Move up</span></div>
+      <div class="key-row" data-keys=" "><span class="kbd">space</span><span class="key-action">Play / pause</span></div>
+      <div class="key-row" data-keys="n"><span class="kbd">n</span><span class="key-action">Next track</span></div>
+      <div class="key-row" data-keys="p"><span class="kbd">p</span><span class="key-action">Previous track</span></div>
+      <div class="key-row" data-keys="l"><span class="kbd">l</span><span class="key-action">Like / unlike current</span></div>
+      <div class="key-row" data-keys="/"><span class="kbd">/</span><span class="key-action">Filter visible list</span></div>
+      <div class="key-row" data-keys="?"><span class="kbd">?</span><span class="key-action">Show all keybindings</span></div>
+      <div class="key-row" data-keys="q"><span class="kbd">q</span><span class="key-action">Quit</span></div>
+      <div class="key-row" data-keys="c"><span class="kbd">c</span><span class="key-action">Pick country (Charts)</span></div>
+      <div class="key-row" data-keys="d"><span class="kbd">D</span><span class="key-action">Discovery Mix</span></div>
+      <div class="key-row" data-keys="r"><span class="kbd">r</span><span class="key-action">Repeat mode cycle</span></div>
+      <div class="key-row" data-keys="s"><span class="kbd">s</span><span class="key-action">Toggle shuffle</span></div>
+      <div class="key-row" data-keys="Backspace"><span class="kbd">⌫</span><span class="key-action">Back</span></div>
+      <div class="key-row" data-keys="Escape"><span class="kbd">esc</span><span class="key-action">Close panel / cancel</span></div>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-panel="cli">
+    <h2 class="reveal">CLI</h2>
+    <p class="reveal">Subcommands talk to a running TUI via Unix socket IPC.</p>
+<pre class="reveal"><code>ytm                # launch the TUI
+ytm play           # resume / play
+ytm pause          # pause
+ytm next           # skip
+ytm now            # what's playing
+ytm setup          # one-time auth
+ytm doctor         # diagnostic dump for bug reports</code></pre>
+  </div>
+
+  <div class="tab-panel" data-panel="spotify">
+    <h2 class="reveal">Spotify import</h2>
+    <p class="reveal">Bring your playlists across.</p>
+<pre class="reveal"><code>ytm spotify import &lt;playlist-url&gt;</code></pre>
+    <p class="reveal">Uses the Spotify API when credentials are configured, falls back to the public scraper otherwise.</p>
+  </div>
+
+  <div class="tab-panel" data-panel="trouble">
+    <h2 class="reveal">Troubleshoot</h2>
+    <h3 class="reveal">mpv not found</h3>
+    <p class="reveal">Install via your package manager. Arch: <code>sudo pacman -S mpv</code>. macOS: <code>brew install mpv</code>. Windows: see install docs for the libmpv-2.dll step.</p>
+    <h3 class="reveal">Auth expired</h3>
+    <p class="reveal">Run <code>ytm setup</code> again to refresh cookies.</p>
+    <h3 class="reveal">Get diagnostic dump</h3>
+    <p class="reveal">Run <code>ytm doctor</code> and paste the output into your bug report.</p>
+  </div>
+
+  <div class="tab-panel" data-panel="arch">
+    <h2 class="reveal">Architecture</h2>
+    <p class="reveal">Three layers:</p>
+    <ul class="reveal">
+      <li><strong>services/</strong> — backend singletons (Player, QueueManager, YTMusicService, etc.)</li>
+      <li><strong>ui/</strong> — Textual widgets (pages, sidebars, popups, widgets)</li>
+      <li><strong>config/</strong> — Settings dataclass, KeyMap with multi-key vim sequences</li>
+    </ul>
+    <p class="reveal">The app is split into mixins — one per concern (playback, navigation, keys, session, sidebar, track actions, MPRIS, IPC) all extending a typed host base.</p>
+  </div>
+</section>
+
+<!-- FLOURISH +5: inline changelog -->
+<section class="changelog-section" id="changelog">
+  <h2>Recent releases</h2>
+  <p class="subtitle">Last three. <a href="https://github.com/peternaame-boop/ytm-player/blob/master/CHANGELOG.md" target="_blank">Full history →</a></p>
+  <div class="changelog-entry reveal">
+    <div class="ver">v1.9.2 <span class="date">2026-05-01</span></div>
+    <p class="summary">Charts page region picker fix + TrackTable migration on Queue / Liked Songs / Recently Played.</p>
+    <ul>
+      <li>Events visually separated from country charts (Coachella was loading globally regardless of country pick)</li>
+      <li>Region picker expanded 17 → 68; default flipped <code>GB</code> → <code>ZZ</code> (Global)</li>
+      <li>Three pages dropped raw DataTable for TrackTable — gain context menus, play indicators, sort, filter for free</li>
+      <li>Radio durations no longer show <code>--:--</code></li>
+    </ul>
+  </div>
+  <div class="changelog-entry reveal">
+    <div class="ver">v1.9.1 <span class="date">2026-04-30</span></div>
+    <p class="summary">Big feature wave — radio everywhere, shuffle lock, charts UI, browser-style nav, full diagnostic infra.</p>
+    <ul>
+      <li><strong>Start Radio</strong> from any playlist + proactive refill when queue runs low</li>
+      <li><strong>Discovery Mix</strong> on the <code>D</code> key — random pull from one of 7 sources</li>
+      <li><strong>Shuffle lock</strong> per playlist — explicit toggle, persists per-ID</li>
+      <li><strong>Browser-style</strong> back/forward navigation in the header</li>
+      <li><strong>Charts country picker</strong> on <code>c</code></li>
+      <li>Full diagnostic infrastructure: faulthandler, asyncio loop handler, sys.unraisablehook, mpv log_handler</li>
+    </ul>
+  </div>
+  <div class="changelog-entry reveal">
+    <div class="ver">v1.8.0 <span class="date">2026-04-28</span></div>
+    <p class="summary">Reliability + quality release driven by a multi-agent expert audit. Pyright errors 218 → 93.</p>
+    <ul>
+      <li>Per-cause mutation-failure toasts (auth-required vs network vs server-error)</li>
+      <li>Fixed Pillow ≥10 album art crash, Spotify import ImportError, gg/G ListView crashes</li>
+      <li>9 new integration tests; coverage floor 10% → 47%</li>
+    </ul>
+  </div>
+</section>
+
+<!-- FLOURISH +4: search modal -->
+<div class="search-modal" id="searchModal" onclick="if(event.target===this)closeSearch()">
+  <div class="search-box">
+    <input type="text" class="search-input" id="searchInput" placeholder="Search across all docs…" oninput="runSearch()">
+    <div class="search-results" id="searchResults"></div>
+    <div class="search-footer">
+      <span>↑↓ navigate</span>
+      <span>↵ jump</span>
+      <span>esc close</span>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div class="links">
+    <a href="https://github.com/peternaame-boop/ytm-player" target="_blank">GitHub</a>
+    <a href="https://pypi.org/project/ytm-player/" target="_blank">PyPI</a>
+    <a href="https://aur.archlinux.org/packages/ytm-player-git" target="_blank">AUR</a>
+    <a href="#docs">Docs</a>
+  </div>
+  <p>MIT licensed · made with ❤️ for the terminal</p>
+</footer>
+
+<script>
+  // ============ tab switching ============
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      const panel = document.querySelector(`[data-panel="${t.dataset.tab}"]`);
+      panel.classList.add('active');
+      // re-run reveals for the freshly visible panel
+      panel.querySelectorAll('.reveal').forEach((el, i) => {
+        el.classList.remove('visible');
+        setTimeout(() => el.classList.add('visible'), 50 + i * 35);
+      });
+    });
+  });
+
+  // ============ scroll-triggered reveals (FLOURISH +3a) ============
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+  // ============ FLOURISH +1: OS auto-detect install ============
+  const installCmds = {
+    pip:   'pip install ytm-player',
+    aur:   'yay -S ytm-player-git',
+    brew:  'brew tap peternaame-boop/tap && brew install ytm-player',
+    scoop: 'scoop install ytm-player',
+    nix:   'nix profile install github:peternaame-boop/ytm-player'
+  };
+  function detectOS() {
+    const ua = navigator.userAgent.toLowerCase();
+    const platform = (navigator.platform || '').toLowerCase();
+    if (ua.includes('mac') || platform.includes('mac')) return 'brew';
+    if (ua.includes('win') || platform.includes('win')) return 'scoop';
+    if (ua.includes('arch') || ua.includes('manjaro') || ua.includes('cachy')) return 'aur';
+    return 'pip';
+  }
+  const detected = detectOS();
+  document.querySelectorAll('.os-tab').forEach(tab => {
+    if (tab.dataset.os === detected) {
+      tab.classList.add('active');
+      tab.querySelector('.auto-badge').style.display = 'inline-block';
+    }
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.os-tab').forEach(x => x.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('installCmd').textContent = installCmds[tab.dataset.os];
+    });
+  });
+  document.getElementById('installCmd').textContent = installCmds[detected];
+
+  function copyInstall(btn) {
+    navigator.clipboard.writeText(document.getElementById('installCmd').textContent);
+    btn.textContent = '✓ copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1500);
+  }
+
+  // ============ animated terminal ============
+  (function animateTerminal() {
+    const typed = document.getElementById('termTyped');
+    const prompt = document.getElementById('termPrompt');
+    const demo = document.getElementById('termDemo');
+    const cmd = 'ytm';
+    let i = 0;
+    function tick() {
+      if (i < cmd.length) {
+        typed.textContent = cmd.slice(0, ++i);
+        setTimeout(tick, 180);
+      } else {
+        setTimeout(() => {
+          prompt.style.opacity = '0';
+          demo.classList.add('show');
+        }, 600);
+      }
+    }
+    setTimeout(tick, 800);
+  })();
+
+  // ============ keybinding cheat-sheet ============
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    // search modal hotkey
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      openSearch();
+      return;
+    }
+    if (e.key === 'Escape' && document.getElementById('searchModal').classList.contains('open')) {
+      closeSearch(); return;
+    }
+
+    const keysPanel = document.querySelector('[data-panel="keys"]');
+    if (!keysPanel.classList.contains('active')) return;
+
+    const key = e.key;
+    let matched = false;
+    document.querySelectorAll('.key-row').forEach(row => {
+      const keys = row.dataset.keys.split(' ');
+      const hit = keys.includes(key) || keys.includes(key.toLowerCase());
+      if (hit) {
+        row.classList.add('hit');
+        matched = true;
+        setTimeout(() => row.classList.remove('hit'), 800);
+      }
+    });
+    if (matched) {
+      e.preventDefault();
+      const hint = document.getElementById('keyHint');
+      hint.textContent = `Pressed: ${key === ' ' ? 'space' : key}`;
+    }
+  });
+
+  // ============ theme.toml playground ============
+  document.querySelectorAll('input[type="color"]').forEach(input => {
+    input.addEventListener('input', () => {
+      document.getElementById('themePreview').style.setProperty(input.dataset.var, input.value);
+    });
+  });
+
+  // ============ FLOURISH +2: site-wide theme switcher ============
+  document.getElementById('themeSelect').addEventListener('change', (e) => {
+    if (e.target.value) document.body.dataset.theme = e.target.value;
+    else delete document.body.dataset.theme;
+  });
+
+  // ============ FLOURISH +4: client-side docs search ============
+  const SEARCH_INDEX = [
+    {tab: 'install', title: 'PyPI install', body: 'pip install ytm-player any platform'},
+    {tab: 'install', title: 'Arch AUR', body: 'yay ytm-player-git arch manjaro'},
+    {tab: 'install', title: 'NixOS', body: 'flake input github peternaame-boop nix'},
+    {tab: 'install', title: 'Gentoo GURU', body: 'emerge media-sound ytm-player gentoo'},
+    {tab: 'install', title: 'mpv requirement', body: 'mpv pacman brew system dependency'},
+    {tab: 'config', title: 'Config location', body: 'config.toml ~/.config/ytm-player APPDATA windows'},
+    {tab: 'config', title: 'Theme playground', body: 'theme.toml colors background surface accent primary'},
+    {tab: 'keys', title: 'Vim keys', body: 'j k space n p movement navigation'},
+    {tab: 'keys', title: 'Like song', body: 'l like unlike current track'},
+    {tab: 'keys', title: 'Search filter', body: '/ filter visible list'},
+    {tab: 'keys', title: 'Help', body: '? show all keybindings'},
+    {tab: 'keys', title: 'Country picker', body: 'c pick country charts region'},
+    {tab: 'keys', title: 'Discovery Mix', body: 'D random discovery seven sources'},
+    {tab: 'cli', title: 'ytm command', body: 'ytm launch tui terminal'},
+    {tab: 'cli', title: 'Playback control', body: 'ytm play pause next previous IPC unix socket'},
+    {tab: 'cli', title: 'Setup auth', body: 'ytm setup browser cookies authentication'},
+    {tab: 'cli', title: 'Doctor diagnostic', body: 'ytm doctor diagnostic bug report dump'},
+    {tab: 'spotify', title: 'Spotify import', body: 'spotify playlist import API scraper fallback'},
+    {tab: 'trouble', title: 'mpv not found', body: 'mpv missing pacman brew install windows libmpv dll'},
+    {tab: 'trouble', title: 'Auth expired', body: 'cookies expired ytm setup refresh'},
+    {tab: 'arch', title: 'Three layers', body: 'services ui config singletons textual widgets dataclass'},
+    {tab: 'arch', title: 'Mixin host', body: 'mixin playback navigation keys session sidebar IPC'},
+  ];
+  let searchSelected = 0;
+  function openSearch() {
+    document.getElementById('searchModal').classList.add('open');
+    setTimeout(() => document.getElementById('searchInput').focus(), 50);
+    runSearch();
+  }
+  function closeSearch() {
+    document.getElementById('searchModal').classList.remove('open');
+    document.getElementById('searchInput').value = '';
+  }
+  function runSearch() {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    const out = document.getElementById('searchResults');
+    if (!q) {
+      out.innerHTML = '<div class="search-empty">Type to search across all docs…</div>';
+      return;
+    }
+    const matches = SEARCH_INDEX.filter(item =>
+      item.title.toLowerCase().includes(q) || item.body.toLowerCase().includes(q)
+    ).slice(0, 8);
+    if (!matches.length) {
+      out.innerHTML = '<div class="search-empty">No matches.</div>';
+      return;
+    }
+    searchSelected = 0;
+    out.innerHTML = matches.map((m, i) => {
+      const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      const title = m.title.replace(re, '<mark>$1</mark>');
+      return `<div class="search-result ${i===0?'selected':''}" data-tab="${m.tab}" onclick="jumpTo('${m.tab}')">
+        <div class="res-title">${title}</div>
+        <div class="res-meta">${m.tab}</div>
+      </div>`;
+    }).join('');
+  }
+  function jumpTo(tab) {
+    closeSearch();
+    document.querySelector(`.tab[data-tab="${tab}"]`).click();
+    setTimeout(() => document.getElementById('docs').scrollIntoView({behavior:'smooth'}), 100);
+  }
+  document.getElementById('searchInput')?.addEventListener('keydown', (e) => {
+    const results = document.querySelectorAll('.search-result');
+    if (!results.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      results[searchSelected].classList.remove('selected');
+      searchSelected = (searchSelected + 1) % results.length;
+      results[searchSelected].classList.add('selected');
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      results[searchSelected].classList.remove('selected');
+      searchSelected = (searchSelected - 1 + results.length) % results.length;
+      results[searchSelected].classList.add('selected');
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      results[searchSelected].click();
+    }
+  });
+</script>
+</body>
+</html>

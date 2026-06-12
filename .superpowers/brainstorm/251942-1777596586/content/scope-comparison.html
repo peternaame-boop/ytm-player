@@ -1,0 +1,78 @@
+<h2>Pure B vs B leaning into C</h2>
+<p class="subtitle">Same baseline both sides. Difference is only the count + ambition of polish flourishes.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Pure B — 3 flourishes</div>
+    <div class="mockup-body" style="padding:1.25rem">
+      <div class="label" style="color:#aaa">Baseline (both sides)</div>
+      <ul style="margin:0.4rem 0 1rem 1rem;padding:0;font-size:0.9rem;line-height:1.6">
+        <li>Hero: title + tagline + demo GIF/video</li>
+        <li>Install command (single, with copy button)</li>
+        <li>Tabbed docs from existing md files</li>
+        <li>Footer with GitHub + PyPI + AUR + Nix links</li>
+        <li>Responsive, accessible, fast</li>
+      </ul>
+      <div class="label" style="color:#ff4e45">+ 3 standout flourishes</div>
+      <ul style="margin:0.4rem 0 0 1rem;padding:0;font-size:0.9rem;line-height:1.6">
+        <li>Interactive keybinding cheat-sheet — press a key, it highlights with the action it triggers</li>
+        <li>Animated terminal hero — typed-out <code style="color:#ff4e45">$ ytm</code> command, then the demo plays</li>
+        <li>Live <code style="color:#ff4e45">theme.toml</code> playground — edit colors, see a mock track row update in real time</li>
+      </ul>
+      <div style="margin-top:1.25rem;padding:0.75rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.85rem;opacity:0.9">
+        <strong>Time to ship:</strong> ~1 weekend<br>
+        <strong>Risk:</strong> low — each flourish is isolated, can be cut individually
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">B leaning C — 3 flourishes + polish layer</div>
+    <div class="mockup-body" style="padding:1.25rem">
+      <div class="label" style="color:#aaa">Baseline (both sides)</div>
+      <ul style="margin:0.4rem 0 1rem 1rem;padding:0;font-size:0.9rem;line-height:1.6;opacity:0.55">
+        <li>(same as left)</li>
+      </ul>
+      <div class="label" style="color:#ff4e45">+ 3 standout flourishes</div>
+      <ul style="margin:0.4rem 0 1rem 1rem;padding:0;font-size:0.9rem;line-height:1.6;opacity:0.55">
+        <li>(same as left)</li>
+      </ul>
+      <div class="label" style="color:#ff4e45">+ polish layer (this is the lean toward C)</div>
+      <ul style="margin:0.4rem 0 0 1rem;padding:0;font-size:0.9rem;line-height:1.6">
+        <li><strong>OS auto-detect</strong> on install command — Linux user sees <code style="color:#ff4e45">pip</code>, Arch user sees <code style="color:#ff4e45">yay</code>, with quick toggle</li>
+        <li><strong>Theme switcher</strong> — pick one of ytm-player's themes, the whole site re-skins live (proves the theme system as a feature)</li>
+        <li><strong>Scroll-triggered reveals</strong> on tab transitions, subtle blinking-caret accents, custom cursor on interactive elements</li>
+        <li><strong>Docs search</strong> across all tab content (small client-side index)</li>
+        <li><strong>"Watch the changelog"</strong> — pretty-rendered latest 3 release notes inline near the bottom</li>
+      </ul>
+      <div style="margin-top:1.25rem;padding:0.75rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.85rem;opacity:0.9">
+        <strong>Time to ship:</strong> ~1 weekend + 2-3 evenings<br>
+        <strong>Risk:</strong> medium — each polish item is small but they compound; risk of looking over-designed if all five land at once
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options" style="margin-top:1.5rem">
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Pure B</h3>
+      <p>3 flourishes, ship it, move on</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b+" onclick="toggleSelect(this)">
+    <div class="letter">+</div>
+    <div class="content">
+      <h3>B leaning C</h3>
+      <p>3 flourishes + polish layer of 3-5 smaller wins</p>
+    </div>
+  </div>
+  <div class="option" data-choice="custom" onclick="toggleSelect(this)">
+    <div class="letter">?</div>
+    <div class="content">
+      <h3>Cherry-pick</h3>
+      <p>Tell me which specific items to keep / cut</p>
+    </div>
+  </div>
+</div>

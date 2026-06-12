@@ -1,0 +1,55 @@
+<h2>Section 4 of 7 — Hero + asset strategy</h2>
+<p class="subtitle">The 1.5MB GIF retires. Replaced with dual-source video, ~300-500KB total, with motion-reduced fallback.</p>
+
+<div class="pros-cons" style="margin-bottom:1.5rem">
+  <div class="pros">
+    <h4>What ships</h4>
+    <ul style="font-size:0.85rem;line-height:1.55;margin-left:1.25rem;color:#aaa">
+      <li><strong style="color:#fff">Recut to 15-20s.</strong> The current 46s loop is too long — visitor attention is gone. Pick the four highest-impact moments: search → play → synced lyrics scroll → theme switch. Re-record asciinema-style or trim/splice from existing footage.</li>
+      <li><strong style="color:#fff">Dual-source &lt;video&gt;.</strong> AV1 (~300KB primary) + H.264 (~500KB fallback). Skip VP9 — AV1 supersedes it on Safari 17+/iOS 17.4+ which both ship hardware decode.</li>
+      <li><strong style="color:#fff">Poster frame as AVIF.</strong> Pre-rendered representative frame at ~2s in. This becomes the LCP element — paints before video loads. ~30KB.</li>
+      <li><strong style="color:#fff">prefers-reduced-motion fallback.</strong> If the visitor's OS reports motion-reduce, video doesn't autoplay — poster stays. CSS media query handles it, no JS needed.</li>
+      <li><strong style="color:#fff">Lives in <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px;font-size:0.85em">public/media/</code></strong> — Astro doesn't process; CF edge-caches with long TTL via _headers.</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <h4>Concrete commands</h4>
+    <pre style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:6px;padding:0.85rem 1rem;font-size:0.72rem;line-height:1.6;color:#e0e0e0;overflow-x:auto">
+<span style="color:#666"># AV1 — primary</span>
+ffmpeg -i src.mp4 -an \
+  -vf "fps=20,scale=1400:-2:flags=lanczos,format=yuv420p" \
+  -c:v libsvtav1 -preset 4 -crf 38 -g 240 \
+  -movflags +faststart \
+  hero.av1.mp4
+
+<span style="color:#666"># H.264 — fallback</span>
+ffmpeg -i src.mp4 -an \
+  -vf "fps=20,scale=1400:-2:flags=lanczos,format=yuv420p" \
+  -c:v libx264 -preset slower -crf 28 \
+  -tune stillimage -profile:v main \
+  -pix_fmt yuv420p -movflags +faststart \
+  hero.h264.mp4
+
+<span style="color:#666"># Poster (AVIF, ~2s frame)</span>
+ffmpeg -ss 2 -i src.mp4 -frames:v 1 \
+  -vf "scale=1400:-2:flags=lanczos" \
+  -c:v libaom-av1 -still-picture 1 -crf 30 \
+  hero-poster.avif</pre>
+  </div>
+</div>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.5rem;font-family:'JetBrains Mono',monospace;font-size:0.78rem;line-height:1.7;color:#aaa">
+  <span style="color:#ff4e45">// the actual &lt;video&gt; markup</span><br>
+  <span style="color:#fff">&lt;video</span> autoplay muted loop playsinline<br>
+  &nbsp;&nbsp;poster=<span style="color:#ff4e45">"/media/hero-poster.avif"</span><br>
+  &nbsp;&nbsp;preload=<span style="color:#ff4e45">"metadata"</span><br>
+  &nbsp;&nbsp;width=<span style="color:#ff4e45">"1400"</span> height=<span style="color:#ff4e45">"720"</span><span style="color:#fff">&gt;</span><br>
+  &nbsp;&nbsp;&lt;source src=<span style="color:#ff4e45">"/media/hero.av1.mp4"</span> type=<span style="color:#ff4e45">"video/mp4; codecs=av01.0.05M.08"</span>&gt;<br>
+  &nbsp;&nbsp;&lt;source src=<span style="color:#ff4e45">"/media/hero.h264.mp4"</span> type=<span style="color:#ff4e45">"video/mp4; codecs=avc1.4d401f"</span>&gt;<br>
+  <span style="color:#fff">&lt;/video&gt;</span>
+</div>
+
+<div class="section" style="padding:1rem 1.25rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.88rem;line-height:1.6">
+  <strong style="color:#ff4e45">Other assets:</strong>
+  <span style="color:#aaa"> OG share image is a fresh screenshot of the synced-lyrics view (per marketing agent — that's the screenshot people actually post). 1200×630 PNG, hand-composed once. Per-version OG images for /changelog/v* pages are auto-generated from a template (version + date + headline + ytm-player wordmark) at build time using @vercel/og or satori — runs in the Astro build, no runtime dependency.</span>
+</div>

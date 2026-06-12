@@ -1,0 +1,90 @@
+<h2>Three architectures — pick how the URLs work</h2>
+<p class="subtitle">All three deliver C-level polish. They differ on whether the docs are one page or many, and what URLs exist.</p>
+
+<div class="cards">
+  <div class="card" data-choice="single" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0f0f0f;border-bottom:1px solid #2a2a2a;padding:1.25rem;font-family:'JetBrains Mono',monospace;font-size:0.8rem;color:#aaa;text-align:left;line-height:1.7">
+      <div style="color:#ff4e45;margin-bottom:0.5rem">URL map</div>
+      <div>/                 <span style="color:#666">→ everything</span></div>
+      <div>/#install         <span style="color:#666">→ tab</span></div>
+      <div>/#keys            <span style="color:#666">→ tab</span></div>
+      <div>/#cli             <span style="color:#666">→ tab</span></div>
+      <div>/#changelog       <span style="color:#666">→ section</span></div>
+      <div>/#changelog-v1.9.2 <span style="color:#666">→ accordion</span></div>
+      <div style="margin-top:0.85rem;color:#666">total indexable URLs: <span style="color:#ff4e45">1</span></div>
+    </div>
+    <div class="card-body">
+      <h3>1 — Pure single page</h3>
+      <p style="font-size:0.88rem;line-height:1.55;color:#aaa">Your literal instinct. One URL. Tabs swap content via CSS only (all panels in DOM, Ctrl+F works, all visible to crawlers). Hash anchors auto-activate the right tab. Zero route management.</p>
+      <div style="margin-top:0.85rem;font-size:0.78rem;color:#7c7c7c">
+        ✓ Simplest to build & maintain<br>
+        ✓ Honors your "one page" framing exactly<br>
+        ✗ One ranking entity for everything (loses 4-5 SEO entities)<br>
+        ✗ No per-version changelog URLs to share<br>
+        ✗ No per-platform install URLs to rank
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="hybrid" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0f0f0f;border-bottom:1px solid #2a2a2a;padding:1.25rem;font-family:'JetBrains Mono',monospace;font-size:0.8rem;color:#aaa;text-align:left;line-height:1.7">
+      <div style="color:#ff4e45;margin-bottom:0.5rem">URL map</div>
+      <div>/                  <span style="color:#666">→ landing + tabs</span></div>
+      <div>/install/arch      <span style="color:#666">→ canonical</span></div>
+      <div>/install/macos     <span style="color:#666">→ canonical</span></div>
+      <div>/install/nixos     <span style="color:#666">→ canonical</span></div>
+      <div>/install/{4 more}  <span style="color:#666">→ canonical</span></div>
+      <div>/changelog         <span style="color:#666">→ index</span></div>
+      <div>/changelog/v1.9.2  <span style="color:#666">→ canonical</span></div>
+      <div>/changelog/{30+}   <span style="color:#666">→ canonical</span></div>
+      <div>/vs/spotify-tui    <span style="color:#666">→ comparison</span></div>
+      <div>/vs/cmus           <span style="color:#666">→ comparison</span></div>
+      <div style="margin-top:0.85rem;color:#666">total indexable URLs: <span style="color:#ff4e45">~45</span></div>
+    </div>
+    <div class="card-body">
+      <h3>2 — Hybrid <span style="background:rgba(255,78,69,0.15);color:#ff4e45;padding:0.1rem 0.45rem;border-radius:8px;font-size:0.7rem;margin-left:0.4rem">recommended</span></h3>
+      <p style="font-size:0.88rem;line-height:1.55;color:#aaa">"/" is your single-page tabbed UX exactly as you imagined — same hero, same tabs, same vibe. PLUS the same content also lives at canonical SEO routes, generated from the same markdown source. Visitors get tabs; Google gets entities; you author once.</p>
+      <div style="margin-top:0.85rem;font-size:0.78rem;color:#7c7c7c">
+        ✓ Single-page UX preserved on /<br>
+        ✓ ~45 indexed URLs targeting distinct intent<br>
+        ✓ Per-version changelog pages = 30+ long-tail captures<br>
+        ✓ Comparison pages convert at 5-10× branded queries<br>
+        ✗ More routing config (Astro handles it cleanly though)<br>
+        ✗ Need canonical hygiene (homepage canonical to itself, route canonical to itself)
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="split" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0f0f0f;border-bottom:1px solid #2a2a2a;padding:1.25rem;font-family:'JetBrains Mono',monospace;font-size:0.8rem;color:#aaa;text-align:left;line-height:1.7">
+      <div style="color:#ff4e45;margin-bottom:0.5rem">URL map</div>
+      <div>/             <span style="color:#666">→ landing only</span></div>
+      <div>/docs         <span style="color:#666">→ docs hub</span></div>
+      <div>/docs/install <span style="color:#666">→ canonical</span></div>
+      <div>/docs/keys    <span style="color:#666">→ canonical</span></div>
+      <div>/docs/cli     <span style="color:#666">→ canonical</span></div>
+      <div>/docs/{4 more}<span style="color:#666">→ canonical</span></div>
+      <div>/changelog/{30+}<span style="color:#666">→ canonical</span></div>
+      <div>/install/{6}  <span style="color:#666">→ canonical</span></div>
+      <div>/vs/{3-4}     <span style="color:#666">→ canonical</span></div>
+      <div style="margin-top:0.85rem;color:#666">total indexable URLs: <span style="color:#ff4e45">~50</span></div>
+    </div>
+    <div class="card-body">
+      <h3>3 — Two-page split</h3>
+      <p style="font-size:0.88rem;line-height:1.55;color:#aaa">Classic docs-site structure (think bun.sh, helix-editor.com). "/" is pure landing — hero + features + install + "View docs →". Docs live behind a sidebar nav at /docs/*. Maximum SEO surface, but loses the single-page-with-tabs feel you described.</p>
+      <div style="margin-top:0.85rem;font-size:0.78rem;color:#7c7c7c">
+        ✓ Cleanest information architecture<br>
+        ✓ Matches what professional dev-tool sites do<br>
+        ✓ Maximum indexed surface<br>
+        ✗ Does NOT match your "one page, click yourself through tabs" framing<br>
+        ✗ More clicks for visitors to find anything<br>
+        ✗ Needs sidebar nav (more chrome)
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:2rem;padding:1rem 1.25rem;background:rgba(255,78,69,0.06);border-left:3px solid #ff4e45;font-size:0.9rem;line-height:1.6">
+  <strong style="color:#ff4e45">My recommendation: option 2 (Hybrid).</strong>
+  You're an SEO professional — losing 4-5 ranking entities to single-page architecture is real money on the table when this site is going to be your portfolio's most authoritative landing. Option 2 keeps your single-page tabbed UX exactly as you imagined while letting Astro auto-generate the canonical SEO routes from the same source markdown. Best of both. Authoring stays single-file.
+</div>
