@@ -347,7 +347,8 @@ class TrackActionsMixin(YTMHostBase):
 
     async def _start_artist_radio(self, browse_id: str) -> None:
         """Fetch artist data and start a radio from their radioId or top songs."""
-        assert self.ytmusic is not None
+        if not self.ytmusic:
+            return
         self.notify("Loading radio...", timeout=3)
         data = await self.ytmusic.get_artist(browse_id)
         if not data:
@@ -380,7 +381,8 @@ class TrackActionsMixin(YTMHostBase):
 
     async def _play_artist_top_songs(self, browse_id: str) -> None:
         """Fetch artist top songs, queue them, and start playback."""
-        assert self.ytmusic is not None
+        if not self.ytmusic:
+            return
         self.notify("Loading top songs...", timeout=3)
         data = await self.ytmusic.get_artist(browse_id)
         if not data:
@@ -409,7 +411,8 @@ class TrackActionsMixin(YTMHostBase):
     ) -> None:
         """Background-fetch the full artist song list, enrich initial tracks, and append rest."""
         try:
-            assert self.ytmusic is not None
+            if not self.ytmusic:
+                return
             pl = await self.ytmusic.get_playlist(browse_id)
             all_tracks = normalize_tracks(pl.get("tracks", []) if isinstance(pl, dict) else [])
             full_by_id = {t.get("video_id", ""): t for t in all_tracks if t.get("video_id")}
@@ -433,7 +436,8 @@ class TrackActionsMixin(YTMHostBase):
         """Subscribe/unsubscribe without cached state (used from track table context)."""
         from ytm_player.services.ytmusic import mutation_failure_suffix
 
-        assert self.ytmusic is not None
+        if not self.ytmusic:
+            return
         data = await self.ytmusic.get_artist(browse_id)
         if not data or not data.get("channelId"):
             self.notify("Couldn't load artist data.", severity="warning", timeout=3)
@@ -459,7 +463,8 @@ class TrackActionsMixin(YTMHostBase):
         """Add an album to the user's library."""
         from ytm_player.services.ytmusic import mutation_failure_suffix
 
-        assert self.ytmusic is not None
+        if not self.ytmusic:
+            return
         album_data = await self.ytmusic.get_album(album_id)
         playlist_id = album_data.get("audioPlaylistId", "")
         if not playlist_id:
@@ -475,7 +480,8 @@ class TrackActionsMixin(YTMHostBase):
 
     async def _play_album(self, album_id: str, album_name: str, *, shuffle: bool = False) -> None:
         """Fetch album tracks, replace queue, and start playback."""
-        assert self.ytmusic is not None
+        if not self.ytmusic:
+            return
         self.notify("Loading album...", timeout=3)
         data = await self.ytmusic.get_album(album_id)
         tracks = normalize_tracks(data.get("tracks", []) if isinstance(data, dict) else [])
@@ -485,7 +491,8 @@ class TrackActionsMixin(YTMHostBase):
 
     async def _add_album_to_queue(self, album_id: str, album_name: str) -> None:
         """Fetch album tracks and add them to the queue."""
-        assert self.ytmusic is not None
+        if not self.ytmusic:
+            return
         data = await self.ytmusic.get_album(album_id)
         tracks = normalize_tracks(data.get("tracks", []) if isinstance(data, dict) else [])
         if not tracks:
