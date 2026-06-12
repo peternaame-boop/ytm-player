@@ -285,6 +285,34 @@ class TestMutationMethodsReturnTypedResult:
         result = await ytmusic_service.add_playlist_items("PL_test", ["v1"])
         assert result == "success"
 
+    async def test_add_playlist_items_captures_set_video_ids(self, ytmusic_service, monkeypatch):
+        async def fake_call(func, *_args, **_kwargs):
+            return {
+                "status": "STATUS_SUCCEEDED",
+                "playlistEditResults": [
+                    {"videoId": "v1", "setVideoId": "s1"},
+                    {"videoId": "v2", "setVideoId": "s2"},
+                ],
+            }
+
+        monkeypatch.setattr(ytmusic_service, "_call", fake_call)
+        result = await ytmusic_service.add_playlist_items("PL_test", ["v1", "v2"])
+        assert result == "success"
+        assert ytmusic_service.last_added_set_video_ids == {"v1": "s1", "v2": "s2"}
+
+    async def test_add_playlist_items_resets_set_video_ids_on_duplicate(
+        self, ytmusic_service, monkeypatch
+    ):
+        ytmusic_service.last_added_set_video_ids = {"stale": "x"}
+
+        async def fake_call(func, *_args, **_kwargs):
+            return {"status": "STATUS_FAILED"}
+
+        monkeypatch.setattr(ytmusic_service, "_call", fake_call)
+        result = await ytmusic_service.add_playlist_items("PL_test", ["v1"])
+        assert result == "duplicate"
+        assert ytmusic_service.last_added_set_video_ids == {}
+
     async def test_add_playlist_items_returns_duplicate_on_failed_status(
         self, ytmusic_service, monkeypatch
     ):

@@ -335,7 +335,7 @@ class PlaylistPicker(ModalScreen[str | None]):
             self.notify("Failed to create playlist", severity="error")
             status.update("Error")
 
-    def _tracks_for_append(self) -> list[dict[str, Any]]:
+    def _tracks_for_append(self, set_video_ids: dict[str, str]) -> list[dict[str, Any]]:
         """Build the track dicts to append to the open playlist's table.
 
         ``self.tracks`` are usually already-normalized dicts (the playing or
@@ -343,9 +343,10 @@ class PlaylistPicker(ModalScreen[str | None]):
         ``thumbnail_url`` — it reads the raw ``thumbnails`` key that normalized
         dicts no longer carry — so only raw dicts are normalized here.
 
-        Picker-added tracks also don't yet have the server-assigned
-        ``setVideoId``, so they're flagged: "Remove from Playlist" needs a
-        reload before it can target the new row.
+        *set_video_ids* maps videoId -> server-assigned setVideoId from the add
+        response; appended rows are stamped with it so "Remove from Playlist"
+        works immediately. Rows still missing a setVideoId are flagged so the
+        remove action can explain a reload is needed.
         """
         from ytm_player.utils.formatting import normalize_tracks
 
@@ -358,7 +359,10 @@ class PlaylistPicker(ModalScreen[str | None]):
                 if not normed:
                     continue
                 track = normed[0]
-            if not track.get("setVideoId"):
+            svid = set_video_ids.get(track.get("video_id", ""))
+            if svid:
+                track["setVideoId"] = svid
+            elif not track.get("setVideoId"):
                 track["_needs_reload_for_removal"] = True
             out.append(track)
         return out
@@ -434,7 +438,9 @@ class PlaylistPicker(ModalScreen[str | None]):
                     library = self.app.query_one(LibraryPage)
                     if self.tracks:
                         table = library.query_one("#library-tracks", TrackTable)
-                        table.append_tracks(self._tracks_for_append())
+                        table.append_tracks(
+                            self._tracks_for_append(ytmusic.last_added_set_video_ids)
+                        )
                         library.update_track_count()
                     else:
                         library.update_track_count(+len(self.video_ids))

@@ -55,3 +55,35 @@ class TestCreateAndAddSignature:
         sig = inspect.signature(PlaylistPicker._create_and_add)
         assert sig.parameters["description"].default == ""
         assert sig.parameters["privacy"].default == "PRIVATE"
+
+
+class TestTracksForAppend:
+    def test_stamps_set_video_id_from_add_response(self):
+        # A just-added track gets the server-assigned setVideoId so it is
+        # immediately removable (no "reload" flag).
+        picker = PlaylistPicker(
+            video_ids=["vid1"],
+            tracks=[{"video_id": "vid1", "title": "T", "thumbnail_url": "http://x/t.jpg"}],
+        )
+        rows = picker._tracks_for_append({"vid1": "setABC"})
+        assert len(rows) == 1
+        assert rows[0]["setVideoId"] == "setABC"
+        assert rows[0]["thumbnail_url"] == "http://x/t.jpg"
+        assert "_needs_reload_for_removal" not in rows[0]
+
+    def test_flags_row_when_set_video_id_unknown(self):
+        picker = PlaylistPicker(
+            video_ids=["vid1"],
+            tracks=[{"video_id": "vid1", "title": "T"}],
+        )
+        rows = picker._tracks_for_append({})
+        assert rows[0].get("_needs_reload_for_removal") is True
+
+    def test_preexisting_set_video_id_is_kept(self):
+        picker = PlaylistPicker(
+            video_ids=["vid1"],
+            tracks=[{"video_id": "vid1", "title": "T", "setVideoId": "existing"}],
+        )
+        rows = picker._tracks_for_append({})
+        assert rows[0]["setVideoId"] == "existing"
+        assert "_needs_reload_for_removal" not in rows[0]

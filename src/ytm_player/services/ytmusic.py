@@ -155,6 +155,10 @@ class YTMusicService:
         self._order_lock = asyncio.Lock()
         self._last_discovery_source: int = 0
         self._last_chart_shelf: int = 0
+        # videoId -> server-assigned setVideoId from the most recent successful
+        # add_playlist_items() call. Lets callers stamp freshly-added rows with
+        # the setVideoId they need for later removal, without a reload.
+        self.last_added_set_video_ids: dict[str, str] = {}
 
     @property
     def client(self) -> YTMusic:
@@ -744,6 +748,7 @@ class YTMusicService:
             or one of ``"auth_required"``, ``"auth_expired"``, ``"network"``,
             ``"server_error"`` on failure.
         """
+        self.last_added_set_video_ids = {}
         try:
             result = await self._call(
                 self.client.add_playlist_items,
@@ -761,6 +766,13 @@ class YTMusicService:
             if isinstance(result, dict):
                 status = result.get("status", "")
                 if "SUCCEEDED" in status:
+                    # Capture the videoId -> setVideoId map so callers can make
+                    # the just-added rows immediately removable.
+                    self.last_added_set_video_ids = {
+                        r["videoId"]: r["setVideoId"]
+                        for r in result.get("playlistEditResults", [])
+                        if isinstance(r, dict) and r.get("videoId") and r.get("setVideoId")
+                    }
                     return "success"
                 if "FAILED" in status:
                     logger.debug(
