@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ytm-player.com — design index</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: #0a0a0a;
+    color: #fff;
+    font-family: 'Inter', sans-serif;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .topbar {
+    background: #000;
+    border-bottom: 1px solid #2a2a2a;
+    padding: 0.6rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    z-index: 100;
+    position: relative;
+  }
+  .topbar .label { color: #666; margin-right: 0.5rem; }
+  .topbar button {
+    background: transparent;
+    border: 1px solid #2a2a2a;
+    color: #aaa;
+    padding: 0.35rem 0.75rem;
+    border-radius: 5px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+    transition: all 0.12s;
+    white-space: nowrap;
+  }
+  .topbar button:hover { color: #fff; border-color: #ff4e45; }
+  .topbar button.active {
+    background: #ff4e45;
+    color: #0a0a0a;
+    border-color: #ff4e45;
+    font-weight: 600;
+  }
+  .frame-wrap {
+    position: absolute;
+    top: 56px; left: 0; right: 0; bottom: 0;
+  }
+  iframe {
+    border: none;
+    width: 100%;
+    height: 100%;
+    display: none;
+    background: #0a0a0a;
+  }
+  iframe.show { display: block; }
+  .hint { color: #666; margin-left: auto; }
+  @media (max-width: 900px) {
+    .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="label">design sections:</span>
+  <button class="active" onclick="show('1','sitemap.html')">1 · sitemap</button>
+  <button onclick="show('1b','sitemap-v2.html')">1b · +legal</button>
+  <button onclick="show('2','page-composition.html')">2 · pages</button>
+  <button onclick="show('3','content-pipeline.html')">3 · pipeline</button>
+  <button onclick="show('4','hero-assets.html')">4 · hero</button>
+  <button onclick="show('5','components-theming.html')">5 · components</button>
+  <button onclick="show('6','seo-hygiene.html')">6 · SEO</button>
+  <button onclick="show('7','repo-deploy.html')">7 · repo + deploy</button>
+  <span class="hint">click through, then tell me what to change</span>
+</div>
+
+<div class="frame-wrap">
+  <iframe id="frame" class="show" src="/files/sitemap.html"></iframe>
+</div>
+
+<script>
+  let active = '1';
+  function show(id, file) {
+    if (active === id) return;
+    document.querySelectorAll('.topbar button').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('frame').src = '/files/' + file;
+    active = id;
+  }
+</script>
+</body>
+</html>

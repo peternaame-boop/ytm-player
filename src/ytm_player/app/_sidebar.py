@@ -9,6 +9,7 @@ from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
 from ytm_player.ui.sidebars.playlist_sidebar import LibraryPanel, PlaylistSidebar
+from ytm_player.utils.formatting import strip_vl_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -111,91 +112,19 @@ class SidebarMixin(YTMHostBase):
         if playlist_id:
             await self.navigate_to("library", playlist_id=playlist_id)
 
-    # First batch size for progressive playlist loading.
-    _SIDEBAR_FIRST_BATCH = 300
-
     async def on_playlist_sidebar_playlist_double_clicked(
         self, message: PlaylistSidebar.PlaylistDoubleClicked
     ) -> None:
         """Queue all tracks from double-clicked playlist and start playback."""
-        from ytm_player.utils.formatting import normalize_tracks
-
         item = message.item_data
         playlist_id = item.get("playlistId") or item.get("browseId")
-        if not playlist_id or not self.ytmusic:
-            return
-        try:
-            data = await self.ytmusic.get_playlist(
-                playlist_id, limit=self._SIDEBAR_FIRST_BATCH, order="recently_added"
-            )
-            raw_tracks = data.get("tracks", [])
-            tracks = normalize_tracks(raw_tracks)
-            if not tracks:
-                self.notify("Playlist is empty", severity="warning")
-                return
-            self.queue.clear()
-            self.queue.add_multiple(tracks)
-            self.queue.jump_to(0)
-            # Shuffle lock — force shuffle ON if the playlist is locked.
-            self.queue.set_context(playlist_id)
-            if self.shuffle_prefs.get(playlist_id) and not self.queue.shuffle_enabled:
-                self.queue.toggle_shuffle()
-            self._active_library_playlist_id = playlist_id
-            try:
-                bar = self.query_one("#playback-bar")
-                bar.update_shuffle(self.queue.shuffle_enabled)  # type: ignore[attr-defined]
-                bar.refresh_shuffle_lock_state()  # type: ignore[attr-defined]
-            except Exception:
-                pass
-            track = self.queue.current_track
-            if track:
-                await self.play_track(track)
-
-            # Background-fetch remaining tracks and append to queue.
-            total_count = data.get("trackCount") or len(raw_tracks)
-            if total_count > len(raw_tracks):
-                self.run_worker(
-                    self._fetch_remaining_for_queue(playlist_id, len(raw_tracks)),
-                    name="sidebar-fetch-remaining",
-                )
-        except Exception:
-            logger.exception("Failed to load playlist %s for playback", playlist_id)
-            self.notify("Failed to load playlist", severity="error")
-
-    async def _fetch_remaining_for_queue(self, playlist_id: str, already_have: int) -> None:
-        """Background fetch remaining tracks and append to the queue."""
-        from ytm_player.utils.formatting import normalize_tracks
-
-        if not self.ytmusic:
-            return
-        try:
-            remaining = await self.ytmusic.get_playlist_remaining(
-                playlist_id, already_have, order="recently_added"
-            )
-            if remaining:
-                tracks = normalize_tracks(remaining)
-                self.queue.add_multiple(tracks)
-        except Exception:
-            logger.debug("Failed to fetch remaining playlist tracks for queue", exc_info=True)
-
-    async def _add_playlist_to_queue(self, playlist_id: str) -> None:
-        """Fetch playlist tracks and add them to the queue."""
-        from ytm_player.utils.formatting import normalize_tracks
-
-        if not self.ytmusic:
-            return
-        try:
-            data = await self.ytmusic.get_playlist(playlist_id)
-            tracks = normalize_tracks(data.get("tracks", []))
-            if tracks:
-                self.queue.add_multiple(tracks)
-                self._refresh_queue_page()
-                self.notify(f"Added {len(tracks)} tracks to queue", timeout=2)
-            else:
-                self.notify("Playlist is empty", severity="warning", timeout=2)
-        except Exception:
-            logger.debug("Failed to add playlist to queue", exc_info=True)
-            self.notify("Failed to add to queue", severity="error", timeout=2)
+        name = item.get("title", "playlist")
+        if playlist_id:
+            prev = self.queue.current_track
+            await self._play_playlist(playlist_id, name, order="recently_added")
+            if self.queue.current_track is not None and self.queue.current_track is not prev:
+                self._active_library_playlist_id = playlist_id
+                await self.navigate_to("queue")
 
     def on_playlist_sidebar_playlist_right_clicked(
         self, message: PlaylistSidebar.PlaylistRightClicked
@@ -224,20 +153,20 @@ class SidebarMixin(YTMHostBase):
                 return
             if action_id in ("play_all", "shuffle_play"):
                 pid = item.get("playlistId") or item.get("browseId")
-                if pid:
-                    self.run_worker(self.navigate_to("library", playlist_id=pid))
-            elif action_id == "add_to_queue":
-                pid = item.get("playlistId") or item.get("browseId")
-                if pid:
-                    self.run_worker(self._add_playlist_to_queue(pid))
-                else:
-                    self.notify("No playlist ID found", severity="error", timeout=2)
-            elif action_id == "start_radio":
-                pid = item.get("playlistId") or item.get("browseId")
-                if pid:
-                    self.run_worker(self._start_playlist_radio(item))
-                else:
-                    self.notify("No playlist ID found", severity="error", timeout=2)
+
+                async def _play_and_navigate() -> None:
+                    prev = self.queue.current_track
+                    await self._dispatch_entity_action(action_id, item, "playlist")
+                    if (
+                        self.queue.current_track is not None
+                        and self.queue.current_track is not prev
+                    ):
+                        self._active_library_playlist_id = pid
+                        await self.navigate_to("queue")
+
+                self.run_worker(_play_and_navigate())
+            elif action_id == "edit":
+                self._prompt_edit_playlist(item)
             elif action_id == "delete":
                 from ytm_player.ui.popups.confirm_popup import ConfirmPopup
 
@@ -259,74 +188,151 @@ class SidebarMixin(YTMHostBase):
                     ps.copy_item_link(item)
                 except Exception:
                     pass
+            else:
+                self.run_worker(self._dispatch_entity_action(action_id, item, "playlist"))
 
         self.push_screen(ActionsPopup(item, item_type="playlist"), _handle_action)
 
     def _prompt_create_playlist(self) -> None:
-        """Show an input screen to create a new playlist."""
-        from ytm_player.ui.popups.input_popup import InputPopup
+        """Show the create-playlist popup (name, description, privacy)."""
+        from ytm_player.ui.popups.create_playlist_popup import CreatePlaylistPopup
 
-        def _on_name(name: str | None) -> None:
-            if name and name.strip():
-                self.run_worker(self._create_sidebar_playlist(name.strip()))
+        def _on_result(result: tuple[str, str, str] | None) -> None:
+            if result:
+                name, description, privacy = result
+                self.run_worker(self._create_sidebar_playlist(name, description, privacy))
 
-        self.push_screen(InputPopup("New Playlist", placeholder="Playlist name..."), _on_name)
+        self.push_screen(CreatePlaylistPopup(), _on_result)
 
-    async def _create_sidebar_playlist(self, name: str) -> None:
+    def _prompt_edit_playlist(self, item: dict) -> None:
+        """Fetch playlist detail then show the edit popup pre-filled."""
+        self.run_worker(self._fetch_playlist_meta_for_edit(item))
+
+    async def _fetch_playlist_meta_for_edit(self, item: dict) -> None:
+        """Fetch description/privacy from the API, then open the edit popup."""
+        current_name = item.get("title", "")
+        current_description = ""
+        current_privacy = "PRIVATE"
+
+        playlist_id = item.get("playlistId") or item.get("browseId", "")
+        if playlist_id and self.ytmusic:
+            try:
+                data = await self.ytmusic.get_playlist(strip_vl_prefix(playlist_id), limit=1)
+                current_description = data.get("description") or ""
+                current_privacy = data.get("privacy", "PRIVATE")
+            except Exception:
+                logger.exception("Failed to fetch playlist detail for edit popup")
+                self.notify("Failed to load playlist details", severity="error", timeout=3)
+                return
+
+        self._open_edit_popup(item, current_name, current_description, current_privacy)
+
+    def _open_edit_popup(self, item: dict, name: str, description: str, privacy: str) -> None:
+        """Push the edit popup pre-filled with the given metadata."""
+        from ytm_player.ui.popups.create_playlist_popup import CreatePlaylistPopup
+
+        def _on_result(result: tuple[str, str, str] | None) -> None:
+            if result:
+                new_name, new_description, new_privacy = result
+                self.run_worker(
+                    self._edit_sidebar_playlist(item, new_name, new_description, new_privacy)
+                )
+
+        self.push_screen(
+            CreatePlaylistPopup(
+                initial_name=name,
+                initial_description=description,
+                initial_privacy=privacy,
+                edit_mode=True,
+            ),
+            _on_result,
+        )
+
+    async def _create_sidebar_playlist(
+        self, name: str, description: str = "", privacy: str = "PRIVATE"
+    ) -> None:
         """Create a new playlist and refresh the sidebar."""
         if not self.ytmusic:
             return
         try:
-            playlist_id = await self.ytmusic.create_playlist(name)
+            playlist_id = await self.ytmusic.create_playlist(name, description, privacy=privacy)
             if playlist_id:
                 self.notify(f"Created '{name}'", timeout=2)
                 ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
                 panel = ps.query_one("#ps-playlists", LibraryPanel)
-                panel.prepend_item({"playlistId": playlist_id, "title": name})
+                panel.prepend_item({"playlistId": playlist_id, "title": name, "count": 0})
             else:
                 self.notify("Failed to create playlist", severity="error", timeout=3)
         except Exception:
             logger.exception("Failed to create playlist %r", name)
             self.notify("Failed to create playlist", severity="error", timeout=3)
 
-    async def _start_playlist_radio(self, item: dict) -> None:
-        """Start radio seeded from a sidebar playlist."""
-        from ytm_player.utils.formatting import normalize_tracks
-
-        playlist_id = item.get("playlistId") or item.get("browseId")
-        if not playlist_id or not self.ytmusic:
+    async def _edit_sidebar_playlist(
+        self, item: dict, name: str, description: str, privacy: str
+    ) -> None:
+        """Call the API to edit playlist metadata, then update the UI if successful."""
+        if not self.ytmusic:
             return
-
-        playlist_name = item.get("title", "playlist")
-        self.notify(f"Starting radio from {playlist_name}...", timeout=3)
+        playlist_id = item.get("playlistId") or item.get("browseId", "")
+        if not playlist_id:
+            self.notify("Cannot determine playlist ID", severity="error", timeout=3)
+            return
+        raw_id = strip_vl_prefix(playlist_id)
         try:
-            radio_tracks = normalize_tracks(await self.ytmusic.get_playlist_radio(playlist_id))
-        except Exception:
-            logger.exception("Failed to start playlist radio for %r", playlist_id)
-            self.notify("Failed to start radio", severity="error")
-            return
+            result = await self.ytmusic.edit_playlist(
+                raw_id, title=name, description=description, privacy_status=privacy
+            )
+            if result != "success":
+                from ytm_player.services.ytmusic import mutation_failure_suffix
 
-        if radio_tracks:
-            self.queue.clear()
-            self.queue.set_radio_tracks(radio_tracks)
-            self.queue.radio_seeds = [{"title": f"{playlist_name} Playlist"}]
-            # Shuffle lock — radio off a playlist still inherits that
-            # playlist's identity, so honor its lock.
-            self.queue.set_context(playlist_id)
-            if self.shuffle_prefs.get(playlist_id) and not self.queue.shuffle_enabled:
-                self.queue.toggle_shuffle()
-            try:
-                bar = self.query_one("#playback-bar")
-                bar.update_shuffle(self.queue.shuffle_enabled)  # type: ignore[attr-defined]
-                bar.refresh_shuffle_lock_state()  # type: ignore[attr-defined]
-            except Exception:
-                pass
-            first = self.queue.next_track()
-            if first:
-                await self.play_track(first)
-                self.notify(f"Playing: Radio from {playlist_name}", timeout=4)
-        else:
-            self.notify("No radio tracks found", severity="warning", timeout=3)
+                suffix = mutation_failure_suffix(result)
+                self.notify(f"Failed to edit playlist - {suffix}", severity="error", timeout=4)
+                return
+            self.notify(f"Updated '{name}'", timeout=2)
+            await self._apply_playlist_edit_to_ui(
+                item, playlist_id, raw_id, name, description, privacy
+            )
+        except Exception:
+            logger.exception("Failed to edit playlist %r", playlist_id)
+            self.notify("Failed to edit playlist", severity="error", timeout=3)
+
+    async def _apply_playlist_edit_to_ui(
+        self,
+        item: dict,
+        playlist_id: str,
+        raw_id: str,
+        name: str,
+        description: str,
+        privacy: str,
+    ) -> None:
+        """Update the sidebar panel and library header to reflect a successful edit."""
+        try:
+            ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
+            panel = ps.query_one("#ps-playlists", LibraryPanel)
+            for stored in panel._items:
+                pid = stored.get("playlistId") or stored.get("browseId", "")
+                if pid in (playlist_id, raw_id, f"VL{raw_id}"):
+                    stored["title"] = name
+                    stored["description"] = description
+                    stored["privacy"] = privacy
+                    break
+            panel._rebuild_list(panel._filtered_items)
+        except Exception:
+            logger.exception("Failed to update sidebar panel after edit")
+
+        try:
+            from ytm_player.ui.pages.library import LibraryPage
+
+            active_pid = self._current_page_kwargs.get("playlist_id", "")
+            if self._current_page == "library" and active_pid in (
+                playlist_id,
+                raw_id,
+                f"VL{raw_id}",
+            ):
+                library = self.query_one(LibraryPage)
+                await library.refresh_header(name, description, privacy)
+        except Exception:
+            logger.exception("Failed to refresh library header after playlist edit")
 
     async def _delete_sidebar_playlist(self, item: dict) -> None:
         """Delete or remove a playlist and refresh the sidebar."""
@@ -337,7 +343,7 @@ class SidebarMixin(YTMHostBase):
         if not playlist_id:
             self.notify("Cannot determine playlist ID", severity="error", timeout=3)
             return
-        raw_id = playlist_id[2:] if playlist_id.startswith("VL") else playlist_id
+        raw_id = strip_vl_prefix(playlist_id)
         from ytm_player.services.ytmusic import mutation_failure_suffix
 
         try:
@@ -350,6 +356,14 @@ class SidebarMixin(YTMHostBase):
                 self.notify(f"Removed '{title}'", timeout=2)
                 ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
                 ps.query_one("#ps-playlists", LibraryPanel).remove_item(raw_id)
+                # If the deleted playlist is currently open, navigate to plain library.
+                active_pid = self._current_page_kwargs.get("playlist_id", "")
+                if self._current_page == "library" and active_pid in (
+                    playlist_id,
+                    raw_id,
+                    f"VL{raw_id}",
+                ):
+                    await self.navigate_to("library", playlist_id=None)
             else:
                 suffix = mutation_failure_suffix(result)
                 self.notify(f"Failed to remove playlist — {suffix}", severity="error", timeout=4)

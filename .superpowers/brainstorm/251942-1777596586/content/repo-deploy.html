@@ -1,0 +1,122 @@
+<h2>Section 7 of 7 — Repo structure + deploy</h2>
+<p class="subtitle">Where everything lives, what runs on what trigger, what's automated.</p>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.25rem">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">private repo: <span style="color:#fff">github.com/peternaame-boop/ytm-player-site</span></div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;line-height:1.7;color:#aaa">
+    <pre style="margin:0;color:#aaa;line-height:1.7">ytm-player-site/
+├── astro.config.mjs            <span style="color:#666">// output:'static', integrations: preact, sitemap, mdx, pagefind</span>
+├── package.json                <span style="color:#666">// astro, preact, pagefind, shiki, satori, @astrojs/sitemap</span>
+├── tsconfig.json
+├── public/
+│   ├── media/
+│   │   ├── hero.av1.mp4
+│   │   ├── hero.h264.mp4
+│   │   └── hero-poster.avif
+│   ├── og/                    <span style="color:#666">// auto-gen at build, gitignored</span>
+│   ├── _headers               <span style="color:#666">// Cloudflare cache control</span>
+│   ├── _redirects             <span style="color:#666">// vanity paths</span>
+│   ├── robots.txt
+│   └── favicon.svg
+├── src/
+│   ├── content-config.ts      <span style="color:#666">// route ↔ source-md mapping, titles, OG overrides</span>
+│   ├── lib/
+│   │   ├── fetch-docs.ts      <span style="color:#666">// build-time fetch from public ytm-player repo @ tag</span>
+│   │   ├── render-md.ts       <span style="color:#666">// remark + rehype + shiki</span>
+│   │   ├── changelog-split.ts <span style="color:#666">// CHANGELOG.md → per-version pages</span>
+│   │   └── og-gen.ts          <span style="color:#666">// satori per-version OG images</span>
+│   ├── layouts/
+│   │   ├── BaseLayout.astro   <span style="color:#666">// topbar, footer, head meta, CF analytics tag</span>
+│   │   ├── DocsLayout.astro
+│   │   ├── ChangelogLayout.astro
+│   │   ├── InstallLayout.astro
+│   │   ├── ComparisonLayout.astro
+│   │   └── LegalLayout.astro
+│   ├── components/            <span style="color:#666">// see section 5 inventory</span>
+│   ├── islands/               <span style="color:#666">// preact components, hydrated</span>
+│   │   ├── SearchModal.tsx
+│   │   ├── OSTabSelector.tsx
+│   │   ├── CopyButton.tsx
+│   │   ├── KeyFilter.tsx
+│   │   ├── ThemePlayground.tsx
+│   │   ├── ChangelogAccordion.tsx
+│   │   └── ScrollProgress.tsx
+│   ├── pages/
+│   │   ├── index.astro        <span style="color:#666">// homepage with tabbed docs</span>
+│   │   ├── 404.astro          <span style="color:#666">// "command not found" page</span>
+│   │   ├── docs/[topic].astro <span style="color:#666">// getStaticPaths from content-config</span>
+│   │   ├── install/[platform].astro
+│   │   ├── changelog/index.astro
+│   │   ├── changelog/[version].astro
+│   │   ├── changelog/rss.xml.ts
+│   │   ├── vs/[other].astro
+│   │   ├── privacy.astro
+│   │   ├── cookies.astro
+│   │   ├── imprint.astro
+│   │   ├── security.astro
+│   │   └── license.astro
+│   └── styles/
+│       └── global.css         <span style="color:#666">// design tokens, base typography</span>
+├── .github/
+│   └── workflows/
+│       └── deploy.yml         <span style="color:#666">// optional fallback (CF Pages auto-builds on push)</span>
+├── .env.example               <span style="color:#666">// PINNED_TAG=v1.9.2, CF_ANALYTICS_TOKEN=...</span>
+├── .gitignore
+└── README.md                  <span style="color:#666">// build/dev/deploy notes for your future self</span></pre>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
+  <div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">_headers (cache control)</div>
+    <pre style="margin:0;font-family:'JetBrains Mono',monospace;font-size:0.72rem;line-height:1.55;color:#aaa">/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/media/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  Cache-Control: public, max-age=300, must-revalidate
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin</pre>
+  </div>
+
+  <div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">_redirects (vanity paths)</div>
+    <pre style="margin:0;font-family:'JetBrains Mono',monospace;font-size:0.72rem;line-height:1.55;color:#aaa">/install         /install/  301
+/docs            /#docs     301
+/changelog/latest /changelog/v1.9.2  302
+/github          https://github.com/peternaame-boop/ytm-player  301</pre>
+  </div>
+</div>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.25rem">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">deploy automation</div>
+  <div style="font-size:0.85rem;color:#aaa;line-height:1.7">
+    <strong style="color:#fff">Cloudflare Pages</strong> connected to <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px">ytm-player-site</code> private repo.<br>
+    Build cmd: <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px">pnpm install &amp;&amp; pnpm build &amp;&amp; pnpm pagefind</code><br>
+    Output dir: <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px">dist/</code><br>
+    Production branch: <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px">master</code> · preview branches: any other branch builds to a *.pages.dev preview URL<br><br>
+
+    <strong style="color:#fff">Cross-repo trigger</strong> — a tiny GitHub Action lives on the public ytm-player repo:
+    <pre style="margin:0.5rem 0 0;font-family:'JetBrains Mono',monospace;font-size:0.72rem;line-height:1.55;color:#aaa">on:
+  push:
+    branches: [master]
+    paths: ['docs/**', 'CHANGELOG.md']
+  release:
+    types: [published]
+
+steps:
+  - run: curl -X POST $CF_DEPLOY_HOOK_URL</pre>
+    On tag push: bump <code style="background:#1a1a1a;padding:0.1rem 0.3rem;color:#ff4e45;border-radius:3px">PINNED_TAG</code> via a small commit to the website repo + trigger build.<br>
+    On docs push between tags: trigger build with current tag (docs may be ahead of code).
+  </div>
+</div>
+
+<div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.25rem">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:#ff4e45;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.85rem">stack summary</div>
+  <div style="font-size:0.85rem;color:#aaa;line-height:1.7">
+    <strong style="color:#fff">Astro 5</strong> static export · <strong style="color:#fff">Preact</strong> for islands · <strong style="color:#fff">Pagefind</strong> for Cmd+K search · <strong style="color:#fff">Shiki</strong> for code highlighting · <strong style="color:#fff">@astrojs/sitemap</strong> for sitemap.xml · <strong style="color:#fff">satori</strong> for OG image generation · <strong style="color:#fff">remark-gfm + rehype-stringify</strong> for markdown · <strong style="color:#fff">pnpm</strong> for package management · <strong style="color:#fff">Cloudflare Pages</strong> for hosting · <strong style="color:#fff">Cloudflare Web Analytics</strong> (cookieless) for traffic stats.<br><br>
+    No CMS, no database, no serverless functions, no cookies of our own. ~52 static HTML files when built. Build time: ~30-45s.
+  </div>
+</div>

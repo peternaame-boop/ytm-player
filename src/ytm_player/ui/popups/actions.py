@@ -24,6 +24,7 @@ TRACK_ACTIONS: list[tuple[str, str]] = [
     ("go_to_artist", "Go to Artist"),
     ("go_to_album", "Go to Album"),
     ("add_to_playlist", "Add to Playlist"),
+    ("remove_from_playlist", "Remove from Playlist"),
     ("toggle_like", "Like"),
     ("copy_link", "Copy Link"),
 ]
@@ -38,10 +39,10 @@ ALBUM_ACTIONS: list[tuple[str, str]] = [
 ]
 
 ARTIST_ACTIONS: list[tuple[str, str]] = [
+    ("go_to_artist", "Go to Artist"),
     ("play_top_songs", "Play Top Songs"),
     ("start_radio", "Start Radio"),
     ("toggle_subscribe", "Subscribe"),
-    ("view_albums", "View Albums"),
     ("view_similar", "View Similar Artists"),
     ("copy_link", "Copy Link"),
 ]
@@ -52,6 +53,7 @@ PLAYLIST_ACTIONS: list[tuple[str, str]] = [
     ("add_to_queue", "Add to Queue"),
     ("start_radio", "Start Radio"),
     ("copy_link", "Copy Link"),
+    ("edit", "Edit Playlist"),
     ("delete", "Delete Playlist"),
 ]
 
@@ -68,11 +70,15 @@ def _build_actions(
     item_type: str,
     *,
     in_queue: bool = False,
+    in_playlist: bool = False,
+    source: str = "default",
 ) -> list[tuple[str, str]]:
     """Return the action list for *item_type*, adjusting labels dynamically.
 
     *in_queue* signals that the track is currently in the playback queue —
     "Add to Queue" gets swapped for "Remove from Queue" in that case.
+    *in_playlist* signals the track is being viewed inside a playlist —
+    "Remove from Playlist" is shown in that case.
     """
     base = list(_ACTIONS_BY_TYPE.get(item_type, TRACK_ACTIONS))
     result: list[tuple[str, str]] = []
@@ -82,6 +88,10 @@ def _build_actions(
         if action_id == "add_to_queue" and in_queue:
             action_id = "remove_from_queue"
             label = "Remove from Queue"
+
+        # Only show "Remove from Playlist" when inside a playlist view.
+        if action_id == "remove_from_playlist" and not in_playlist:
+            continue
 
         # Swap "Like" / "Unlike" depending on the item's current rating.
         if action_id == "toggle_like":
@@ -104,6 +114,10 @@ def _build_actions(
             album = item.get("album")
             if not item.get("album_id") and not (isinstance(album, dict) and album.get("id")):
                 continue
+
+        # Hide "Delete Playlist" in search results (no ownership data available).
+        if action_id == "delete" and source == "search" and item_type == "playlist":
+            continue
 
         result.append((action_id, label))
 
@@ -181,11 +195,16 @@ class ActionsPopup(ModalScreen[str | None]):
         item_type: str = "track",
         *,
         in_queue: bool = False,
+        in_playlist: bool = False,
+        actions: list[tuple[str, str]] | None = None,
+        source: str = "default",
     ) -> None:
         super().__init__()
         self.item = item
         self.item_type = item_type
-        self._actions = _build_actions(item, item_type, in_queue=in_queue)
+        self._actions = actions or _build_actions(
+            item, item_type, in_queue=in_queue, in_playlist=in_playlist, source=source
+        )
 
     @property
     def _title_text(self) -> str:

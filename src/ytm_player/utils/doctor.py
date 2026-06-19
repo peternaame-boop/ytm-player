@@ -53,6 +53,24 @@ def _mpv_version() -> str:
         return "mpv: failed to execute"
 
 
+def _libmpv_status() -> str:
+    """Report whether the libmpv shared library is loadable.
+
+    The mpv CLI being on PATH does not imply libmpv is discoverable —
+    Homebrew installs (macOS and Linux) put the library where
+    ctypes.util.find_library can't see it from a non-brew Python
+    (#90, #101, #104). Importing our player module exercises the full
+    discovery chain including the brew-prefix fallback.
+    """
+    try:
+        from ytm_player.services.player import _IMPORT_ERROR_MSG  # type: ignore[attr-defined]
+
+        first = str(_IMPORT_ERROR_MSG).splitlines()[-1]
+        return f"libmpv: NOT LOADABLE ({first.strip()})"
+    except ImportError:
+        return "libmpv: OK"
+
+
 def _running_status() -> str:
     """Best-effort check whether a ytm TUI process is currently running.
 
@@ -156,6 +174,7 @@ def gather_diagnostics() -> str:
     sections.append(f"OS:      {platform.system()} {platform.release()}")
     sections.append(f"Machine: {platform.machine()}")
     sections.append(_mpv_version())
+    sections.append(_libmpv_status())
 
     sections.append("")
     sections.append("=== Paths ===")

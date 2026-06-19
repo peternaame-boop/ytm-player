@@ -6,6 +6,7 @@ import pytest
 
 from ytm_player.utils.formatting import (
     VALID_VIDEO_ID,
+    build_playlist_subtitle,
     clean_shelf_title,
     extract_artist,
     extract_duration,
@@ -16,6 +17,7 @@ from ytm_player.utils.formatting import (
     get_video_id,
     normalize_tracks,
     sanitize_title_for_lyric_lookup,
+    strip_vl_prefix,
     truncate,
 )
 
@@ -317,6 +319,14 @@ class TestNormalizeTracks:
         assert len(result) == 3
         assert [t["video_id"] for t in result] == ["a", "b", "c"]
 
+    def test_set_video_id_preserved(self):
+        result = normalize_tracks([{"videoId": "x", "setVideoId": "sv123"}])
+        assert result[0]["setVideoId"] == "sv123"
+
+    def test_set_video_id_none_when_missing(self):
+        result = normalize_tracks([{"videoId": "x"}])
+        assert result[0]["setVideoId"] is None
+
 
 # ── format_ago ───────────────────────────────────────────────────────
 
@@ -574,6 +584,55 @@ class TestSanitizeTitleForLyricLookup:
         assert (
             sanitize_title_for_lyric_lookup("Acoustic Sessions Vol 1") == "Acoustic Sessions Vol 1"
         )
+
+
+# ── strip_vl_prefix ──────────────────────────────────────────────────
+
+
+class TestStripVlPrefix:
+    def test_strips_vl_prefix(self):
+        assert strip_vl_prefix("VLPLabc123") == "PLabc123"
+
+    def test_no_prefix_unchanged(self):
+        assert strip_vl_prefix("PLabc123") == "PLabc123"
+
+    def test_empty_string(self):
+        assert strip_vl_prefix("") == ""
+
+    def test_short_string_with_vl(self):
+        assert strip_vl_prefix("VLx") == "x"
+
+
+# ── build_playlist_subtitle ──────────────────────────────────────────
+
+
+class TestBuildPlaylistSubtitle:
+    def test_owner_and_count_only(self):
+        assert build_playlist_subtitle("Alice", "", None, 5) == "Alice · 5 tracks"
+
+    def test_single_track(self):
+        assert build_playlist_subtitle("Bob", "", None, 1) == "Bob · 1 track"
+
+    def test_includes_privacy(self):
+        assert build_playlist_subtitle("Alice", "PUBLIC", None, 5) == "Alice · Public · 5 tracks"
+
+    def test_includes_year(self):
+        assert build_playlist_subtitle("Alice", "", 2023, 5) == "Alice · 2023 · 5 tracks"
+
+    def test_full_subtitle(self):
+        assert (
+            build_playlist_subtitle("Alice", "PRIVATE", 2023, 5)
+            == "Alice · Private · 2023 · 5 tracks"
+        )
+
+    def test_omits_empty_privacy_and_year(self):
+        assert build_playlist_subtitle("Alice", "", "", 5) == "Alice · 5 tracks"
+
+    def test_year_as_int(self):
+        assert build_playlist_subtitle("Alice", "", 2023, 1) == "Alice · 2023 · 1 track"
+
+    def test_year_as_string(self):
+        assert build_playlist_subtitle("Alice", "", "2023", 1) == "Alice · 2023 · 1 track"
 
 
 # ── clean_shelf_title ───────────────────────────────────────────────

@@ -36,6 +36,7 @@ class TestPhase2Fields:
     def test_discord_defaults(self):
         d = DiscordSettings()
         assert d.enabled is False
+        assert d.client_id == ""
 
     def test_lastfm_defaults(self):
         lf = LastFMSettings()
@@ -65,10 +66,12 @@ class TestPhase2Fields:
         path = tmp_config_dir / "config.toml"
         s = Settings()
         s.discord.enabled = True
+        s.discord.client_id = "1234567890"
         s.save(path)
 
         loaded = Settings.load(path)
         assert loaded.discord.enabled is True
+        assert loaded.discord.client_id == "1234567890"
 
 
 class TestLyricsSettings:

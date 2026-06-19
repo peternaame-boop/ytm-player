@@ -62,7 +62,7 @@ src/ytm_player/
 | [aiosqlite](https://github.com/omnilib/aiosqlite) | Async SQLite for history + cache index |
 | [click](https://click.palletsprojects.com/) | CLI framework |
 | [Pillow](https://python-pillow.org/) | Album art rendering (downscaled to terminal half-blocks) |
-| [dbus-next](https://github.com/altdesktop/python-dbus-next) | MPRIS D-Bus (Linux) — optional |
+| [dbus-fast](https://github.com/Bluetooth-Devices/dbus-fast) | MPRIS D-Bus (Linux) — optional |
 | [pypresence](https://github.com/qwertyquerty/pypresence) | Discord Rich Presence — optional |
 | [pylast](https://github.com/pylast/pylast) | Last.fm scrobbling — optional |
 

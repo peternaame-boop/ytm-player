@@ -58,12 +58,14 @@ _EXPECTED_MUTATION_EXCEPTIONS = (
 # - "auth_expired":  HTTP 401/403 from the server (cookies/session stale)
 # - "network":       requests.RequestException or asyncio.TimeoutError
 # - "server_error":  any other YTMusicServerError (4xx/5xx other than auth)
+# - "duplicate":     track already exists in the playlist (add_playlist_items only)
 MutationResult = Literal[
     "success",
     "auth_required",
     "auth_expired",
     "network",
     "server_error",
+    "duplicate",
 ]
 
 # ytmusicapi formats _send_request errors as:
@@ -114,6 +116,7 @@ _MUTATION_TOAST_SUFFIX: dict[MutationResult, str] = {
     "auth_expired": "session expired, run `ytm setup` to sign in again",
     "network": "check your connection",
     "server_error": "YouTube Music had a problem, try again",
+    "duplicate": "track already in playlist",
 }
 
 
@@ -152,6 +155,10 @@ class YTMusicService:
         self._order_lock = asyncio.Lock()
         self._last_discovery_source: int = 0
         self._last_chart_shelf: int = 0
+        # videoId -> server-assigned setVideoId from the most recent successful
+        # add_playlist_items() call. Lets callers stamp freshly-added rows with
+        # the setVideoId they need for later removal, without a reload.
+        self.last_added_set_video_ids: dict[str, str] = {}
 
     @property
     def client(self) -> YTMusic:
@@ -257,7 +264,7 @@ class YTMusicService:
             logger.exception("get_library_albums failed")
             return []
 
-    async def get_library_artists(self, limit: int = 25) -> list[dict[str, Any]]:
+    async def get_library_artists(self, limit: int | None = 25) -> list[dict[str, Any]]:
         """Return the user's subscribed/followed artists."""
         try:
             return await self._call(self.client.get_library_subscriptions, limit=limit)
@@ -454,6 +461,8 @@ class YTMusicService:
         video_id: str | None = None,
         playlist_id: str | None = None,
         limit: int = 25,
+        *,
+        radio: bool = False,
     ) -> list[dict[str, Any]]:
         """Return the "Up Next" queue for a song or the tracks of a playlist.
 
@@ -467,6 +476,9 @@ class YTMusicService:
           (``parse_audio_playlist`` dereferences ``tracks[0]["album"]``
           which is None, raising TypeError).
 
+        When *radio* is True, the endpoint returns radio-shuffled results
+        instead of a fixed-order queue (matches ``get_radio``'s usage).
+
         Returns:
             List of track dicts.
         """
@@ -478,6 +490,8 @@ class YTMusicService:
                 kwargs["videoId"] = video_id
             if playlist_id is not None:
                 kwargs["playlistId"] = playlist_id
+            if radio:
+                kwargs["radio"] = True
             result = await self._call(self.client.get_watch_playlist, **kwargs)
             return result.get("tracks", []) if isinstance(result, dict) else []
         except Exception:
@@ -717,16 +731,60 @@ class YTMusicService:
             logger.exception("rate_song failed for %r rating=%r (kind=%s)", video_id, rating, kind)
             return kind
 
-    async def add_playlist_items(self, playlist_id: str, video_ids: list[str]) -> MutationResult:
+    async def add_playlist_items(
+        self, playlist_id: str, video_ids: list[str], duplicates: bool = False
+    ) -> MutationResult:
         """Add songs to an existing playlist.
 
+        Args:
+            duplicates: When ``True`` the tracks are added even if they already
+                exist in the playlist (mirrors the ytmusicapi ``duplicates``
+                flag).  When ``False`` (default) the server rejects the request
+                and this method returns ``"duplicate"``.
+
         Returns:
-            ``"success"`` if the server accepted the add, otherwise one of
-            ``"auth_required"``, ``"auth_expired"``, ``"network"``,
-            ``"server_error"``. Unexpected exceptions propagate.
+            ``"success"`` if the server accepted the add, ``"duplicate"`` if
+            one or more tracks already exist and *duplicates* is ``False``,
+            or one of ``"auth_required"``, ``"auth_expired"``, ``"network"``,
+            ``"server_error"`` on failure.
         """
+        self.last_added_set_video_ids = {}
         try:
-            await self._call(self.client.add_playlist_items, playlist_id, video_ids)
+            result = await self._call(
+                self.client.add_playlist_items,
+                playlist_id,
+                video_ids,
+                duplicates=duplicates,
+            )
+            # ytmusicapi returns a dict with "status": "STATUS_SUCCEEDED" on
+            # success.  When a duplicate is detected (and duplicates=False) the
+            # server returns HTTP 200 with "status": "STATUS_FAILED" — no
+            # exception is raised (genuine API errors raise YTMusicServerError
+            # and are handled below).  Any other non-success status is
+            # unexpected and classified as a server error so the duplicate
+            # confirm-prompt only fires for real duplicates.
+            if isinstance(result, dict):
+                status = result.get("status", "")
+                if "SUCCEEDED" in status:
+                    # Capture the videoId -> setVideoId map so callers can make
+                    # the just-added rows immediately removable.
+                    self.last_added_set_video_ids = {
+                        r["videoId"]: r["setVideoId"]
+                        for r in result.get("playlistEditResults", [])
+                        if isinstance(r, dict) and r.get("videoId") and r.get("setVideoId")
+                    }
+                    return "success"
+                if "FAILED" in status:
+                    logger.debug(
+                        "add_playlist_items duplicate detected for playlist=%r", playlist_id
+                    )
+                    return "duplicate"
+                logger.warning(
+                    "add_playlist_items unexpected status=%r for playlist=%r",
+                    status,
+                    playlist_id,
+                )
+                return "server_error"
             return "success"
         except _EXPECTED_MUTATION_EXCEPTIONS as exc:
             kind = _classify_mutation_failure(exc)
@@ -750,6 +808,39 @@ class YTMusicService:
         except Exception:
             logger.debug("create_playlist failed for title=%r", title)
             return ""
+
+    async def edit_playlist(
+        self,
+        playlist_id: str,
+        title: str | None = None,
+        description: str | None = None,
+        privacy_status: str | None = None,
+    ) -> MutationResult:
+        """Edit an existing playlist's metadata.
+
+        Returns:
+            ``"success"`` if the server accepted the edit, otherwise one of
+            ``"auth_required"``, ``"auth_expired"``, ``"network"``,
+            ``"server_error"``. Unexpected exceptions propagate.
+        """
+        kwargs: dict[str, Any] = {}
+        if title is not None:
+            kwargs["title"] = title
+        if description is not None:
+            kwargs["description"] = description
+        if privacy_status is not None:
+            kwargs["privacyStatus"] = privacy_status
+        try:
+            result = await self._call(self.client.edit_playlist, playlist_id, **kwargs)
+            succeeded = result == "STATUS_SUCCEEDED" if isinstance(result, str) else bool(result)
+            if not succeeded:
+                logger.warning("edit_playlist returned non-success for %r: %r", playlist_id, result)
+                return "server_error"
+            return "success"
+        except _EXPECTED_MUTATION_EXCEPTIONS as exc:
+            kind = _classify_mutation_failure(exc)
+            logger.exception("edit_playlist failed for %r (kind=%s)", playlist_id, kind)
+            return kind
 
     async def delete_playlist(self, playlist_id: str) -> MutationResult:
         """Delete a playlist by its ID.
@@ -810,6 +901,22 @@ class YTMusicService:
         except _EXPECTED_MUTATION_EXCEPTIONS as exc:
             kind = _classify_mutation_failure(exc)
             logger.exception("remove_album_from_library failed for %r (kind=%s)", playlist_id, kind)
+            return kind
+
+    async def subscribe_artist(self, channel_id: str) -> MutationResult:
+        """Subscribe to an artist (add to library).
+
+        Returns:
+            ``"success"`` if the server accepted the subscribe, otherwise
+            one of ``"auth_required"``, ``"auth_expired"``, ``"network"``,
+            ``"server_error"``. Unexpected exceptions propagate.
+        """
+        try:
+            await self._call(self.client.subscribe_artists, [channel_id])
+            return "success"
+        except _EXPECTED_MUTATION_EXCEPTIONS as exc:
+            kind = _classify_mutation_failure(exc)
+            logger.exception("subscribe_artist failed for %r (kind=%s)", channel_id, kind)
             return kind
 
     async def unsubscribe_artist(self, channel_id: str) -> MutationResult:

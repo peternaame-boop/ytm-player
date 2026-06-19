@@ -52,6 +52,42 @@ if sys.platform == "win32":
                 break
 
 
+# Homebrew installs libmpv outside ctypes.util.find_library's search
+# scope: /opt/homebrew/lib on Apple Silicon macOS isn't in the default
+# dyld fallback path, and /home/linuxbrew/.linuxbrew/lib isn't in
+# ldconfig's cache. Pythons not installed via brew (uv tool, pipx,
+# distro python) therefore can't find libmpv even though `mpv` the CLI
+# is on PATH — `ytm doctor` says mpv exists while Player() fails
+# (#90, #101, #104). Locate the library in known brew prefixes and, if
+# found, point find_library at it for the duration of the mpv import.
+_BREW_LIB_DIRS = (
+    Path("/opt/homebrew/lib"),  # macOS Apple Silicon
+    Path("/usr/local/lib"),  # macOS Intel
+    Path("/home/linuxbrew/.linuxbrew/lib"),  # Linuxbrew (Bazzite etc.)
+    Path.home() / ".linuxbrew" / "lib",
+)
+
+
+def _find_brew_libmpv() -> str | None:
+    """Return a libmpv path from a known Homebrew prefix, or None."""
+    patterns = (
+        ("libmpv.dylib", "libmpv.*.dylib")
+        if sys.platform == "darwin"
+        else ("libmpv.so", "libmpv.so.*")
+    )
+    for lib_dir in _BREW_LIB_DIRS:
+        try:
+            if not lib_dir.is_dir():
+                continue
+            for pattern in patterns:
+                hits = sorted(lib_dir.glob(pattern))
+                if hits:
+                    return str(hits[0])
+        except OSError:
+            continue
+    return None
+
+
 # python-mpv calls ctypes.find_library("mpv") at import time. If libmpv
 # isn't discoverable (no system mpv, or a CI-runner environment quirk),
 # that raises OSError before any of OUR code runs — meaning the module
@@ -63,8 +99,30 @@ class _MpvUnavailableError(RuntimeError):
     """Raised when python-mpv tried to load libmpv at module import and failed."""
 
 
+_brew_libmpv: str | None = None
+if sys.platform != "win32":
+    import ctypes.util as _ctypes_util
+
+    if _ctypes_util.find_library("mpv") is None:
+        _brew_libmpv = _find_brew_libmpv()
+
 try:
-    import mpv  # type: ignore[import-not-found]
+    if _brew_libmpv is not None:
+        # Patch find_library only for the duration of the mpv import.
+        _orig_find_library = _ctypes_util.find_library
+
+        def _find_library_with_brew_mpv(name: str) -> str | None:
+            if name == "mpv":
+                return _brew_libmpv
+            return _orig_find_library(name)
+
+        _ctypes_util.find_library = _find_library_with_brew_mpv
+        try:
+            import mpv  # type: ignore[import-not-found]
+        finally:
+            _ctypes_util.find_library = _orig_find_library
+    else:
+        import mpv  # type: ignore[import-not-found]
 except OSError as _exc:
     _IMPORT_ERROR_MSG = (
         "Cannot load libmpv. Install mpv:\n"

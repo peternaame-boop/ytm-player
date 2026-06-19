@@ -576,8 +576,9 @@ class YTMPlayerApp(
         # Restore session state (volume, shuffle, repeat) from last session.
         await self._restore_session_state()
 
-        # Start MPRIS if enabled (Linux only).
-        if self.settings.mpris.enabled:
+        # Start MPRIS if enabled (Linux only — dbus-fast is Linux-only, and
+        # macOS/Windows have their own media integrations below).
+        if sys.platform == "linux" and self.settings.mpris.enabled:
             self.mpris = MPRISService()
             callbacks = self._build_mpris_callbacks()
             await self.mpris.start(callbacks)
@@ -607,7 +608,7 @@ class YTMPlayerApp(
 
         # Start Discord Rich Presence if enabled.
         if self.settings.discord.enabled:
-            self.discord = DiscordRPC()
+            self.discord = DiscordRPC(client_id=self.settings.discord.client_id)
             await self.discord.connect()
 
         # Start Last.fm scrobbling if enabled.

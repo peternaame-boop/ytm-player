@@ -14,6 +14,8 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 from textual.worker import Worker, WorkerState
 
 from ytm_player.config.paths import RECENT_PLAYLISTS_FILE
+from ytm_player.ui.popups.confirm_popup import ConfirmPopup
+from ytm_player.ui.popups.create_playlist_popup import CreatePlaylistPopup
 
 if TYPE_CHECKING:
     from ytm_player.app._base import YTMHostBase
@@ -138,21 +140,13 @@ class PlaylistPicker(ModalScreen[str | None]):
         background: $primary 40%;
     }
 
-    PlaylistPicker #new-playlist-input {
-        display: none;
-    }
-
-    PlaylistPicker #new-playlist-input.visible {
-        display: block;
-        margin-top: 1;
-    }
     """
 
-    def __init__(self, video_ids: list[str]) -> None:
+    def __init__(self, video_ids: list[str], tracks: list[dict[str, Any]] | None = None) -> None:
         super().__init__()
         self.video_ids = video_ids
+        self.tracks = tracks or []
         self._playlists: list[dict[str, Any]] = []
-        self._creating_new: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -160,10 +154,6 @@ class PlaylistPicker(ModalScreen[str | None]):
             yield Static("Loading playlists...", id="picker-status")
             yield Input(placeholder="Filter playlists...", id="filter-input")
             yield ListView(id="playlist-list")
-            yield Input(
-                placeholder="New playlist name...",
-                id="new-playlist-input",
-            )
 
     def on_mount(self) -> None:
         self.query_one("#filter-input", Input).display = False
@@ -260,31 +250,25 @@ class PlaylistPicker(ModalScreen[str | None]):
         item = event.item
 
         if isinstance(item, _CreateNewItem):
-            self._show_create_input()
+            self.app.push_screen(CreatePlaylistPopup(), self._on_create_result)
             return
 
         if isinstance(item, _PlaylistItem):
             self._add_to_playlist(item.playlist_id, item._title)
 
-    def _show_create_input(self) -> None:
-        """Toggle the new-playlist name input."""
-        self._creating_new = True
-        new_input = self.query_one("#new-playlist-input", Input)
-        new_input.add_class("visible")
-        new_input.focus()
+    def _on_create_result(self, result: tuple[str, str, str] | None) -> None:
+        """Handle the result from CreatePlaylistPopup."""
+        if result is None:
+            return
+        name, description, privacy = result
+        self.run_worker(
+            self._create_and_add(name, description, privacy),
+            name="create_playlist",
+        )
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "new-playlist-input":
-            name = event.value.strip()
-            if not name:
-                self.notify("Playlist name cannot be empty", severity="warning")
-                return
-            self.run_worker(
-                self._create_and_add(name),
-                name="create_playlist",
-            )
-
-    async def _create_and_add(self, name: str) -> None:
+    async def _create_and_add(
+        self, name: str, description: str = "", privacy: str = "PRIVATE"
+    ) -> None:
         """Create a new playlist, then add the tracks to it."""
         status = self.query_one("#picker-status", Static)
         status.update(f"Creating '{name}'...")
@@ -292,7 +276,9 @@ class PlaylistPicker(ModalScreen[str | None]):
         try:
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
-            playlist_id = await ytmusic.create_playlist(name)
+            playlist_id = await ytmusic.create_playlist(
+                name, description=description, privacy=privacy
+            )
             if not playlist_id:
                 self.notify("Failed to create playlist", severity="error")
                 status.update("Creation failed")
@@ -312,14 +298,30 @@ class PlaylistPicker(ModalScreen[str | None]):
 
             _record_recent(playlist_id)
 
-            # Optimistic sidebar count update — before next library reload.
+            # Full sidebar refresh — the new playlist doesn't exist in the
+            # cached items yet, so update_item_count would silently be a no-op.
             try:
-                from ytm_player.ui.sidebars.playlist_sidebar import LibraryPanel
+                from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
 
-                panel = self.app.query_one("#ps-playlists", LibraryPanel)
-                panel.update_item_count(playlist_id, +len(self.video_ids))
+                ps = self.app.query_one("#playlist-sidebar", PlaylistSidebar)
+                await ps.refresh_playlists()
             except Exception:
-                logger.debug("Sidebar count update failed", exc_info=True)
+                logger.exception("Sidebar refresh failed after create")
+
+            # Update library page header if the target playlist is currently open.
+            try:
+                from ytm_player.ui.pages.library import LibraryPage
+                from ytm_player.utils.formatting import strip_vl_prefix
+
+                host = cast("YTMHostBase", self.app)
+                current_pid = host._current_page_kwargs.get("playlist_id", "")
+                if host._current_page == "library" and strip_vl_prefix(
+                    current_pid
+                ) == strip_vl_prefix(playlist_id):
+                    library = self.app.query_one(LibraryPage)
+                    library.update_track_count(+len(self.video_ids))
+            except Exception:
+                logger.exception("Library track count update failed")
 
             track_word = "track" if len(self.video_ids) == 1 else "tracks"
             self.notify(
@@ -333,14 +335,46 @@ class PlaylistPicker(ModalScreen[str | None]):
             self.notify("Failed to create playlist", severity="error")
             status.update("Error")
 
-    def _add_to_playlist(self, playlist_id: str, title: str) -> None:
+    def _tracks_for_append(self, set_video_ids: dict[str, str]) -> list[dict[str, Any]]:
+        """Build the track dicts to append to the open playlist's table.
+
+        ``self.tracks`` are usually already-normalized dicts (the playing or
+        focused track). Re-running ``normalize_tracks()`` on those would drop
+        ``thumbnail_url`` — it reads the raw ``thumbnails`` key that normalized
+        dicts no longer carry — so only raw dicts are normalized here.
+
+        *set_video_ids* maps videoId -> server-assigned setVideoId from the add
+        response; appended rows are stamped with it so "Remove from Playlist"
+        works immediately. Rows still missing a setVideoId are flagged so the
+        remove action can explain a reload is needed.
+        """
+        from ytm_player.utils.formatting import normalize_tracks
+
+        out: list[dict[str, Any]] = []
+        for src in self.tracks:
+            if "video_id" in src:
+                track = dict(src)
+            else:
+                normed = normalize_tracks([src])
+                if not normed:
+                    continue
+                track = normed[0]
+            svid = set_video_ids.get(track.get("video_id", ""))
+            if svid:
+                track["setVideoId"] = svid
+            elif not track.get("setVideoId"):
+                track["_needs_reload_for_removal"] = True
+            out.append(track)
+        return out
+
+    def _add_to_playlist(self, playlist_id: str, title: str, duplicates: bool = False) -> None:
         """Add tracks to an existing playlist."""
         self.run_worker(
-            self._do_add(playlist_id, title),
+            self._do_add(playlist_id, title, duplicates=duplicates),
             name="add_to_playlist",
         )
 
-    async def _do_add(self, playlist_id: str, title: str) -> None:
+    async def _do_add(self, playlist_id: str, title: str, duplicates: bool = False) -> None:
         status = self.query_one("#picker-status", Static)
         status.update(f"Adding to '{title}'...")
 
@@ -349,7 +383,28 @@ class PlaylistPicker(ModalScreen[str | None]):
 
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
-            result = await ytmusic.add_playlist_items(playlist_id, self.video_ids)
+            result = await ytmusic.add_playlist_items(
+                playlist_id, self.video_ids, duplicates=duplicates
+            )
+            if result == "duplicate":
+                status.update("Already in playlist")
+                track_word = "track is" if len(self.video_ids) == 1 else "tracks are"
+
+                def _on_duplicate_confirm(confirmed: bool | None) -> None:
+                    if confirmed:
+                        self._add_to_playlist(playlist_id, title, duplicates=True)
+                    else:
+                        self.dismiss(None)
+
+                self.app.push_screen(
+                    ConfirmPopup(
+                        f"This {track_word} already in '{title}'.\nAdd anyway?",
+                        confirm_label="Add anyway",
+                        cancel_label="Cancel",
+                    ),
+                    _on_duplicate_confirm,
+                )
+                return
             if result != "success":
                 self.notify(
                     f"Couldn't add to '{title}' — {mutation_failure_suffix(result)}",
@@ -367,7 +422,30 @@ class PlaylistPicker(ModalScreen[str | None]):
                 panel = self.app.query_one("#ps-playlists", LibraryPanel)
                 panel.update_item_count(playlist_id, +len(self.video_ids))
             except Exception:
-                logger.debug("Sidebar count update failed", exc_info=True)
+                logger.exception("Sidebar count update failed")
+
+            # Append tracks to the table and update header if playlist is open.
+            try:
+                from ytm_player.ui.pages.library import LibraryPage
+                from ytm_player.ui.widgets.track_table import TrackTable
+                from ytm_player.utils.formatting import strip_vl_prefix
+
+                host = cast("YTMHostBase", self.app)
+                current_pid = host._current_page_kwargs.get("playlist_id", "")
+                if host._current_page == "library" and strip_vl_prefix(
+                    current_pid
+                ) == strip_vl_prefix(playlist_id):
+                    library = self.app.query_one(LibraryPage)
+                    if self.tracks:
+                        table = library.query_one("#library-tracks", TrackTable)
+                        table.append_tracks(
+                            self._tracks_for_append(ytmusic.last_added_set_video_ids)
+                        )
+                        library.update_track_count()
+                    else:
+                        library.update_track_count(+len(self.video_ids))
+            except Exception:
+                logger.exception("Library track/count update failed")
 
             track_word = "track" if len(self.video_ids) == 1 else "tracks"
             self.notify(
@@ -385,12 +463,4 @@ class PlaylistPicker(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         """Close the picker without selecting anything."""
-        if self._creating_new:
-            # First press: hide the create input and return to the list.
-            self._creating_new = False
-            new_input = self.query_one("#new-playlist-input", Input)
-            new_input.remove_class("visible")
-            new_input.value = ""
-            self.query_one("#playlist-list", ListView).focus()
-        else:
-            self.dismiss(None)
+        self.dismiss(None)

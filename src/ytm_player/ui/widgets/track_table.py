@@ -56,7 +56,23 @@ class TrackTable(DataTable):
             self.index = index
 
     class TrackRightClicked(Message):
-        """Emitted when a track row is right-clicked."""
+        """Emitted when a track row is right-clicked (title or non-specific column)."""
+
+        def __init__(self, track: dict, index: int) -> None:
+            super().__init__()
+            self.track = track
+            self.index = index
+
+    class ArtistRightClicked(Message):
+        """Emitted when the Artist column of a track row is right-clicked."""
+
+        def __init__(self, track: dict, index: int) -> None:
+            super().__init__()
+            self.track = track
+            self.index = index
+
+    class AlbumRightClicked(Message):
+        """Emitted when the Album column of a track row is right-clicked."""
 
         def __init__(self, track: dict, index: int) -> None:
             super().__init__()
@@ -229,6 +245,68 @@ class TrackTable(DataTable):
         # 0-width if append_tracks fires before any rows existed.
         self._fill_title_column()
         self._invalidate_table()
+
+    def remove_track(self, video_id: str, set_video_id: str = "") -> bool:
+        """Remove a track from the table.
+
+        When *set_video_id* is provided it is used as the primary key so that
+        duplicate tracks (same ``video_id``, different ``setVideoId``) are
+        removed correctly.  Falls back to matching by ``video_id`` alone when
+        *set_video_id* is empty.
+
+        Returns ``True`` if the track was found and removed.
+        """
+
+        def _matches(t: dict) -> bool:
+            if set_video_id:
+                return t.get("setVideoId") == set_video_id
+            return t.get("video_id") == video_id
+
+        # Find in visible tracks first (handles filtered view).
+        for visible_idx, track in enumerate(self._tracks):
+            if _matches(track):
+                # Remove from DataTable.
+                row_key = self._row_keys[visible_idx]
+                try:
+                    self.remove_row(row_key)
+                except Exception:
+                    logger.exception("Failed to remove row %r from table", row_key)
+
+                # Remove from visible list.
+                self._tracks.pop(visible_idx)
+                self._row_keys.pop(visible_idx)
+
+                # Remove from all tracks.
+                for all_idx, t in enumerate(self._all_tracks):
+                    if _matches(t):
+                        self._all_tracks.pop(all_idx)
+                        # Rebuild filtered map from scratch — simplest correct
+                        # approach. Match by identity (id()), not dict equality:
+                        # two genuinely identical track dicts would otherwise
+                        # mismatch the map, and `in` is O(n) per item (O(n²)
+                        # overall) on large playlists.
+                        visible_ids = {id(trk) for trk in self._tracks}
+                        self._filtered_map = [
+                            i for i, trk in enumerate(self._all_tracks) if id(trk) in visible_ids
+                        ]
+                        break
+
+                # Re-number all remaining tracks so the # column stays
+                # contiguous after the removal.
+                for new_idx, t in enumerate(self._all_tracks):
+                    t["_original_index"] = new_idx
+
+                # Refresh the # cell for every visible row that shifted.
+                for vis_idx, (rk, t) in enumerate(zip(self._row_keys, self._tracks)):
+                    try:
+                        self.update_cell(rk, "index", str(t["_original_index"] + 1))
+                    except Exception:
+                        pass
+
+                self._fill_title_column()
+                self._invalidate_table()
+                return True
+        return False
 
     def _add_track_row(self, index: int, track: dict) -> RowKey:
         """Add a single track as a row in the table."""
@@ -571,7 +649,7 @@ class TrackTable(DataTable):
             self.post_message(SelectionChanged(""))
 
     def on_click(self, event: Click) -> None:
-        """Handle right-click to emit TrackRightClicked."""
+        """Handle right-click — emit column-specific message."""
         if event.button == 3:
             event.stop()
             event.prevent_default()
@@ -580,7 +658,15 @@ class TrackTable(DataTable):
             meta = event.style.meta
             row_idx = meta.get("row") if meta else None
             if row_idx is not None and 0 <= row_idx < len(self._tracks):
-                self.post_message(self.TrackRightClicked(self._tracks[row_idx], row_idx))
+                track = self._tracks[row_idx]
+                col = self._column_at_x(int(event.x + self.scroll_x))
+                col_key = col.key.value if col and col.key else ""
+                if col_key == "artist":
+                    self.post_message(self.ArtistRightClicked(track, row_idx))
+                elif col_key == "album":
+                    self.post_message(self.AlbumRightClicked(track, row_idx))
+                else:
+                    self.post_message(self.TrackRightClicked(track, row_idx))
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
         """Sort by the clicked column header."""

@@ -6,7 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased]
+### v1.9.4 (2026-06-19)
+
+**New features**
+
+- **Create playlist with metadata** — the "New Playlist" flow now asks for name, description, and privacy (Private / Public / Unlisted) in a single modal, instead of defaulting to private with no description. New `CreatePlaylistPopup` replaces the minimal `InputPopup`.
+- **Edit playlist metadata** — right-click any user playlist in the sidebar and choose "Edit Playlist" to rename it, update its description, or change privacy. The sidebar and the open library page header update in-place without reloading tracks. New `YTMusicService.edit_playlist()` method.
+- **Enriched library playlist header** — description, privacy status, and year now appear in the header alongside owner and track count. Uses new `build_playlist_subtitle()` helper.
+- **Sidebar count sync on add** — adding tracks via the "Add to Playlist" picker now bumps the target playlist's track count in the sidebar immediately.
+- **Auto-navigate on delete** — deleting the currently open playlist from the sidebar automatically navigates back to the plain library view instead of leaving a ghost page.
+
+**Fixes**
+
+- **Spotify import builds on Nix again** — the `spotifyscraper` derivation no longer fails on a sandboxed `pip install` during the build, so flake builds with the `spotify` extra work again. Thanks @peternaame-boop for both causing and fixing it (#93).
 
 ### v1.9.3 (2026-05-04)
 
@@ -19,6 +31,8 @@ A small follow-up release: two crash fixes caught by manual smoke after v1.9.2, 
 - **Discovery round-robin** — `D` now cycles deterministically through Charts → Trending → For You → Liked → Artist → Recently Played (was random source selection). Charts sub-rotates through its shelves between presses, and the Discovery label shows the active source (e.g. `Discovery (US Daily Top 100)`). Mood source dropped (the Moods & Genres tab was removed in v1.9.1 due to upstream crashes). Thanks @wgordon17 (#75).
 - **Radio queues prepend their seed tracks** — radio playback now starts with the seed before suggestions, matching YouTube Music's native behaviour. Append-mode background refill is unchanged. Thanks @wgordon17 (#75).
 - **Persistent queue source header** — Queue page shows `Generated from: …` beneath Now Playing for radio and discovery queues, with up to three seed titles inline and a tooltip for the full list. Toggle via `[ui] show_queue_source` (default on). Thanks @wgordon17 (#75).
+- **Entity action consolidation** — context menu actions (Play All, Shuffle Play, Add to Queue, Start Radio, Go to Artist, Subscribe) now work consistently for albums, playlists, and artists across all dispatch sites: sidebar, search results, track table column right-click, context page, library page, and browse page. "Shuffle Play" pre-shuffles the track list for a one-time random order without enabling ongoing shuffle mode. "Play All" and "Shuffle Play" from sidebar and search start playback immediately and navigate to the queue page (#81).
+- **Column-aware context menus** — right-clicking the Artist column opens artist-specific actions (Go to Artist, Play Top Songs, Start Radio, Subscribe); right-clicking the Album column opens album actions (Play All, Shuffle Play, Add to Queue, Go to Artist). Multi-artist tracks show a picker first. All other columns open the standard track menu (#81).
 
 **Fixes**
 

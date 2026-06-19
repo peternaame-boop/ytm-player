@@ -107,6 +107,8 @@ enabled = true
 ```toml
 [discord]
 enabled = false              # requires `pip install ytm-player[discord]`
+client_id = ""               # blank uses the bundled app; set your own
+                             # Discord application ID to publish under it
 ```
 
 ### `[lastfm]`

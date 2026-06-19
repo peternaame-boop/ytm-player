@@ -28,6 +28,19 @@ from ytm_player.config.paths import THEME_FILE
 # all derive from this constant.  Matches ytm-dark's accent.
 DEFAULT_LYRIC_CURRENT = "#ff4e45"
 
+
+def rich_safe_color(color: str) -> str:
+    """Translate Textual-only ANSI color tokens into Rich-parseable names.
+
+    Textual's ansi-dark/ansi-light themes (8.2.5+) use tokens like
+    ``ansi_cyan`` that Textual CSS understands but Rich markup rejects,
+    crashing any widget that interpolates theme colors into Rich text
+    (#89).  Rich accepts the bare ANSI names (``cyan``, ``bright_red``,
+    ``default``), which preserve the terminal-palette behaviour.
+    """
+    return color[5:] if color.startswith("ansi_") else color
+
+
 # ── App-specific CSS variable names (not provided by Textual themes) ───
 
 _APP_VARS = (
@@ -104,6 +117,14 @@ class ThemeColors:
     lyrics_current: str = DEFAULT_LYRIC_CURRENT
     lyrics_upcoming: str = "#aaaaaa"
 
+    def __post_init__(self) -> None:
+        # Normalize Textual-only ANSI tokens on every construction path
+        # (watch_theme, from_css_variables, load) — see rich_safe_color.
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, str):
+                setattr(self, f.name, rich_safe_color(value))
+
     @classmethod
     def from_css_variables(cls, variables: dict[str, str]) -> Self:
         """Build ThemeColors from resolved Textual CSS variables.
@@ -170,7 +191,10 @@ class ThemeColors:
         colors = data.get("colors", data)
         for f_info in fields(self):
             if f_info.name in colors:
-                setattr(self, f_info.name, colors[f_info.name])
+                value = colors[f_info.name]
+                if isinstance(value, str):
+                    value = rich_safe_color(value)
+                setattr(self, f_info.name, value)
 
     @classmethod
     def load(cls, path: Path = THEME_FILE) -> Self:

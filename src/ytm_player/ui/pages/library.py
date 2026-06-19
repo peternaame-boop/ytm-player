@@ -14,7 +14,7 @@ from textual.widgets import Input, Label, Static
 
 from ytm_player.config.keymap import Action
 from ytm_player.ui.widgets.track_table import TrackTable
-from ytm_player.utils.formatting import normalize_tracks
+from ytm_player.utils.formatting import build_playlist_subtitle, normalize_tracks
 
 if TYPE_CHECKING:
     from ytm_player.app._base import YTMHostBase
@@ -38,7 +38,7 @@ class LibraryPage(Widget):
 
     #content-header {
         height: auto;
-        max-height: 5;
+        max-height: 6;
         padding: 1 2;
     }
 
@@ -52,6 +52,12 @@ class LibraryPage(Widget):
     .content-title {
         text-style: bold;
     }
+
+    .content-description {
+        color: $text-muted;
+        text-style: italic;
+    }
+
     .content-subtitle {
         color: $text-muted;
     }
@@ -128,6 +134,9 @@ class LibraryPage(Widget):
         super().__init__(name=name, id=id, classes=classes)
         self._active_playlist_id: str | None = playlist_id
         self._restore_cursor_row: int | None = cursor_row
+        self._cached_owner: str = "Unknown"
+        self._cached_year: int | str | None = None
+        self._cached_privacy: str = ""
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="content-header")
@@ -209,16 +218,22 @@ class LibraryPage(Widget):
             title = data.get("title", "Unknown Playlist")
             author = data.get("author", {})
             owner = author.get("name", "Unknown") if isinstance(author, dict) else str(author)
+            privacy = (data.get("privacy") or "").strip()
+            year = data.get("year")
             raw_tracks = data.get("tracks", [])
             tracks = normalize_tracks(raw_tracks)
             track_count = len(tracks)
             total_count = data.get("trackCount") or track_count
 
+            # Cache metadata for use in refresh_header / _fetch_remaining without extra API calls.
+            self._cached_owner = owner
+            self._cached_year = year
+            self._cached_privacy = privacy
+
             # Store data for radio button — ensure playlistId is set since
             # get_playlist() returns 'id' but _start_playlist_radio expects 'playlistId'.
             self._playlist_data = data
             self._playlist_data.setdefault("playlistId", playlist_id)
-
             # Update header.
             header = self.query_one("#content-header", Vertical)
             await header.remove_children()
@@ -233,7 +248,10 @@ class LibraryPage(Widget):
             lock_label = "Shuffle lock: ON" if locked else "Shuffle lock: off"
             lock_classes = "locked" if locked else ""
             await title_row.mount(Static(lock_label, id="shuffle-lock-btn", classes=lock_classes))
-            subtitle = f"{owner} \u00b7 {track_count} track{'s' if track_count != 1 else ''}"
+            description = (data.get("description") or "").strip()
+            if description:
+                await header.mount(Label(description, classes="content-description"))
+            subtitle = build_playlist_subtitle(owner, privacy, year, track_count)
             if total_count > track_count:
                 subtitle += f" (loading {total_count} total\u2026)"
             self._subtitle_label = Label(subtitle, classes="content-subtitle")
@@ -267,6 +285,54 @@ class LibraryPage(Widget):
             empty = self.query_one("#empty-state", Static)
             empty.update("Failed to load playlist")
 
+    async def refresh_header(self, title: str, description: str, privacy: str) -> None:
+        """Update the playlist header in-place after an edit, without reloading tracks."""
+        try:
+            header = self.query_one("#content-header", Vertical)
+            if not header.display:
+                return
+            table = self.query_one("#library-tracks", TrackTable)
+            track_count = len(table.tracks)
+            await header.remove_children()
+            title_row = Horizontal(classes="content-title-row")
+            await header.mount(title_row)
+            await title_row.mount(Label(title, classes="content-title"))
+            await title_row.mount(Static("[▶ Start Radio]", id="start-radio-btn", markup=True))
+            await title_row.mount(Static(classes="content-title-spacer"))
+            host = cast("YTMHostBase", self.app)
+            playlist_id = self._active_playlist_id or ""
+            locked = bool(host.shuffle_prefs.get(playlist_id)) if playlist_id else False
+            lock_label = "Shuffle lock: ON" if locked else "Shuffle lock: off"
+            lock_classes = "locked" if locked else ""
+            await title_row.mount(Static(lock_label, id="shuffle-lock-btn", classes=lock_classes))
+            if description:
+                await header.mount(Label(description, classes="content-description"))
+            self._cached_privacy = privacy
+            subtitle = build_playlist_subtitle(
+                self._cached_owner, privacy, self._cached_year, track_count
+            )
+            self._subtitle_label = Label(subtitle, classes="content-subtitle")
+            await header.mount(self._subtitle_label)
+        except Exception:
+            logger.exception("Failed to refresh library header after edit")
+
+    def update_track_count(self, delta: int = 0) -> None:
+        """Update the subtitle label to reflect the current table track count.
+
+        *delta* is added to the count — useful when the table hasn't been
+        updated yet (e.g. after adding tracks via the API).
+        """
+        try:
+            table = self.query_one("#library-tracks", TrackTable)
+            track_count = len(table.tracks) + delta
+            subtitle = build_playlist_subtitle(
+                self._cached_owner, self._cached_privacy, self._cached_year, track_count
+            )
+            if hasattr(self, "_subtitle_label") and self._subtitle_label:
+                self._subtitle_label.update(subtitle)
+        except Exception:
+            logger.exception("Failed to update library track count label")
+
     async def _fetch_remaining(self, playlist_id: str, already_have: int) -> None:
         """Background fetch for tracks beyond the first batch."""
         ytmusic = cast("YTMHostBase", self.app).ytmusic
@@ -283,10 +349,7 @@ class LibraryPage(Widget):
         try:
             table = self.query_one("#library-tracks", TrackTable)
             table.append_tracks(tracks)
-            # Update subtitle with final count.
-            total = len(table.tracks)
-            if hasattr(self, "_subtitle_label"):
-                self._subtitle_label.update(f"{total} track{'s' if total != 1 else ''}")
+            self.update_track_count()
         except Exception:
             logger.debug("Failed to append remaining tracks in library", exc_info=True)
 
@@ -435,29 +498,15 @@ class LibraryPage(Widget):
         """Queue all tracks and start playback from the selected one."""
         event.stop()
         table = self.query_one("#library-tracks", TrackTable)
-        tracks = table.tracks
-        idx = event.index
-
         host = cast("YTMHostBase", self.app)
-        host.queue.clear()
-        host.queue.add_multiple(tracks)
-        host.queue.jump_to_real(idx)
-        # Shuffle lock (per-playlist, replaces TP-7 implicit memory).
-        # set_context() accepts None — that case clears any previous context;
-        # the lock check below is gated on a truthy id, so None never reaches
-        # shuffle_prefs.get.
-        host.queue.set_context(self._active_playlist_id)
         if self._active_playlist_id:
-            locked = bool(host.shuffle_prefs.get(self._active_playlist_id))
-            if locked and not host.queue.shuffle_enabled:
-                host.queue.toggle_shuffle()
             host._active_library_playlist_id = self._active_playlist_id
-        # Sync the playback bar's shuffle button enabled/disabled state.
-        try:
-            bar = host.query_one("#playback-bar")
-            bar.refresh_shuffle_lock_state()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=self._active_playlist_id,
+            start_index=event.index,
+            autoplay=False,
+        )
         await host.play_track(event.track)
 
     # ------------------------------------------------------------------

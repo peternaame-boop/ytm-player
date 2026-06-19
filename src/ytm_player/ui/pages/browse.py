@@ -991,11 +991,12 @@ class BrowsePage(Widget):
         event.stop()
         table = self.query_one("#charts-table", TrackTable)
         host = cast("YTMHostBase", self.app)
-        host.queue.clear()
-        host.queue.add_multiple(table.tracks)
-        host.queue.jump_to_real(event.index)
-        # Charts queue is ephemeral — clear any prior context (TP-7).
-        host.queue.set_context(None)
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=None,
+            start_index=event.index,
+            autoplay=False,
+        )
         await host.play_track(event.track)
 
     async def _navigate_item(self, item: dict[str, Any]) -> None:

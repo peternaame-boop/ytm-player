@@ -19,7 +19,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import click
 import requests.exceptions
@@ -110,6 +110,17 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
     settings = get_settings()
     ctx.ensure_object(dict)
     ctx.obj["compact"] = compact_json
+
+    # Apply corporate CA bundle if configured (e.g. Zscaler SSL inspection).
+    # SSL_CERT_FILE is read by Python's ssl module (used by yt-dlp);
+    # REQUESTS_CA_BUNDLE is read by the requests library (used by ytmusicapi).
+    # Use setdefault so user-supplied env vars take precedence.
+    from ytm_player.services.yt_dlp_options import normalize_cafile
+
+    _ca = normalize_cafile(settings.yt_dlp.ca_bundle)
+    if _ca:
+        os.environ.setdefault("SSL_CERT_FILE", _ca)
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", _ca)
 
     if debug and ctx.invoked_subcommand is not None:
         # Subcommands don't get file logging (multi-process safety),
@@ -353,7 +364,8 @@ def search(query: tuple[str, ...], filter_type: str | None, limit: int, compact_
     auth = AuthManager(cookies_file=settings.yt_dlp.cookies_file)
     try:
         ytm = auth.create_ytmusic_client(user=settings.general.brand_account_id or None)
-        results = ytm.search(search_query, filter=filter_type, limit=limit)
+        # click.Choice guarantees one of ytmusicapi's accepted filter literals
+        results = ytm.search(search_query, filter=cast("Any", filter_type), limit=limit)
     except Exception as exc:
         _error(f"Search failed: {exc}")
 

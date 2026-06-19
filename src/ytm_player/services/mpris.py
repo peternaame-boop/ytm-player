@@ -8,24 +8,34 @@ daemons can control playback.
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Callable, Coroutine
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-try:
-    from dbus_fast import Variant  # type: ignore[reportMissingImports]
-    from dbus_fast.aio import MessageBus  # type: ignore[reportMissingImports]
-    from dbus_fast.service import (  # type: ignore[reportMissingImports]
-        PropertyAccess,
-        ServiceInterface,
-        dbus_property,
-        method,
-        signal,
-    )
+# dbus-fast is Linux-only: it calls socket.CMSG_LEN at import time, which
+# raises AttributeError on Windows (and dbus is meaningless on macOS, which
+# uses the native Now Playing integration). Gate the import on the platform
+# so a stray install of the `mpris` extra elsewhere — e.g. via
+# `uv sync --all-extras` — degrades gracefully instead of crashing the whole
+# app at startup (#106). Linux import failures still surface via the except.
+if sys.platform == "linux":
+    try:
+        from dbus_fast import Variant  # type: ignore[reportMissingImports]
+        from dbus_fast.aio import MessageBus  # type: ignore[reportMissingImports]
+        from dbus_fast.service import (  # type: ignore[reportMissingImports]
+            PropertyAccess,
+            ServiceInterface,
+            dbus_property,
+            method,
+            signal,
+        )
 
-    _DBUS_AVAILABLE = True
-except (ImportError, ValueError):
+        _DBUS_AVAILABLE = True
+    except (ImportError, ValueError):
+        _DBUS_AVAILABLE = False
+else:
     _DBUS_AVAILABLE = False
 
 BUS_NAME = "org.mpris.MediaPlayer2.ytm_player"

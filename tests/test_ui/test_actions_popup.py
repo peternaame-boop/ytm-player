@@ -3,8 +3,8 @@
 from ytm_player.ui.popups.actions import _build_actions
 
 
-def _action_ids(item, item_type="track"):
-    return [a[0] for a in _build_actions(item, item_type)]
+def _action_ids(item, item_type="track", in_playlist=False):
+    return [a[0] for a in _build_actions(item, item_type, in_playlist=in_playlist)]
 
 
 # ── go_to_album filtering ────────────────────────────────────────────
@@ -124,3 +124,18 @@ def test_unknown_type_falls_back_to_track():
     ids = _action_ids(item, "unknown_type")
     assert "play" in ids
     assert "play_all" not in ids
+
+
+# ── Remove from playlist filtering ────────────────────────────────────
+
+
+def test_remove_from_playlist_shown_when_in_playlist():
+    item = {"title": "Test", "artists": [{"name": "A", "id": "1"}], "album_id": "a1"}
+    ids = _action_ids(item, "track", in_playlist=True)
+    assert "remove_from_playlist" in ids
+
+
+def test_remove_from_playlist_hidden_when_not_in_playlist():
+    item = {"title": "Test", "artists": [{"name": "A", "id": "1"}], "album_id": "a1"}
+    ids = _action_ids(item, "track", in_playlist=False)
+    assert "remove_from_playlist" not in ids

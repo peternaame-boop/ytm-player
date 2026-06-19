@@ -138,6 +138,7 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
                 "thumbnail_url": thumbnail,
                 "is_video": t.get("isVideo", t.get("is_video", False)),
                 "likeStatus": t.get("likeStatus"),
+                "setVideoId": t.get("setVideoId"),
             }
         )
     if skipped:
@@ -202,6 +203,28 @@ def format_ago(timestamp: datetime) -> str:
 
     years = days // 365
     return f"{years} year{'s' if years != 1 else ''} ago"
+
+
+def strip_vl_prefix(playlist_id: str) -> str:
+    """Strip the 'VL' prefix from a playlist ID if present."""
+    return playlist_id[2:] if playlist_id.startswith("VL") else playlist_id
+
+
+def build_playlist_subtitle(
+    owner: str, privacy: str, year: int | str | None, track_count: int
+) -> str:
+    """Build the metadata subtitle line for a playlist header.
+
+    Format: ``Owner · Privacy · Year · N tracks``
+    Privacy and year are omitted when empty/None.
+    """
+    parts = [owner]
+    if privacy:
+        parts.append(privacy.capitalize())
+    if year:
+        parts.append(str(year))
+    parts.append(f"{track_count} track{'s' if track_count != 1 else ''}")
+    return " \u00b7 ".join(parts)
 
 
 def copy_to_clipboard(text: str) -> bool:

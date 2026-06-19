@@ -49,7 +49,10 @@ spotify = [
     "thefuzz>=0.22.0",
 ]
 mpris = [
-    "dbus-fast>=4.0.0",
+    # dbus-fast is Linux-only (imports socket.CMSG_LEN). The marker keeps it
+    # out of the resolved set on macOS/Windows so `--all-extras` there can't
+    # install a library that crashes the app at import (#106).
+    "dbus-fast>=4.0.0; sys_platform == 'linux'",
 ]
 images = []  # Pillow is now a default dependency; kept for backwards compat.
 discord = [

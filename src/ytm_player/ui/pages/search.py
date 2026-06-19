@@ -21,7 +21,6 @@ from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.formatting import (
     copy_to_clipboard,
     extract_artist,
-    get_video_id,
     normalize_tracks,
     truncate,
 )
@@ -866,19 +865,15 @@ class SearchPage(Widget):
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected song and populate the queue with search results."""
         event.stop()
-        track = event.track
-        video_id = get_video_id(track)
-        if video_id:
-            table = self.query_one("#songs-table", TrackTable)
-            host = cast("YTMHostBase", self.app)
-            host.queue.clear()
-            host.queue.add_multiple(table.tracks)
-            host.queue.jump_to_real(event.index)
-            # Search results are ephemeral — clear context so a later
-            # shuffle toggle isn't saved against whatever collection
-            # was previously playing (TP-7).
-            host.queue.set_context(None)
-            await host.play_track(track)
+        table = self.query_one("#songs-table", TrackTable)
+        host = cast("YTMHostBase", self.app)
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=None,
+            start_index=event.index,
+            autoplay=False,
+        )
+        await host.play_track(event.track)
 
     async def on_search_result_panel_item_selected(
         self, event: SearchResultPanel.ItemSelected
@@ -927,36 +922,28 @@ class SearchPage(Widget):
                 return
 
             if action_id in ("play_all", "shuffle_play"):
-                browse_id = (
-                    item.get("browseId") or item.get("album_id") or item.get("playlistId") or ""
-                )
-                ctx_type = item_type if item_type in ("album", "playlist") else None
-                if browse_id and ctx_type:
-                    host.run_worker(
-                        host.navigate_to("context", context_type=ctx_type, context_id=browse_id)
-                    )
 
-            elif action_id == "go_to_artist":
-                artists = item.get("artists") or []
-                if isinstance(artists, list) and artists:
-                    artist_id = artists[0].get("id") or artists[0].get("browseId", "")
-                elif item_type == "artist":
-                    artist_id = item.get("browseId") or item.get("artist_id") or ""
-                else:
-                    artist_id = ""
-                if artist_id:
-                    host.run_worker(
-                        host.navigate_to("context", context_type="artist", context_id=artist_id)
-                    )
+                async def _play_and_navigate() -> None:
+                    prev = host.queue.current_track
+                    await host._dispatch_entity_action(action_id, item, item_type)
+                    if (
+                        host.queue.current_track is not None
+                        and host.queue.current_track is not prev
+                    ):
+                        await host.navigate_to("queue")
 
-            elif action_id in ("play_top_songs", "start_radio", "view_albums", "view_similar"):
+                host.run_worker(_play_and_navigate())
+                return
+
+            if action_id == "toggle_subscribe":
                 browse_id = item.get("browseId") or item.get("artist_id") or ""
-                if browse_id:
-                    host.run_worker(
-                        host.navigate_to("context", context_type="artist", context_id=browse_id)
-                    )
+                if not browse_id:
+                    host.notify("No ID available for this item.", severity="warning", timeout=2)
+                else:
+                    host.run_worker(host._toggle_artist_subscribe_simple(browse_id))
+                return
 
-            elif action_id == "copy_link":
+            if action_id == "copy_link":
                 browse_id = (
                     item.get("browseId")
                     or item.get("album_id")
@@ -970,8 +957,11 @@ class SearchPage(Widget):
                         host.notify("Link copied", timeout=2)
                     else:
                         host.notify(link, timeout=5)
+                return
 
-        host.push_screen(ActionsPopup(item, item_type=item_type), _handle_action)
+            host.run_worker(host._dispatch_entity_action(action_id, item, item_type))
+
+        host.push_screen(ActionsPopup(item, item_type=item_type, source="search"), _handle_action)
 
     # ------------------------------------------------------------------
     # Vim-style action handler

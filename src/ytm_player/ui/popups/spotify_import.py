@@ -898,7 +898,13 @@ class SpotifyImportPopup(ModalScreen[str | None]):
                     status.update(
                         f"Adding tracks... ({min(batch_idx * _ADD_BATCH_SIZE, total_ids)}/{total_ids})"
                     )
-                    result = await ytmusic_svc.add_playlist_items(playlist_id, batch)
+                    # Imports preserve the source playlist faithfully — Spotify
+                    # playlists routinely contain the same track twice, so pass
+                    # duplicates=True to avoid a whole batch false-failing on a
+                    # single repeated track.
+                    result = await ytmusic_svc.add_playlist_items(
+                        playlist_id, batch, duplicates=True
+                    )
                     if result == "success":
                         added_total += len(batch)
                     else:

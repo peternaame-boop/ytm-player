@@ -11,8 +11,9 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# Discord application ID for ytm-player (YouTube Music category).
-_CLIENT_ID = "1338519089781362698"
+# Default Discord application ID — the bundled "YouTube Music" Rich Presence
+# app. Users can point at their own app via [discord] client_id in config.
+DEFAULT_DISCORD_CLIENT_ID = "1517429270115258490"
 
 
 class DiscordRPC:
@@ -22,7 +23,10 @@ class DiscordRPC:
     Reconnects automatically if the connection drops.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, client_id: str = "") -> None:
+        # Blank/whitespace falls back to the bundled app, so an empty config
+        # value doesn't break RPC; `enabled = false` is the real off switch.
+        self._client_id = client_id.strip() or DEFAULT_DISCORD_CLIENT_ID
         self._rpc: object | None = None
         self._connected = False
         self._start_time: float = 0
@@ -38,7 +42,7 @@ class DiscordRPC:
             return False
 
         try:
-            self._rpc = AioPresence(_CLIENT_ID)
+            self._rpc = AioPresence(self._client_id)
             await self._rpc.connect()  # type: ignore[union-attr]
             self._connected = True
             logger.info("Connected to Discord Rich Presence")

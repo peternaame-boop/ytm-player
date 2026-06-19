@@ -142,7 +142,7 @@ pip install -e ".[dev]"                    # Development tools (pytest, ruff)
 If you installed via AUR, install optional dependencies with pacman/yay — **not** pip (Arch enforces [PEP 668](https://peps.python.org/pep-0668/)):
 
 ```bash
-sudo pacman -S python-dbus-next            # MPRIS media keys
+sudo pacman -S python-dbus-fast            # MPRIS media keys
 yay -S python-pylast                       # Last.fm scrobbling
 yay -S python-pypresence                   # Discord Rich Presence
 yay -S python-spotipy python-thefuzz       # Spotify playlist import

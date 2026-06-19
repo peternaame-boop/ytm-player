@@ -52,7 +52,7 @@ Install the optional MPRIS dependency:
 ```bash
 pip install -e ".[mpris]"
 # or, on Arch:
-sudo pacman -S python-dbus-next
+sudo pacman -S python-dbus-fast
 ```
 
 Requires D-Bus (standard on most Linux desktops). Verify with:

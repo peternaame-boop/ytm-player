@@ -48,4 +48,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -e ".[dev]"
+      # Install dbus-fast on ubuntu so the #106 platform guard has teeth:
+      # with it present, the guard test proves the forced-win32/darwin
+      # import never pulls it in (an un-gated regression would import it and
+      # fail). Only ubuntu — MPRIS is Linux-only, so that's the one runner
+      # where the extra is worth exercising.
+      - if: matrix.os == 'ubuntu-latest'
+        run: pip install "dbus-fast>=4.0.0"
       - run: pytest --cov=ytm_player --cov-report=term-missing
