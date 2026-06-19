@@ -608,7 +608,7 @@ class YTMPlayerApp(
 
         # Start Discord Rich Presence if enabled.
         if self.settings.discord.enabled:
-            self.discord = DiscordRPC()
+            self.discord = DiscordRPC(client_id=self.settings.discord.client_id)
             await self.discord.connect()
 
         # Start Last.fm scrobbling if enabled.

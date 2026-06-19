@@ -102,6 +102,9 @@ class MPRISSettings:
 @dataclass
 class DiscordSettings:
     enabled: bool = False
+    # Empty = use the bundled "YouTube Music" app; set to your own Discord
+    # application ID to publish Rich Presence under your own app.
+    client_id: str = ""
 
 
 @dataclass
