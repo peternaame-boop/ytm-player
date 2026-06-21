@@ -173,6 +173,10 @@ class NavigationMixin(YTMHostBase):
         await container.mount(page_widget)
         self._current_page = page_name
         self._current_page_kwargs = dict(kwargs)
+        # A page swap moves the user back into the content pane; reset the
+        # keyboard-focus pane so movement keys drive the new page, not a
+        # sidebar that was focused on the previous page.
+        self._active_pane = "content"
 
         # Update footer active page indicator.
         try:

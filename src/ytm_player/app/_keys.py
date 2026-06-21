@@ -10,10 +10,39 @@ from ytm_player.app._base import YTMHostBase
 from ytm_player.config import Action, MatchResult
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
+from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
 
 logger = logging.getLogger(__name__)
 
 _MAX_KEY_COUNT = 1000
+
+# Actions the Playlists sidebar can handle when it holds keyboard focus
+# (see PlaylistSidebar.handle_sidebar_action).
+_SIDEBAR_PANE_ACTIONS = frozenset(
+    {
+        Action.MOVE_DOWN,
+        Action.MOVE_UP,
+        Action.PAGE_DOWN,
+        Action.PAGE_UP,
+        Action.GO_TOP,
+        Action.GO_BOTTOM,
+        Action.SELECT,
+        Action.FILTER,
+    }
+)
+
+# Actions the lyrics pane can handle when it holds keyboard focus
+# (see LyricsSidebar.handle_action — scroll only, no select/filter).
+_LYRICS_PANE_ACTIONS = frozenset(
+    {
+        Action.MOVE_DOWN,
+        Action.MOVE_UP,
+        Action.PAGE_DOWN,
+        Action.PAGE_UP,
+        Action.GO_TOP,
+        Action.GO_BOTTOM,
+    }
+)
 
 
 class KeyHandlingMixin(YTMHostBase):
@@ -254,7 +283,17 @@ class KeyHandlingMixin(YTMHostBase):
             case Action.LIKE_TOGGLE:
                 await self._toggle_like_current()
 
-            # -- Navigation actions delegated to the current page --
+            # -- Pane focus traversal (vim window split: Ctrl+w h/l/w) --
+            case Action.FOCUS_PANE_LEFT:
+                self._focus_pane_left()
+
+            case Action.FOCUS_PANE_RIGHT:
+                self._focus_pane_right()
+
+            case Action.FOCUS_PANE_CYCLE:
+                self._cycle_pane()
+
+            # -- Navigation actions routed to the active pane --
             case (
                 Action.MOVE_DOWN
                 | Action.MOVE_UP
@@ -280,9 +319,39 @@ class KeyHandlingMixin(YTMHostBase):
                 | Action.TOGGLE_SEARCH_MODE
                 | Action.PICK_COUNTRY
             ):
-                page = self._get_current_page()
-                if page and hasattr(page, "handle_action"):
-                    await page.handle_action(action, count)
+                await self._route_navigation_action(action, count)
 
             case _:
                 logger.debug("Unhandled action: %s", action)
+
+    async def _route_navigation_action(self, action: Action, count: int) -> None:
+        """Route a movement/select/filter action to the active pane.
+
+        When a sidebar pane holds keyboard focus, the relevant subset of
+        actions drives that sidebar's widget; everything else (and the
+        default ``content`` pane) falls through to the current page's
+        ``handle_action``. This is what makes ``j``/``k``/``Enter``/``/``
+        actually operate the Playlists or lyrics pane after ``Ctrl+w``
+        focuses it — a bare ``.focus()`` is not enough because ``on_key``
+        intercepts every keystroke before Textual's focus chain runs.
+        """
+        if self._active_pane == "playlists" and action in _SIDEBAR_PANE_ACTIONS:
+            try:
+                sidebar = self.query_one("#playlist-sidebar", PlaylistSidebar)
+            except Exception:
+                sidebar = None
+            if sidebar is not None:
+                sidebar.handle_sidebar_action(action, count)
+                return
+        elif self._active_pane == "lyrics" and action in _LYRICS_PANE_ACTIONS:
+            try:
+                lyrics = self.query_one("#lyrics-sidebar", LyricsSidebar)
+            except Exception:
+                lyrics = None
+            if lyrics is not None:
+                await lyrics.handle_action(action, count)
+                return
+
+        page = self._get_current_page()
+        if page and hasattr(page, "handle_action"):
+            await page.handle_action(action, count)

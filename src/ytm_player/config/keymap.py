@@ -47,6 +47,9 @@ class Action(str, Enum):
     SELECT = "select"
     FOCUS_NEXT = "focus_next"
     FOCUS_PREV = "focus_prev"
+    FOCUS_PANE_LEFT = "focus_pane_left"
+    FOCUS_PANE_RIGHT = "focus_pane_right"
+    FOCUS_PANE_CYCLE = "focus_pane_cycle"
     GO_BACK = "go_back"
     GO_FORWARD = "go_forward"
     CLOSE_POPUP = "close_popup"
@@ -123,6 +126,10 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "select": ["enter"],
     "focus_next": ["tab"],
     "focus_prev": ["S-tab"],
+    # Vim window-split idiom: Ctrl+w then a direction moves between panes.
+    "focus_pane_left": ["C-w h"],
+    "focus_pane_right": ["C-w l"],
+    "focus_pane_cycle": ["C-w w"],
     "go_back": ["backspace"],
     "go_forward": ["S-backspace"],
     "close_popup": ["escape"],

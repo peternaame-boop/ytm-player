@@ -277,6 +277,12 @@ class YTMPlayerApp(
         self._sidebar_per_page: dict[str, bool] = {}
         self._lyrics_sidebar_open: bool = False
 
+        # Active pane for keyboard focus traversal (Ctrl+w h/l/w). One of
+        # "content" (default), "playlists", or "lyrics". Drives which widget
+        # movement/select/filter actions are routed to. Reset to "content"
+        # on every page navigation.
+        self._active_pane: str = "content"
+
         # First-run discoverability hint (Task 4.8). Flipped to True after
         # the toast fires; persisted via session.json so the hint shows
         # exactly once per install.

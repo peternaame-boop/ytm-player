@@ -22,7 +22,10 @@
 | `Ctrl+a` | Toggle album art in playback bar |
 | `Ctrl+p` | Change theme |
 | `?` | Help (full keybinding reference inside the app) |
-| `tab` | Focus next panel |
+| `Ctrl+w h` | Focus the Playlists sidebar (auto-shows it if hidden) |
+| `Ctrl+w l` | Focus the main content, then the lyrics sidebar if it's open |
+| `Ctrl+w w` | Cycle focus through the visible panes |
+| `tab` | Focus next element on the current page (page-specific) |
 | `a` | Track actions menu |
 | `/` | Filter current list |
 | `Ctrl+r` | Cycle repeat mode (off → all → one) |

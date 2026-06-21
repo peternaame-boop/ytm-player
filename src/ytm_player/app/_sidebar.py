@@ -13,6 +13,12 @@ from ytm_player.utils.formatting import strip_vl_prefix
 
 logger = logging.getLogger(__name__)
 
+# Pane identifiers for keyboard focus traversal (Ctrl+w h / l / w).
+# Layout left-to-right: [playlists | content | lyrics].
+PANE_PLAYLISTS = "playlists"
+PANE_CONTENT = "content"
+PANE_LYRICS = "lyrics"
+
 
 class SidebarMixin(YTMHostBase):
     """Sidebar toggling and playlist sidebar event handlers."""
@@ -47,6 +53,12 @@ class SidebarMixin(YTMHostBase):
             header.set_playlist_state(visible)
         except Exception:
             pass
+        # If the sidebar is hidden while it holds keyboard focus, hand focus
+        # back to the main content pane so movement keys don't route into a
+        # now-invisible widget.
+        if not visible and getattr(self, "_active_pane", PANE_CONTENT) == PANE_PLAYLISTS:
+            self._active_pane = PANE_CONTENT
+            self._focus_content_widget()
 
     def _apply_lyrics_sidebar(self, visible: bool) -> None:
         """Set lyrics sidebar visibility and update header bar state."""
@@ -74,6 +86,10 @@ class SidebarMixin(YTMHostBase):
             header.set_lyrics_state(visible)
         except Exception:
             pass
+        # If the lyrics pane is hidden while focused, fall back to content.
+        if not visible and getattr(self, "_active_pane", PANE_CONTENT) == PANE_LYRICS:
+            self._active_pane = PANE_CONTENT
+            self._focus_content_widget()
 
     def _toggle_album_art(self) -> None:
         """Toggle album art visibility in the playback bar."""
@@ -84,6 +100,117 @@ class SidebarMixin(YTMHostBase):
             art.display = not art.display
         except Exception:
             logger.debug("Failed to toggle album art visibility", exc_info=True)
+
+    # ── Pane focus traversal (Ctrl+w h / l / w) ──────────────────────
+    #
+    # The app intercepts every keystroke in ``on_key`` and prevents the
+    # default binding resolution, so Textual's native Tab focus chain never
+    # reaches the persistent sidebars. These helpers give the keyboard an
+    # explicit, vim-window-style way to move focus between the three panes
+    # — Playlists sidebar, main content, and lyrics sidebar — and set
+    # ``_active_pane`` so movement/select/filter keys route to the focused
+    # pane (see ``KeyHandlingMixin._route_navigation_action``).
+
+    def _is_playlist_sidebar_visible(self) -> bool:
+        """Whether the Playlists sidebar is shown on the current page."""
+        page = self._current_page or "library"
+        return self._sidebar_per_page.get(page, self._sidebar_default)
+
+    def _ensure_playlist_sidebar_visible(self) -> None:
+        """Show the Playlists sidebar on the current page if it is hidden."""
+        page = self._current_page or "library"
+        if not self._sidebar_per_page.get(page, self._sidebar_default):
+            self._sidebar_per_page[page] = True
+            self._apply_playlist_sidebar(True)
+
+    def _visible_panes(self) -> list[str]:
+        """Visible panes in left-to-right order. Content is always present."""
+        panes: list[str] = []
+        if self._is_playlist_sidebar_visible():
+            panes.append(PANE_PLAYLISTS)
+        panes.append(PANE_CONTENT)
+        if self._lyrics_sidebar_open:
+            panes.append(PANE_LYRICS)
+        return panes
+
+    def _focus_content_widget(self) -> None:
+        """Move Textual focus to the first focusable widget in the content
+        pane, releasing any sidebar that currently holds it."""
+        from textual.containers import Container
+
+        try:
+            container = self.query_one("#main-content", Container)
+        except Exception:
+            return
+        target = None
+        try:
+            for widget in container.query("*"):
+                if getattr(widget, "can_focus", False) and getattr(widget, "display", True):
+                    target = widget
+                    break
+        except Exception:
+            target = None
+        try:
+            if target is not None:
+                target.focus()
+            else:
+                # No focusable content widget — at least blur the sidebar.
+                self.screen.set_focus(None)
+        except Exception:
+            logger.debug("Failed to focus content pane", exc_info=True)
+
+    def _focus_pane(self, pane: str) -> None:
+        """Move keyboard focus to *pane*, updating ``_active_pane`` and the
+        focused widget so the move is visibly indicated."""
+        from textual.widgets import ListView
+
+        if pane == PANE_PLAYLISTS:
+            # Auto-show the sidebar when focus is requested for it.
+            self._ensure_playlist_sidebar_visible()
+            self._active_pane = PANE_PLAYLISTS
+            try:
+                list_view = self.query_one("#ps-playlists-list", ListView)
+                if list_view.index is None and len(list_view.children) > 0:
+                    list_view.index = 0
+                list_view.focus()
+            except Exception:
+                logger.debug("Failed to focus playlist sidebar pane", exc_info=True)
+        elif pane == PANE_LYRICS:
+            # Lyrics are only focusable when the pane is visible.
+            if not self._lyrics_sidebar_open:
+                return
+            self._active_pane = PANE_LYRICS
+            try:
+                self.query_one("#ls-scroll").focus()
+            except Exception:
+                logger.debug("Failed to focus lyrics pane", exc_info=True)
+        else:
+            self._active_pane = PANE_CONTENT
+            self._focus_content_widget()
+
+    def _focus_pane_left(self) -> None:
+        """Ctrl+w h — move focus left. Reaches the Playlists sidebar from the
+        content pane (auto-showing it), and steps lyrics → content."""
+        if self._active_pane == PANE_LYRICS:
+            self._focus_pane(PANE_CONTENT)
+        else:
+            self._focus_pane(PANE_PLAYLISTS)
+
+    def _focus_pane_right(self) -> None:
+        """Ctrl+w l — move focus right: playlists → content → lyrics. Lyrics
+        is only entered when the lyrics pane is visible."""
+        if self._active_pane == PANE_PLAYLISTS:
+            self._focus_pane(PANE_CONTENT)
+        elif self._active_pane == PANE_CONTENT and self._lyrics_sidebar_open:
+            self._focus_pane(PANE_LYRICS)
+        # Already at the rightmost reachable pane — stay put.
+
+    def _cycle_pane(self) -> None:
+        """Ctrl+w w — cycle focus through the visible panes, wrapping."""
+        panes = self._visible_panes()
+        current = self._active_pane if self._active_pane in panes else PANE_CONTENT
+        idx = panes.index(current)
+        self._focus_pane(panes[(idx + 1) % len(panes)])
 
     # ── Sidebar message handlers ─────────────────────────────────────
 
