@@ -83,6 +83,8 @@ class Action(str, Enum):
     DISCOVERY_MIX = "discovery_mix"
     FILTER = "filter"
     PICK_COUNTRY = "pick_country"
+    REORDER_DOWN = "reorder_down"
+    REORDER_UP = "reorder_up"
 
     # Sorting
     SORT_TITLE = "sort_title"
@@ -160,6 +162,11 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "discovery_mix": ["D"],
     "filter": ["/"],
     "pick_country": ["c"],
+    # Queue track reorder. Capital J/K (like the existing G/Z/A bindings):
+    # lowercase j/k move the cursor, Shift+them move the selected track.
+    # Count-aware — "15 J" moves the selected track down 15 positions.
+    "reorder_down": ["J"],
+    "reorder_up": ["K"],
     # Sorting
     "sort_title": ["s t"],
     "sort_artist": ["s a"],

@@ -10,7 +10,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **New features**
 
+- **Unified Tab / Shift+Tab section navigation** — `Tab` and `Shift+Tab` now move focus between sections (track tables, result panels, Browse tab labels, and any *visible* sidebar) consistently on every page, with `j`/`k`/arrows moving within the focused section and `Enter` activating it. Previously only the Search page worked this way; other pages ignored `Tab` or repurposed it. On Browse, `Tab` highlights a tab label and `Enter` opens it.
 - **Vim-style pane focus navigation** — keyboard users can now move focus between the Playlists sidebar, main content, and visible lyrics pane with `Ctrl+w h`, `Ctrl+w l`, and `Ctrl+w w`. The Playlists shortcut auto-shows the sidebar if it is hidden. Thanks @860windtree (#107, #108).
+
+**Changes**
+
+- **Queue track reorder moved off `Tab`** — reordering the selected track now uses `Shift+J` / `Shift+K` (lowercase `j`/`k` move the cursor, as on every other page). It honours a count prefix, so `15 J` moves the selected track down 15 positions in one step. This frees `Tab` / `Shift+Tab` on the Queue page for section navigation.
 
 **Diagnostics**
 

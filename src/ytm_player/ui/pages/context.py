@@ -193,7 +193,6 @@ class ContextPage(Widget):
         self.context_type = context_type
         self.context_id = context_id
         self._data: dict[str, Any] = {}
-        self._active_focus: str = "tracks"  # "tracks" or "albums" for artist view
         # Set when ``_fetch_data`` catches an expected API/network
         # exception. ``on_worker_state_changed`` reads it to decide
         # between the empty-data message and the richer failure copy
@@ -664,19 +663,16 @@ class ContextPage(Widget):
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
         """Process vim-style navigation actions."""
-        match action:
-            case Action.GO_BACK:
-                await self.app.navigate_to("back")  # type: ignore[attr-defined]
-                return
-            case Action.FOCUS_NEXT:
-                self._cycle_focus(forward=True)
-                return
-            case Action.FOCUS_PREV:
-                self._cycle_focus(forward=False)
-                return
+        if action == Action.GO_BACK:
+            await self.app.navigate_to("back")  # type: ignore[attr-defined]
+            return
 
-        # Delegate movement actions to the currently focused widget.
-        if self.context_type == "artist" and self._active_focus == "albums":
+        # Route movement to whichever section actually holds focus. In artist
+        # view the albums list and the track table are both focusable sections
+        # (Tab moves between them); branch on the focused widget — not a cached
+        # flag — so it stays correct after Tab/Ctrl+w/mouse focus changes.
+        focused = self.app.focused
+        if self.context_type == "artist" and isinstance(focused, _ArtistAlbumList):
             try:
                 album_table = self.query_one("#context-albums", _ArtistAlbumList)
                 match action:
@@ -710,12 +706,3 @@ class ContextPage(Widget):
             await table.handle_action(action, count)
         except Exception:
             logger.debug("Failed to delegate action to context track table", exc_info=True)
-
-    def _cycle_focus(self, forward: bool) -> None:
-        """Cycle focus between track table and album list (artist view only)."""
-        if self.context_type != "artist":
-            return
-        if forward:
-            self._active_focus = "albums" if self._active_focus == "tracks" else "tracks"
-        else:
-            self._active_focus = "tracks" if self._active_focus == "albums" else "albums"

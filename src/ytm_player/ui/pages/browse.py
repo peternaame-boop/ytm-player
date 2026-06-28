@@ -12,6 +12,7 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView, Static
+from textual.worker import Worker, WorkerState
 
 from ytm_player.config.keymap import Action
 from ytm_player.config.settings import get_settings
@@ -130,6 +131,25 @@ def _split_events_and_charts(
     return events, charts
 
 
+class BrowseTab(Static):
+    """A focusable tab label in the Browse tab bar.
+
+    Two independent visual states:
+    - ``.active`` — the currently-open view (bold + underline).
+    - ``:focus`` — where ``Tab`` is sitting; ``Enter`` opens it.
+
+    Made focusable so the unified ``Tab`` / ``Shift+Tab`` section traversal
+    lands on each label in turn; ``Enter`` then opens it (see
+    ``BrowsePage._open_tab``).
+    """
+
+    can_focus = True
+
+    def __init__(self, label: str, index: int, **kwargs: Any) -> None:
+        super().__init__(f" {label} ", **kwargs)
+        self.tab_index = index
+
+
 class BrowseTabBar(Widget):
     """A horizontal tab selector for the Browse page sections."""
 
@@ -166,6 +186,16 @@ class BrowseTabBar(Widget):
         color: $text;
         border-bottom: tall $primary;
     }
+
+    /* Focused tab label — where Tab is currently sitting. Distinct from
+       .active (the open view): a background tint + accent underline that read
+       clearly whether or not the focused label is also the active one.
+       Declared after .active so it wins on equal-specificity conflicts. */
+    BrowseTabBar .tab-item:focus {
+        color: $text;
+        background: $primary 30%;
+        border-bottom: tall $accent;
+    }
     """
 
     active_tab: reactive[int] = reactive(0)
@@ -182,7 +212,7 @@ class BrowseTabBar(Widget):
         with Horizontal():
             for i, label in enumerate(_TABS):
                 classes = "tab-item active" if i == 0 else "tab-item"
-                yield Static(f" {label} ", id=f"tab-{i}", classes=classes)
+                yield BrowseTab(label, i, id=f"tab-{i}", classes=classes)
 
     def on_click(self, event: Click) -> None:
         """Handle click on a tab label."""
@@ -203,7 +233,7 @@ class BrowseTabBar(Widget):
             return
         # Update CSS classes.
         for i in range(len(_TABS)):
-            tab = self.query_one(f"#tab-{i}", Static)
+            tab = self.query_one(f"#tab-{i}", BrowseTab)
             if i == index:
                 tab.add_class("active")
             else:
@@ -261,7 +291,11 @@ class ForYouSection(Widget):
 
     def compose(self) -> ComposeResult:
         yield Static("Loading recommendations...", id="foryou-loading", classes="loading")
-        yield VerticalScroll(id="foryou-shelves")
+        # Not a Tab stop itself — Tab should land on the shelf ListViews
+        # inside (where j/k works). Scroll containers are focusable by default.
+        shelves = VerticalScroll(id="foryou-shelves")
+        shelves.can_focus = False
+        yield shelves
 
     def on_unmount(self) -> None:
         """Release shelf data to prevent memory retention."""
@@ -502,9 +536,16 @@ class ChartsSection(Widget):
             # Each row uses HorizontalScroll so pills overflow gracefully on
             # narrow terminals. Composed with placeholders so the containers
             # are never empty (Textual collapses empty children).
-            with HorizontalScroll(id="charts-event-pills"):
+            # Pill rows are not Tab stops — Tab should land on the chart table
+            # below, where j/k drives the rows. (Scroll containers focus by
+            # default; pills are clicked or switched via the table workflow.)
+            event_pills = HorizontalScroll(id="charts-event-pills")
+            event_pills.can_focus = False
+            with event_pills:
                 yield Static(" ", id="charts-event-pill-placeholder", classes="shelf-pill event")
-            with HorizontalScroll(id="charts-chart-pills"):
+            chart_pills = HorizontalScroll(id="charts-chart-pills")
+            chart_pills.can_focus = False
+            with chart_pills:
                 yield Static(" ", id="charts-chart-pill-placeholder", classes="shelf-pill")
             yield TrackTable(
                 show_album=True,
@@ -881,6 +922,10 @@ class BrowsePage(Widget):
         super().__init__(name=name, id=id, classes=classes)
         self._tabs_loaded: set[int] = set()
         self._restore_tab = active_tab
+        # Set by _open_tab when Enter opens a not-yet-loaded tab; consumed by
+        # on_worker_state_changed to move focus into the section once its
+        # async load has rendered.
+        self._pending_focus_tab: int | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -899,6 +944,11 @@ class BrowsePage(Widget):
         else:
             # Load the default tab (For You).
             self._load_tab(0)
+
+        # Land focus on the active tab label so Tab/Shift+Tab section nav and
+        # Enter-to-open are immediately usable. Deferred so the tab bar has
+        # mounted its labels.
+        self.call_after_refresh(self._focus_active_tab_label)
 
     def get_nav_state(self) -> dict[str, Any]:
         """Return state to preserve when navigating away."""
@@ -966,6 +1016,103 @@ class BrowsePage(Widget):
                     exclusive=True,
                     exit_on_error=False,
                 )
+
+    # ------------------------------------------------------------------
+    # Section focus traversal (Tab labels → content)
+    # ------------------------------------------------------------------
+
+    _SECTION_IDS = ("section-foryou", "section-charts", "section-releases")
+    _LOAD_WORKER_TABS = {"load-foryou": 0, "load-charts": 1, "load-releases": 2}
+
+    def _focus_active_tab_label(self) -> None:
+        """Focus the currently-active tab label."""
+        try:
+            tab_bar = self.query_one("#browse-tabs", BrowseTabBar)
+            tab_bar.query_one(f"#tab-{tab_bar.active_tab}", BrowseTab).focus()
+        except Exception:
+            logger.debug("Failed to focus active browse tab label", exc_info=True)
+
+    def _focus_adjacent_tab(self, current_index: int, delta: int) -> None:
+        """Move focus to the tab label ``delta`` steps from ``current_index`` (wraps)."""
+        target = (current_index + delta) % len(_TABS)
+        try:
+            tab_bar = self.query_one("#browse-tabs", BrowseTabBar)
+            tab_bar.query_one(f"#tab-{target}", BrowseTab).focus()
+        except Exception:
+            logger.debug("Failed to focus adjacent browse tab label", exc_info=True)
+
+    def _open_tab(self, index: int) -> None:
+        """Open the tab at ``index`` (Enter on a focused label) and move focus
+        into its content once rendered.
+
+        The content may not exist yet: Charts / New Releases load asynchronously
+        and keep their content hidden until the worker finishes, and even the
+        active tab can still be loading right after mount. So we BOTH try to
+        focus immediately (handles already-rendered content) AND arm
+        ``_pending_focus_tab`` so ``on_worker_state_changed`` focuses it once the
+        load completes. Whichever fires first wins; the other no-ops.
+        """
+        tab_bar = self.query_one("#browse-tabs", BrowseTabBar)
+        if tab_bar.active_tab != index:
+            tab_bar.switch_to(index)  # → TabChanged → _switch_section → _load_tab
+        self._pending_focus_tab = index
+        self.call_after_refresh(self._try_focus_section_content, index)
+
+    def _try_focus_section_content(self, index: int) -> None:
+        """Focus the section's content if it has rendered; clear the pending
+        flag on success (otherwise the worker handler retries when load ends)."""
+        if self._focus_section_content(index) and self._pending_focus_tab == index:
+            self._pending_focus_tab = None
+
+    def _focus_section_content(self, index: int) -> bool:
+        """Focus the first focusable widget inside section ``index`` that is
+        effectively visible (it and every ancestor up to the section are
+        displayed). Returns True if a widget was focused.
+
+        The ancestor check matters because sections keep inner content hidden
+        until loaded — e.g. ``#charts-content`` stays ``display:none`` on the
+        error / no-data path while the table inside still reports display=True.
+        """
+        if not (0 <= index < len(self._SECTION_IDS)):
+            return False
+        try:
+            section = self.query_one(f"#{self._SECTION_IDS[index]}")
+        except Exception:
+            return False
+        for widget in section.query("*"):
+            if not getattr(widget, "can_focus", False):
+                continue
+            if not self._effectively_displayed(widget, section):
+                continue
+            try:
+                widget.focus()
+                return True
+            except Exception:
+                logger.debug("Failed to focus browse section content", exc_info=True)
+                return False
+        return False
+
+    @staticmethod
+    def _effectively_displayed(widget: object, stop: object) -> bool:
+        """True if ``widget`` and every ancestor up to and including ``stop``
+        are displayed (no ``display:none`` container in between)."""
+        node = widget
+        while node is not None:
+            if not getattr(node, "display", True):
+                return False
+            if node is stop:
+                return True
+            node = getattr(node, "parent", None)
+        return True
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        """Once a deferred tab's load finishes, move focus into its content."""
+        if event.state != WorkerState.SUCCESS:
+            return
+        index = self._LOAD_WORKER_TABS.get(event.worker.name or "")
+        if index is not None and self._pending_focus_tab == index:
+            self._pending_focus_tab = None
+            self._focus_section_content(index)
 
     # ------------------------------------------------------------------
     # Item selection handlers
@@ -1039,7 +1186,9 @@ class BrowsePage(Widget):
         match action:
             case Action.MOVE_DOWN:
                 focused = self.app.focused
-                if isinstance(focused, ListView):
+                if isinstance(focused, BrowseTab):
+                    self._focus_adjacent_tab(focused.tab_index, 1)
+                elif isinstance(focused, ListView):
                     for _ in range(count):
                         focused.action_cursor_down()
                 elif isinstance(focused, TrackTable):
@@ -1047,7 +1196,9 @@ class BrowsePage(Widget):
 
             case Action.MOVE_UP:
                 focused = self.app.focused
-                if isinstance(focused, ListView):
+                if isinstance(focused, BrowseTab):
+                    self._focus_adjacent_tab(focused.tab_index, -1)
+                elif isinstance(focused, ListView):
                     for _ in range(count):
                         focused.action_cursor_up()
                 elif isinstance(focused, TrackTable):
@@ -1085,22 +1236,14 @@ class BrowsePage(Widget):
 
             case Action.SELECT:
                 focused = self.app.focused
-                if isinstance(focused, ListView):
+                if isinstance(focused, BrowseTab):
+                    # Enter on a focused tab label opens that view (and moves
+                    # focus into its content once rendered).
+                    self._open_tab(focused.tab_index)
+                elif isinstance(focused, ListView):
                     focused.action_select_cursor()
                 elif isinstance(focused, TrackTable):
                     await focused.handle_action(action, count)
-
-            case Action.FOCUS_NEXT:
-                # Move to next tab.
-                tab_bar = self.query_one("#browse-tabs", BrowseTabBar)
-                next_idx = (tab_bar.active_tab + 1) % len(_TABS)
-                tab_bar.switch_to(next_idx)
-
-            case Action.FOCUS_PREV:
-                # Move to previous tab.
-                tab_bar = self.query_one("#browse-tabs", BrowseTabBar)
-                prev_idx = (tab_bar.active_tab - 1) % len(_TABS)
-                tab_bar.switch_to(prev_idx)
 
             case Action.PICK_COUNTRY:
                 # Charts sub-tab only — index 1 in the (For You, Charts, New

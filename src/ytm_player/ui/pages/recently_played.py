@@ -161,6 +161,9 @@ class RecentlyPlayedPage(Widget):
         if row is not None and 0 <= row < table.row_count:
             table.move_cursor(row=row)
 
+        # Land keyboard focus on the table so Tab / j / k have a starting point.
+        table.focus()
+
     def get_nav_state(self) -> dict[str, Any]:
         """Return state to preserve when navigating away."""
         state: dict[str, Any] = {}

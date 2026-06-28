@@ -202,6 +202,34 @@ class TestResetOnHide:
         assert host._active_pane == PANE_CONTENT
         mocks.focus_content.assert_called_once()
 
+    def test_hiding_sidebar_resets_when_focus_is_in_it_despite_stale_pane(self):
+        """Tab can move focus into the sidebar without updating _active_pane.
+        Hiding (e.g. Ctrl+e) must still return focus to content, decided by the
+        actually-focused widget — not the stale cached pane."""
+        host, mocks = _make_sidebar_host(active_pane=PANE_CONTENT)  # stale hint
+        del host._apply_playlist_sidebar  # restore the real bound method
+        host.query_one = MagicMock(side_effect=Exception("no widget in tests"))
+        # Focus genuinely lives under the playlist sidebar (as after a Tab).
+        host.focused = SimpleNamespace(  # type: ignore[attr-defined]
+            id="ps-playlists-list",
+            parent=SimpleNamespace(id="playlist-sidebar", parent=None),
+        )
+        host._apply_playlist_sidebar(False)
+        assert host._active_pane == PANE_CONTENT
+        mocks.focus_content.assert_called_once()
+
+    def test_hiding_sidebar_leaves_focus_when_focus_is_in_content(self):
+        """If focus is in content, hiding the sidebar must NOT yank focus."""
+        host, mocks = _make_sidebar_host(active_pane=PANE_PLAYLISTS)  # stale hint
+        del host._apply_playlist_sidebar  # restore the real bound method
+        host.query_one = MagicMock(side_effect=Exception("no widget in tests"))
+        host.focused = SimpleNamespace(  # type: ignore[attr-defined]
+            id="library-tracks",
+            parent=SimpleNamespace(id="main-content", parent=None),
+        )
+        host._apply_playlist_sidebar(False)
+        mocks.focus_content.assert_not_called()
+
 
 # ── Layer 3: KeyHandlingMixin action routing ────────────────────────
 
@@ -209,6 +237,10 @@ class TestResetOnHide:
 def _make_key_host(active_pane: str) -> tuple[KeyHandlingMixin, SimpleNamespace]:
     host = KeyHandlingMixin()
     host._active_pane = active_pane
+    # Routing now derives the pane from the focused widget via _current_pane()
+    # (defined on SidebarMixin). A bare KeyHandlingMixin doesn't have it, so
+    # stub it to the pane under test.
+    host._current_pane = MagicMock(return_value=active_pane)
     sidebar = MagicMock()  # PlaylistSidebar stand-in
     lyrics = MagicMock()
     lyrics.handle_action = AsyncMock()
@@ -265,3 +297,102 @@ class TestRouteNavigationAction:
         host, mocks = _make_key_host("content")
         await host._route_navigation_action(Action.MOVE_DOWN, 1)
         mocks.page.handle_action.assert_called_once_with(Action.MOVE_DOWN, 1)
+
+    async def test_reorder_routes_to_page_with_count(self):
+        """Queue reorder (J/K) falls through to the page, carrying its count."""
+        host, mocks = _make_key_host("content")
+        await host._route_navigation_action(Action.REORDER_DOWN, 3)
+        mocks.page.handle_action.assert_called_once_with(Action.REORDER_DOWN, 3)
+
+
+# ── Unified section navigation: default bindings ────────────────────
+
+
+class TestSectionNavBindings:
+    """Tab/Shift+Tab section traversal + the new J/K queue-reorder chords."""
+
+    def _km(self) -> KeyMap:
+        km = KeyMap()
+        km._load_defaults()
+        return km
+
+    def test_tab_focuses_next_section(self):
+        result, action = self._km().match(("tab",))
+        assert result == MatchResult.EXACT
+        assert action == Action.FOCUS_NEXT
+
+    def test_shift_tab_focuses_prev_section(self):
+        result, action = self._km().match(("S-tab",))
+        assert result == MatchResult.EXACT
+        assert action == Action.FOCUS_PREV
+
+    def test_capital_j_reorders_down(self):
+        result, action = self._km().match(("J",))
+        assert result == MatchResult.EXACT
+        assert action == Action.REORDER_DOWN
+
+    def test_capital_k_reorders_up(self):
+        result, action = self._km().match(("K",))
+        assert result == MatchResult.EXACT
+        assert action == Action.REORDER_UP
+
+    def test_lowercase_j_still_moves_down(self):
+        """Reorder uses capital J/K — lowercase j must still move the cursor."""
+        result, action = self._km().match(("j",))
+        assert result == MatchResult.EXACT
+        assert action == Action.MOVE_DOWN
+
+    def test_lowercase_k_still_moves_up(self):
+        result, action = self._km().match(("k",))
+        assert result == MatchResult.EXACT
+        assert action == Action.MOVE_UP
+
+
+# ── _current_pane(): pane derived from the focused widget ───────────
+
+
+def _node(node_id: str | None, parent: object | None = None) -> SimpleNamespace:
+    """A minimal stand-in for a Textual widget in a parent chain."""
+    return SimpleNamespace(id=node_id, parent=parent)
+
+
+class TestCurrentPane:
+    def _host(self, focused: object, active_pane: str = PANE_CONTENT) -> SidebarMixin:
+        host = SidebarMixin()
+        host._active_pane = active_pane
+        host.focused = focused  # type: ignore[attr-defined]
+        return host
+
+    def test_focus_under_playlist_sidebar(self):
+        widget = _node("ps-playlists-list", _node("playlist-sidebar"))
+        assert self._host(widget)._current_pane() == PANE_PLAYLISTS
+
+    def test_focus_under_lyrics_sidebar(self):
+        widget = _node("ls-scroll", _node("lyrics-sidebar"))
+        assert self._host(widget)._current_pane() == PANE_LYRICS
+
+    def test_focus_under_main_content(self):
+        widget = _node("library-tracks", _node("main-content"))
+        assert self._host(widget)._current_pane() == PANE_CONTENT
+
+    def test_focus_is_the_pane_container_itself(self):
+        """The focused widget may itself be the pane container."""
+        assert self._host(_node("playlist-sidebar"))._current_pane() == PANE_PLAYLISTS
+
+    def test_focused_but_unknown_chain_defaults_to_content(self):
+        """A focused widget under no known pane → content, NOT the _active_pane
+        fallback (which only applies when nothing is focused)."""
+        widget = _node("stray", _node("also-stray"))
+        host = self._host(widget, active_pane=PANE_PLAYLISTS)
+        assert host._current_pane() == PANE_CONTENT
+
+    def test_no_focus_falls_back_to_active_pane(self):
+        host = self._host(None, active_pane=PANE_LYRICS)
+        assert host._current_pane() == PANE_LYRICS
+
+    def test_missing_focused_attr_falls_back_to_active_pane(self):
+        """Defensive: if ``self.focused`` can't be read, use the cached hint."""
+        host = SidebarMixin()
+        host._active_pane = PANE_PLAYLISTS
+        # No ``focused`` attribute set at all.
+        assert host._current_pane() == PANE_PLAYLISTS

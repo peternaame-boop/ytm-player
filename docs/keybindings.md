@@ -25,7 +25,8 @@
 | `Ctrl+w h` | Focus the Playlists sidebar (auto-shows it if hidden) |
 | `Ctrl+w l` | Focus the main content, then the lyrics sidebar if it's open |
 | `Ctrl+w w` | Cycle focus through the visible panes |
-| `tab` | Focus next element on the current page (page-specific) |
+| `tab` / `Shift+tab` | Focus next / previous section — track table, result panel, Browse tab label, or any visible sidebar (then `j`/`k` move within it, `enter` activates). On Browse, `tab` highlights a tab label and `enter` opens it. |
+| `J` / `K` | Queue: move the selected track down / up (count-aware, e.g. `15 J` moves down 15) |
 | `a` | Track actions menu |
 | `/` | Filter current list |
 | `Ctrl+r` | Cycle repeat mode (off → all → one) |

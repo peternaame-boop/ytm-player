@@ -39,8 +39,8 @@ ACTION_DESCRIPTIONS: dict[Action, str] = {
     Action.GO_TOP: "Jump to top of list",
     Action.GO_BOTTOM: "Jump to bottom of list",
     Action.SELECT: "Select / confirm",
-    Action.FOCUS_NEXT: "Focus next panel",
-    Action.FOCUS_PREV: "Focus previous panel",
+    Action.FOCUS_NEXT: "Focus next section",
+    Action.FOCUS_PREV: "Focus previous section",
     Action.FOCUS_PANE_LEFT: "Focus the Playlists sidebar (vim window: left)",
     Action.FOCUS_PANE_RIGHT: "Focus the main content, then lyrics (vim window: right)",
     Action.FOCUS_PANE_CYCLE: "Cycle focus through the visible panes",
@@ -69,6 +69,8 @@ ACTION_DESCRIPTIONS: dict[Action, str] = {
     Action.DISCOVERY_MIX: "Start discovery roulette — random mix from a rotating source",
     Action.FILTER: "Filter / search within list",
     Action.PICK_COUNTRY: "Pick chart region (Browse → Charts only)",
+    Action.REORDER_DOWN: "Move selected track down in the queue (Queue only)",
+    Action.REORDER_UP: "Move selected track up in the queue (Queue only)",
     # Sorting
     Action.SORT_TITLE: "Sort by title",
     Action.SORT_ARTIST: "Sort by artist",
@@ -135,6 +137,8 @@ ACTION_CATEGORIES: dict[str, list[Action]] = {
         Action.DISCOVERY_MIX,
         Action.FILTER,
         Action.PICK_COUNTRY,
+        Action.REORDER_DOWN,
+        Action.REORDER_UP,
     ],
     "Sorting": [
         Action.SORT_TITLE,
@@ -219,6 +223,9 @@ class HelpPage(Widget):
         self._build_rows()
         self._populate_table()
 
+        # Land keyboard focus on the table so Tab / j / k have a starting point.
+        table.focus()
+
     def _build_rows(self) -> None:
         """Generate the full row list from the keymap, grouped by category."""
         keymap = get_keymap()
@@ -294,17 +301,29 @@ class HelpPage(Widget):
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
         """Process vim-style navigation actions."""
-        # If the filter input is focused, let it handle keys normally.
-        if self.filter_visible:
+        table = self.query_one("#help-table", DataTable)
+
+        # Guard on ACTUAL input focus, not the ``filter_visible`` flag. The app
+        # only routes keys here once focus has LEFT the filter input (it defers
+        # to a focused Input), so keying off the flag alone would dead-key the
+        # page after Tab moved focus out of the filter. When the input genuinely
+        # holds focus this branch is never reached — kept defensive.
+        try:
+            filter_input = self.query_one("#help-filter-input", Input)
+        except Exception:
+            filter_input = None
+        if filter_input is not None and self.app.focused is filter_input:
             if action == Action.CLOSE_POPUP:
                 self.filter_visible = False
             return
 
-        table = self.query_one("#help-table", DataTable)
-
         match action:
             case Action.FILTER:
                 self.filter_visible = True
+                # Always (re)focus the input — the reactive watch won't refire
+                # when filter_visible is already True (e.g. after Tab left it).
+                if filter_input is not None:
+                    filter_input.focus()
 
             case Action.MOVE_DOWN:
                 for _ in range(count):

@@ -93,6 +93,15 @@ class QueuePage(Widget):
     def on_mount(self) -> None:
         self._register_player_events()
         self._refresh_queue()
+        # Land keyboard focus on the table (populated synchronously above) so
+        # Tab / j / k have a starting point. Only here, not on every refresh —
+        # reorder/select must not yank focus back.
+        try:
+            table = self.query_one("#queue-table", TrackTable)
+            if table.display:
+                table.focus()
+        except Exception:
+            logger.debug("Failed to focus queue table on mount", exc_info=True)
 
     def on_unmount(self) -> None:
         self._unregister_player_events()
@@ -240,11 +249,11 @@ class QueuePage(Widget):
             case Action.DELETE_ITEM:
                 self._remove_selected(table, queue)
 
-            case Action.FOCUS_PREV if self._is_reorder_context():
-                self._move_track(table, queue, direction=-1)
+            case Action.REORDER_UP:
+                self._move_track(table, queue, direction=-1, count=count)
 
-            case Action.FOCUS_NEXT if self._is_reorder_context():
-                self._move_track(table, queue, direction=1)
+            case Action.REORDER_DOWN:
+                self._move_track(table, queue, direction=1, count=count)
 
             case Action.CYCLE_REPEAT:
                 queue.cycle_repeat()
@@ -263,10 +272,6 @@ class QueuePage(Widget):
             case _:
                 await table.handle_action(action, count)
 
-    def _is_reorder_context(self) -> bool:
-        """Always allow reorder in the queue page."""
-        return True
-
     def _remove_selected(self, table: TrackTable, queue: Any) -> None:
         """Remove the currently highlighted track from the queue."""
         track = table.selected_track
@@ -281,13 +286,18 @@ class QueuePage(Widget):
                 new_row = min(idx, table.row_count - 1)
                 table.move_cursor(row=new_row)
 
-    def _move_track(self, table: TrackTable, queue: Any, direction: int) -> None:
-        """Move the highlighted track up or down in the queue."""
+    def _move_track(self, table: TrackTable, queue: Any, direction: int, count: int = 1) -> None:
+        """Move the highlighted track ``count`` positions up or down.
+
+        The destination is clamped to the queue bounds, so a ``count`` larger
+        than the remaining distance simply moves the track to the top/bottom
+        (e.g. ``15 J`` near the end lands it at the bottom).
+        """
         if table.cursor_row is None:
             return
         from_idx = table.cursor_row
-        to_idx = from_idx + direction
-        if not (0 <= to_idx < queue.length):
+        to_idx = max(0, min(from_idx + direction * count, queue.length - 1))
+        if to_idx == from_idx:
             return
         queue.move(from_idx, to_idx)
         self._refresh_queue()

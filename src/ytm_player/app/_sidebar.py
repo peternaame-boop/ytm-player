@@ -40,6 +40,11 @@ class SidebarMixin(YTMHostBase):
 
     def _apply_playlist_sidebar(self, visible: bool) -> None:
         """Set playlist sidebar visibility and update header bar state."""
+        # Capture whether focus lives in this pane BEFORE hiding it. Tab can
+        # move focus into the sidebar without touching ``_active_pane``, and the
+        # hide itself can clear focus, so the cached flag is unreliable — read
+        # actual focus.
+        focus_was_in_pane = not visible and self._current_pane() == PANE_PLAYLISTS
         try:
             ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
             if visible:
@@ -53,15 +58,17 @@ class SidebarMixin(YTMHostBase):
             header.set_playlist_state(visible)
         except Exception:
             pass
-        # If the sidebar is hidden while it holds keyboard focus, hand focus
+        # If the sidebar was hidden while it held keyboard focus, hand focus
         # back to the main content pane so movement keys don't route into a
         # now-invisible widget.
-        if not visible and getattr(self, "_active_pane", PANE_CONTENT) == PANE_PLAYLISTS:
+        if focus_was_in_pane:
             self._active_pane = PANE_CONTENT
             self._focus_content_widget()
 
     def _apply_lyrics_sidebar(self, visible: bool) -> None:
         """Set lyrics sidebar visibility and update header bar state."""
+        # Capture focus-in-pane before hiding (see _apply_playlist_sidebar).
+        focus_was_in_pane = not visible and self._current_pane() == PANE_LYRICS
         try:
             ls = self.query_one("#lyrics-sidebar", LyricsSidebar)
             if visible:
@@ -86,8 +93,8 @@ class SidebarMixin(YTMHostBase):
             header.set_lyrics_state(visible)
         except Exception:
             pass
-        # If the lyrics pane is hidden while focused, fall back to content.
-        if not visible and getattr(self, "_active_pane", PANE_CONTENT) == PANE_LYRICS:
+        # If the lyrics pane was hidden while focused, fall back to content.
+        if focus_was_in_pane:
             self._active_pane = PANE_CONTENT
             self._focus_content_widget()
 
@@ -159,6 +166,35 @@ class SidebarMixin(YTMHostBase):
         except Exception:
             logger.debug("Failed to focus content pane", exc_info=True)
 
+    def _current_pane(self) -> str:
+        """Return the pane the actually-focused widget lives in.
+
+        Focus is the single source of truth, so this stays correct however
+        focus moved — ``Tab``/``Shift+Tab`` (Textual's native chain), the
+        ``Ctrl+w`` helpers, or a mouse click. Walks the focused widget's
+        parent chain looking for a known pane container (``#playlist-sidebar``
+        / ``#lyrics-sidebar`` / ``#main-content``). Falls back to the cached
+        ``_active_pane`` hint (which itself defaults to content) when nothing
+        is focused or focus can't be resolved.
+        """
+        try:
+            focused = self.focused
+        except Exception:
+            return getattr(self, "_active_pane", PANE_CONTENT)
+        if focused is None:
+            return getattr(self, "_active_pane", PANE_CONTENT)
+        node = focused
+        while node is not None:
+            node_id = getattr(node, "id", None)
+            if node_id == "playlist-sidebar":
+                return PANE_PLAYLISTS
+            if node_id == "lyrics-sidebar":
+                return PANE_LYRICS
+            if node_id == "main-content":
+                return PANE_CONTENT
+            node = getattr(node, "parent", None)
+        return PANE_CONTENT
+
     def _focus_pane(self, pane: str) -> None:
         """Move keyboard focus to *pane*, updating ``_active_pane`` and the
         focused widget so the move is visibly indicated."""
@@ -191,7 +227,7 @@ class SidebarMixin(YTMHostBase):
     def _focus_pane_left(self) -> None:
         """Ctrl+w h — move focus left. Reaches the Playlists sidebar from the
         content pane (auto-showing it), and steps lyrics → content."""
-        if self._active_pane == PANE_LYRICS:
+        if self._current_pane() == PANE_LYRICS:
             self._focus_pane(PANE_CONTENT)
         else:
             self._focus_pane(PANE_PLAYLISTS)
@@ -199,16 +235,18 @@ class SidebarMixin(YTMHostBase):
     def _focus_pane_right(self) -> None:
         """Ctrl+w l — move focus right: playlists → content → lyrics. Lyrics
         is only entered when the lyrics pane is visible."""
-        if self._active_pane == PANE_PLAYLISTS:
+        current = self._current_pane()
+        if current == PANE_PLAYLISTS:
             self._focus_pane(PANE_CONTENT)
-        elif self._active_pane == PANE_CONTENT and self._lyrics_sidebar_open:
+        elif current == PANE_CONTENT and self._lyrics_sidebar_open:
             self._focus_pane(PANE_LYRICS)
         # Already at the rightmost reachable pane — stay put.
 
     def _cycle_pane(self) -> None:
         """Ctrl+w w — cycle focus through the visible panes, wrapping."""
         panes = self._visible_panes()
-        current = self._active_pane if self._active_pane in panes else PANE_CONTENT
+        current = self._current_pane()
+        current = current if current in panes else PANE_CONTENT
         idx = panes.index(current)
         self._focus_pane(panes[(idx + 1) % len(panes)])
 

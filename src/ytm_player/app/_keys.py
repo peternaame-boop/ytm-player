@@ -293,6 +293,17 @@ class KeyHandlingMixin(YTMHostBase):
             case Action.FOCUS_PANE_CYCLE:
                 self._cycle_pane()
 
+            # -- Section focus traversal (Tab / Shift+Tab) --
+            # Handled once, here, via Textual's native focus chain, which
+            # walks every displayed focusable widget in DOM order — content
+            # widgets AND any visible sidebar, skipping hidden ones. Pages no
+            # longer implement FOCUS_NEXT/FOCUS_PREV themselves.
+            case Action.FOCUS_NEXT:
+                self.action_focus_next()
+
+            case Action.FOCUS_PREV:
+                self.action_focus_previous()
+
             # -- Navigation actions routed to the active pane --
             case (
                 Action.MOVE_DOWN
@@ -302,8 +313,6 @@ class KeyHandlingMixin(YTMHostBase):
                 | Action.GO_TOP
                 | Action.GO_BOTTOM
                 | Action.SELECT
-                | Action.FOCUS_NEXT
-                | Action.FOCUS_PREV
                 | Action.CONTEXT_ACTIONS
                 | Action.SELECTED_ACTIONS
                 | Action.ADD_TO_QUEUE
@@ -318,6 +327,8 @@ class KeyHandlingMixin(YTMHostBase):
                 | Action.JUMP_TO_CURRENT
                 | Action.TOGGLE_SEARCH_MODE
                 | Action.PICK_COUNTRY
+                | Action.REORDER_DOWN
+                | Action.REORDER_UP
             ):
                 await self._route_navigation_action(action, count)
 
@@ -334,8 +345,14 @@ class KeyHandlingMixin(YTMHostBase):
         actually operate the Playlists or lyrics pane after ``Ctrl+w``
         focuses it — a bare ``.focus()`` is not enough because ``on_key``
         intercepts every keystroke before Textual's focus chain runs.
+
+        The active pane is derived from the *actually-focused* widget
+        (``_current_pane()``) rather than a cached field, so routing stays
+        correct no matter how focus moved — ``Tab``/``Shift+Tab``, ``Ctrl+w``,
+        or a mouse click.
         """
-        if self._active_pane == "playlists" and action in _SIDEBAR_PANE_ACTIONS:
+        pane = self._current_pane()
+        if pane == "playlists" and action in _SIDEBAR_PANE_ACTIONS:
             try:
                 sidebar = self.query_one("#playlist-sidebar", PlaylistSidebar)
             except Exception:
@@ -343,7 +360,7 @@ class KeyHandlingMixin(YTMHostBase):
             if sidebar is not None:
                 sidebar.handle_sidebar_action(action, count)
                 return
-        elif self._active_pane == "lyrics" and action in _LYRICS_PANE_ACTIONS:
+        elif pane == "lyrics" and action in _LYRICS_PANE_ACTIONS:
             try:
                 lyrics = self.query_one("#lyrics-sidebar", LyricsSidebar)
             except Exception:

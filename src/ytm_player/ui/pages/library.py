@@ -271,6 +271,10 @@ class LibraryPage(Widget):
             # Restore cursor position or scroll to the currently-playing track.
             self._restore_track_cursor(table)
 
+            # Land keyboard focus on the table so Tab / j / k have a starting
+            # point once the page's data has rendered.
+            table.focus()
+
             # Kick off background fetch for remaining tracks.
             if total_count > len(raw_tracks):
                 self.run_worker(

@@ -146,6 +146,9 @@ class LikedSongsPage(Widget):
         if row is not None and 0 <= row < table.row_count:
             table.move_cursor(row=row)
 
+        # Land keyboard focus on the table so Tab / j / k have a starting point.
+        table.focus()
+
     def _update_footer(self, loading_more: bool = False) -> None:
         try:
             table = self.query_one("#liked-table", TrackTable)

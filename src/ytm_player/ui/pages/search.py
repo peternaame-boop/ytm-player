@@ -1004,12 +1004,6 @@ class SearchPage(Widget):
                         elif action == Action.SELECT:
                             focused.action_select_cursor()
 
-            case Action.FOCUS_NEXT:
-                self.app.action_focus_next()
-
-            case Action.FOCUS_PREV:
-                self.app.action_focus_previous()
-
             case Action.TOGGLE_SEARCH_MODE:
                 self._toggle_search_mode()
 
