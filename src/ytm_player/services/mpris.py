@@ -26,8 +26,8 @@ if sys.platform == "linux":
     try:
         from dbus_fast import Variant  # type: ignore[reportMissingImports]
         from dbus_fast.aio import MessageBus  # type: ignore[reportMissingImports]
+        from dbus_fast.constants import PropertyAccess  # type: ignore[reportMissingImports]
         from dbus_fast.service import (  # type: ignore[reportMissingImports]
-            PropertyAccess,
             ServiceInterface,
             dbus_property,
             method,
