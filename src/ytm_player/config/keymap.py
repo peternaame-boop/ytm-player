@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -20,6 +21,8 @@ else:
     from typing_extensions import Self  # pyright: ignore[reportMissingImports]
 
 from ytm_player.config.paths import KEYMAP_FILE
+
+logger = logging.getLogger(__name__)
 
 
 class Action(str, Enum):
@@ -183,6 +186,15 @@ def parse_key_sequence(raw: str) -> tuple[str, ...]:
     return tuple(raw.strip().split())
 
 
+def _is_valid_binding(keys: object) -> bool:
+    """A binding value must be a string or a list of strings."""
+    if isinstance(keys, str):
+        return True
+    if isinstance(keys, list):
+        return all(isinstance(k, str) for k in keys)
+    return False
+
+
 @dataclass
 class KeyMap:
     bindings: dict[tuple[str, ...], Action] = field(default_factory=dict)
@@ -191,13 +203,32 @@ class KeyMap:
     def load(cls, path: Path = KEYMAP_FILE) -> Self:
         keymap = cls()
 
-        if path.exists():
+        if not path.exists():
+            keymap._load_defaults()
+            return keymap
+
+        try:
             with open(path, "rb") as f:
                 data = tomllib.load(f)
-            keymap._load_from_dict(data)
-        else:
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            logger.warning(
+                "Keymap file %s is unreadable/corrupted (%s) — backing up and using defaults.",
+                path,
+                exc,
+            )
+            backup = path.with_suffix(".toml.bak")
+            try:
+                # replace(), not rename(): on Windows rename raises
+                # FileExistsError when a stale .bak already exists, which
+                # would leave the corrupt file in place forever.
+                path.replace(backup)
+                logger.warning("Backed up broken keymap to %s", backup)
+            except OSError:
+                pass
             keymap._load_defaults()
+            return keymap
 
+        keymap._load_from_dict(data)
         return keymap
 
     def _load_defaults(self) -> None:
@@ -217,6 +248,16 @@ class KeyMap:
                 try:
                     action = Action(action_name)
                 except ValueError:
+                    logger.warning("Unknown keymap action %r — ignoring.", action_name)
+                    continue
+
+                if not _is_valid_binding(keys):
+                    logger.warning(
+                        "Keymap binding for %r must be a string or list of strings, "
+                        "got %s — ignoring.",
+                        action_name,
+                        type(keys).__name__,
+                    )
                     continue
 
                 self._remove_action(action)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import sys
+import types
+import typing
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -187,12 +189,28 @@ class Settings:
             return settings
 
         for section_name, section_cls in SECTION_MAP.items():
-            if section_name in data:
-                section_data = data[section_name]
-                section_instance = getattr(settings, section_name)
-                for f_info in fields(section_instance):
-                    if f_info.name in section_data:
-                        setattr(section_instance, f_info.name, section_data[f_info.name])
+            if section_name not in data:
+                continue
+            section_data = data[section_name]
+            if not isinstance(section_data, dict):
+                logger.warning("Config section [%s] is not a table — ignoring.", section_name)
+                continue
+            section_instance = getattr(settings, section_name)
+            type_hints = typing.get_type_hints(section_cls)
+            for f_info in fields(section_instance):
+                if f_info.name not in section_data:
+                    continue
+                value = section_data[f_info.name]
+                expected = type_hints.get(f_info.name)
+                if expected is not None and not _value_matches_type(value, expected):
+                    logger.warning(
+                        "Config value %s.%s has invalid type %s — using default.",
+                        section_name,
+                        f_info.name,
+                        type(value).__name__,
+                    )
+                    continue
+                setattr(section_instance, f_info.name, value)
 
         settings.ui.home_shelves = max(1, min(25, settings.ui.home_shelves))
 
@@ -238,8 +256,44 @@ class Settings:
     @property
     def cache_dir(self) -> Path:
         if self.cache.location:
-            return Path(self.cache.location)
+            return Path(self.cache.location).expanduser()
         return CACHE_DIR
+
+
+def _value_matches_type(value: object, expected: object) -> bool:
+    """Best-effort check that a TOML-loaded `value` fits a declared field type.
+
+    Handles str, bool, int, float, list, and unions (including ``Optional`` and
+    PEP 604 ``X | Y``). Deliberately pragmatic:
+
+    - bool is checked before int (bool is an int subclass), so a bool field
+      rejects a plain int and an int field rejects a bool.
+    - float fields also accept int (numeric widening), but not bool.
+    - unions match if *any* member matches; a ``None`` member allows ``None``.
+    - unknown/complex types are accepted rather than rejected (fail-open).
+    """
+    origin = typing.get_origin(expected)
+    if origin is typing.Union or origin is types.UnionType:
+        return any(_value_matches_type(value, arg) for arg in typing.get_args(expected))
+
+    # Strip generic parameters (e.g. list[str] -> list) for the isinstance check.
+    concrete = origin if origin is not None else expected
+
+    if concrete is type(None):
+        return value is None
+    if concrete is bool:
+        return isinstance(value, bool)
+    if concrete is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if concrete is float:
+        return isinstance(value, float) or (isinstance(value, int) and not isinstance(value, bool))
+    if concrete is str:
+        return isinstance(value, str)
+    if concrete is list:
+        return isinstance(value, list)
+    if isinstance(concrete, type):
+        return isinstance(value, concrete)
+    return True
 
 
 def _format_toml_value(value: object) -> str:
