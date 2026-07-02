@@ -1169,7 +1169,9 @@ class BrowsePage(Widget):
         if result_type in ("song", "video", "flat_song") or video_id:
             normalized_tracks = normalize_tracks([item])
             track_to_play = normalized_tracks[0] if normalized_tracks else item
-            await host.play_track(track_to_play)
+            # Replace the queue instead of playing around it — otherwise the
+            # queue page goes stale and next-track resumes the old queue.
+            await host._replace_queue_and_play([track_to_play])
         elif result_type in ("album", "single"):
             if browse_id:
                 await host.navigate_to("context", context_type="album", context_id=browse_id)

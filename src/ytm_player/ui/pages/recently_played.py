@@ -177,20 +177,21 @@ class RecentlyPlayedPage(Widget):
 
     _CONTEXT_ID = "__RECENTLY_PLAYED__"
 
-    def _apply_shuffle_pref(self, queue: Any) -> None:
-        """Set queue context to the Recently Played sentinel and restore shuffle pref."""
-        queue.set_context(self._CONTEXT_ID)
-        prefs = self.app.shuffle_prefs  # type: ignore[attr-defined]
-        saved = prefs.get(self._CONTEXT_ID)
-        if saved is not None and queue.shuffle_enabled != saved:
-            queue.toggle_shuffle()
-
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
+        """Replace the queue with the history list and play the selection.
+
+        Replacing (not appending) matches every other page — appending made
+        repeated selections pile up duplicates in the live queue.
+        """
         event.stop()
+        table = self.query_one("#recent-table", TrackTable)
         host = cast("YTMHostBase", self.app)
-        host.queue.add(event.track)
-        host.queue.jump_to_real(host.queue.length - 1)
-        self._apply_shuffle_pref(host.queue)
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=self._CONTEXT_ID,
+            start_index=event.index,
+            autoplay=False,
+        )
         await host.play_track(event.track)
 
     async def handle_action(self, action: Action, count: int = 1) -> None:

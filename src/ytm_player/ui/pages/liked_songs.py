@@ -204,23 +204,16 @@ class LikedSongsPage(Widget):
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         event.stop()
         table = self.query_one("#liked-table", TrackTable)
-        tracks = table.tracks
         host = cast("YTMHostBase", self.app)
-        host.queue.clear()
-        host.queue.add_multiple(tracks)
-        host.queue.jump_to_real(event.index)
-        self._apply_shuffle_pref(host.queue)
+        await host._replace_queue_and_play(
+            table.tracks,
+            entity_id=self._CONTEXT_ID,
+            start_index=event.index,
+            autoplay=False,
+        )
         await host.play_track(event.track)
 
     _CONTEXT_ID = "__LIKED_SONGS__"
-
-    def _apply_shuffle_pref(self, queue: Any) -> None:
-        """Set queue context to the Liked Songs sentinel and restore shuffle pref."""
-        queue.set_context(self._CONTEXT_ID)
-        prefs = self.app.shuffle_prefs  # type: ignore[attr-defined]
-        saved = prefs.get(self._CONTEXT_ID)
-        if saved is not None and queue.shuffle_enabled != saved:
-            queue.toggle_shuffle()
 
     async def handle_action(self, action: Action, count: int = 1) -> None:
         table = self.query_one("#liked-table", TrackTable)

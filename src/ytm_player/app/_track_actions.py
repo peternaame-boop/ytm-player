@@ -208,8 +208,11 @@ class TrackActionsMixin(YTMHostBase):
         self.queue.clear()
         self.queue.add_multiple(tracks)
         self.queue.set_context(entity_id)
-        if entity_id and self.shuffle_prefs.get(entity_id):
-            if not self.queue.shuffle_enabled:
+        saved_pref = self.shuffle_prefs.get(entity_id)
+        if saved_pref is not None:
+            # Per-collection shuffle memory wins in both directions — a
+            # saved OFF must clear a currently-ON shuffle, not just force ON.
+            if self.queue.shuffle_enabled != saved_pref:
                 self.queue.toggle_shuffle()
         elif shuffle is False:
             if self.queue.shuffle_enabled:
