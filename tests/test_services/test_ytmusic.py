@@ -32,6 +32,11 @@ def ytmusic_service():
     svc._consecutive_api_failures = 0
     svc._client_init_lock = threading.Lock()
     svc._order_lock = asyncio.Lock()
+    svc._no_patch = asyncio.Event()
+    svc._no_patch.set()
+    svc._inflight = 0
+    svc._no_inflight = asyncio.Event()
+    svc._no_inflight.set()
     svc._ytm = MagicMock(name="fake-ytm-client")
     return svc
 
@@ -134,6 +139,11 @@ class TestClientThreadSafety:
         svc._consecutive_api_failures = 0
         svc._client_init_lock = threading.Lock()
         svc._order_lock = asyncio.Lock()
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
 
         n_threads = 4
         barrier = threading.Barrier(n_threads)

@@ -19,6 +19,11 @@ def ytmusic_service():
     service._consecutive_api_failures = 0
     service._client_init_lock = threading.Lock()
     service._order_lock = asyncio.Lock()
+    service._no_patch = asyncio.Event()
+    service._no_patch.set()
+    service._inflight = 0
+    service._no_inflight = asyncio.Event()
+    service._no_inflight.set()
     service._last_discovery_source = -1
     return service
 

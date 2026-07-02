@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -35,6 +36,11 @@ class TestCallTimeoutOverride:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
 
         async def fake_wait_for(awaitable, **_kwargs):
             # Drain the to_thread coroutine so it doesn't warn at GC,
@@ -56,6 +62,11 @@ class TestCallTimeoutOverride:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
 
         async def fake_wait_for(awaitable, **_kwargs):
             return await awaitable
@@ -79,6 +90,11 @@ class TestGetPlaylistRemaining:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
 
         full_data = _make_playlist_data(500)
 
@@ -95,6 +111,11 @@ class TestGetPlaylistRemaining:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
 
         full_data = _make_playlist_data(300)
 
@@ -108,6 +129,11 @@ class TestGetPlaylistRemaining:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
 
         with patch.object(
             svc, "get_playlist", new_callable=AsyncMock, return_value={"tracks": []}
@@ -126,6 +152,11 @@ class TestGetPlaylistRemaining:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
 
         with patch.object(
             svc, "get_playlist", new_callable=AsyncMock, return_value={"tracks": []}
@@ -143,6 +174,11 @@ class TestGetPlaylistLimitForwarding:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
         svc._ytm = MagicMock()
         svc._ytm.get_playlist = MagicMock(return_value={"tracks": []})
 
@@ -156,6 +192,11 @@ class TestGetPlaylistLimitForwarding:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
         svc._ytm = MagicMock()
         svc._ytm.get_playlist = MagicMock(return_value={"tracks": []})
 
@@ -173,6 +214,11 @@ class TestGetLikedSongsTimeout:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
         svc._ytm = MagicMock()
         svc._ytm.get_liked_songs = MagicMock(return_value={"tracks": []})
 
@@ -186,6 +232,11 @@ class TestGetLikedSongsTimeout:
 
         svc = YTMusicService.__new__(YTMusicService)
         svc._consecutive_api_failures = 0
+        svc._no_patch = asyncio.Event()
+        svc._no_patch.set()
+        svc._inflight = 0
+        svc._no_inflight = asyncio.Event()
+        svc._no_inflight.set()
         svc._ytm = MagicMock()
         svc._ytm.get_liked_songs = MagicMock(return_value={"tracks": []})
 

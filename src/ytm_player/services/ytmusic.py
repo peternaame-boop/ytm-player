@@ -153,6 +153,17 @@ class YTMusicService:
         # Serializes get_playlist(order=...) monkey-patches so concurrent
         # calls don't stack patches on client._send_request.
         self._order_lock = asyncio.Lock()
+        # Keeps ALL other client calls out of a patch window: while
+        # client._send_request is patched, any concurrent "browse" request
+        # would get the sort params injected into its body. Normal calls
+        # wait on this before running; it is cleared during the window.
+        self._no_patch = asyncio.Event()
+        self._no_patch.set()
+        # In-flight normal calls; a patch window waits for them to drain
+        # so a call that grabbed the un-patched send can't race the swap.
+        self._inflight = 0
+        self._no_inflight = asyncio.Event()
+        self._no_inflight.set()
         self._last_discovery_source: int = 0
         self._last_chart_shelf: int = 0
         # videoId -> server-assigned setVideoId from the most recent successful
@@ -178,7 +189,30 @@ class YTMusicService:
         return self._ytm
 
     async def _call(self, func: Any, *args: Any, timeout: int | None = None, **kwargs: Any) -> Any:
-        """Run a sync ytmusicapi method in a thread with timeout."""
+        """Run a sync ytmusicapi method in a thread with timeout.
+
+        Waits out any active get_playlist(order=...) patch window first —
+        running while client._send_request is patched would inject sort
+        params into an unrelated browse request.
+        """
+        await self._no_patch.wait()
+        self._inflight += 1
+        self._no_inflight.clear()
+        try:
+            return await self._run(func, *args, timeout=timeout, **kwargs)
+        finally:
+            # Known limitation: on timeout/cancellation the to_thread worker
+            # may still be running when we decrement, so a later patch window
+            # could inject sort params into that zombie's browse body — but
+            # its response is already discarded (the awaiter is gone), so no
+            # consumed data can be corrupted. Tracking worker lifetime instead
+            # would stall ordered fetches behind hung sockets; not worth it.
+            self._inflight -= 1
+            if self._inflight == 0:
+                self._no_inflight.set()
+
+    async def _run(self, func: Any, *args: Any, timeout: int | None = None, **kwargs: Any) -> Any:
+        """``_call`` without the patch-window gate (the ordered call itself uses this)."""
         effective_timeout = timeout if timeout is not None else get_settings().playback.api_timeout
         try:
             result = await asyncio.wait_for(
@@ -384,21 +418,30 @@ class YTMusicService:
                 # Serialize this section so two concurrent get_playlist(order=...)
                 # calls don't stack patches on client._send_request and leak.
                 async with self._order_lock:
-                    client = self.client
-                    original_send = client._send_request
-
-                    def _patched_send(endpoint: str, body: dict, *a: Any, **kw: Any) -> Any:
-                        if endpoint == "browse" and isinstance(body, dict):
-                            body["params"] = params
-                        return original_send(endpoint, body, *a, **kw)
-
+                    # Open the patch window: stop new normal calls, then wait
+                    # for in-flight ones to drain before touching the shared
+                    # client._send_request.
+                    self._no_patch.clear()
                     try:
-                        client._send_request = _patched_send
-                        return await self._call(
-                            client.get_playlist, playlist_id, timeout=timeout, limit=limit
-                        )
+                        await self._no_inflight.wait()
+                        client = self.client
+                        original_send = client._send_request
+
+                        def _patched_send(endpoint: str, body: dict, *a: Any, **kw: Any) -> Any:
+                            if endpoint == "browse" and isinstance(body, dict):
+                                body["params"] = params
+                            return original_send(endpoint, body, *a, **kw)
+
+                        try:
+                            client._send_request = _patched_send
+                            # _run, not _call: the gate is closed for the window.
+                            return await self._run(
+                                client.get_playlist, playlist_id, timeout=timeout, limit=limit
+                            )
+                        finally:
+                            client._send_request = original_send
                     finally:
-                        client._send_request = original_send
+                        self._no_patch.set()
             return await self._call(
                 self.client.get_playlist, playlist_id, timeout=timeout, limit=limit
             )

@@ -19,6 +19,11 @@ def svc():
     s._user = None
     s._consecutive_api_failures = 0
     s._order_lock = asyncio.Lock()
+    s._no_patch = asyncio.Event()
+    s._no_patch.set()
+    s._inflight = 0
+    s._no_inflight = asyncio.Event()
+    s._no_inflight.set()
     s._client_init_lock = MagicMock()
     s._ytm = MagicMock()
     return s
