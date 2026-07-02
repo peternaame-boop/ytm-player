@@ -1014,3 +1014,24 @@ class YTMusicService:
         except Exception:
             logger.exception("get_history failed")
             return []
+
+    async def add_history_item(self, video_id: str) -> bool:
+        """Register a play in the account's YouTube Music history.
+
+        ytmusicapi requires the ``playbackTracking`` payload from
+        ``get_song()`` and that both calls use the same client instance;
+        both go through ``self.client`` here, so that holds. Best-effort:
+        any failure is logged and swallowed (returns ``False``) so callers
+        can fire-and-forget without affecting playback.
+
+        Returns ``True`` when the server accepts the report (HTTP 204).
+        """
+        if not video_id:
+            return False
+        try:
+            song = await self._call(self.client.get_song, video_id)
+            resp = await self._call(self.client.add_history_item, song)
+            return getattr(resp, "status_code", None) == 204
+        except Exception:
+            logger.exception("add_history_item failed for %r", video_id)
+            return False

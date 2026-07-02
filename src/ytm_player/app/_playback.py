@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 _MAX_CONSECUTIVE_FAILURES = 5
 
+# Minimum seconds listened before a play is reported to the YouTube Music
+# account history. Short (native YT Music registers plays early) but non-zero
+# so instant skips aren't logged.
+_YTM_HISTORY_MIN_SECONDS = 10
+
 
 class PlaybackMixin(YTMHostBase):
     """Playback coordination, player event callbacks, history logging, download."""
@@ -638,6 +643,7 @@ class PlaybackMixin(YTMHostBase):
                 )
             except Exception:
                 logger.exception("Failed to log play history")
+            self._maybe_report_ytm_play(self.player.current_track, listened)
 
     async def _log_listen_for(self, track: dict) -> None:
         """Log listen duration for an explicit track dict.
@@ -658,6 +664,30 @@ class PlaybackMixin(YTMHostBase):
                 )
             except Exception:
                 logger.exception("Failed to log play history")
+            self._maybe_report_ytm_play(track, listened)
+
+    def _maybe_report_ytm_play(self, track: dict | None, listened_seconds: int) -> None:
+        """Report a qualifying play to the YT Music account history.
+
+        Opt-out (``playback.sync_history_to_ytmusic``, default on): fires a
+        background, best-effort ``add_history_item`` so TUI plays show up in
+        the account history like any other client. Only plays past a short
+        listen threshold count, so skips aren't logged. Never blocks playback
+        — failures are logged and ignored inside the service call.
+        """
+        if not self.settings.playback.sync_history_to_ytmusic:
+            return
+        if not self.ytmusic or not track:
+            return
+        if listened_seconds < _YTM_HISTORY_MIN_SECONDS:
+            return
+        video_id = get_video_id(track)
+        if not video_id:
+            return
+        self.run_worker(
+            self.ytmusic.add_history_item(video_id),
+            group="ytm-history-report",
+        )
 
     # ── Like toggle ──────────────────────────────────────────────────
 

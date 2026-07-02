@@ -529,3 +529,39 @@ class TestMutationFailureSuffix:
 
         assert "setup" in mutation_failure_suffix("auth_required").lower()
         assert "setup" in mutation_failure_suffix("auth_expired").lower()
+
+
+class TestAddHistoryItem:
+    """Piece 2: report TUI plays back to the YT Music account history."""
+
+    async def test_returns_true_on_204(self, ytmusic_service):
+        song = {"playbackTracking": {"videostatsPlaybackUrl": {"baseUrl": "u"}}}
+        ytmusic_service._ytm.get_song = MagicMock(return_value=song)
+        ytmusic_service._ytm.add_history_item = MagicMock(
+            return_value=MagicMock(status_code=204)
+        )
+
+        ok = await ytmusic_service.add_history_item("vid123")
+
+        assert ok is True
+        ytmusic_service._ytm.get_song.assert_called_once_with("vid123")
+        ytmusic_service._ytm.add_history_item.assert_called_once_with(song)
+
+    async def test_returns_false_on_non_204(self, ytmusic_service):
+        ytmusic_service._ytm.get_song = MagicMock(return_value={"playbackTracking": {}})
+        ytmusic_service._ytm.add_history_item = MagicMock(
+            return_value=MagicMock(status_code=200)
+        )
+
+        assert await ytmusic_service.add_history_item("vid123") is False
+
+    async def test_empty_video_id_short_circuits(self, ytmusic_service):
+        ytmusic_service._ytm.get_song = MagicMock()
+
+        assert await ytmusic_service.add_history_item("") is False
+        ytmusic_service._ytm.get_song.assert_not_called()
+
+    async def test_swallows_errors_and_returns_false(self, ytmusic_service):
+        ytmusic_service._ytm.get_song = MagicMock(side_effect=RuntimeError("boom"))
+
+        assert await ytmusic_service.add_history_item("vid123") is False
