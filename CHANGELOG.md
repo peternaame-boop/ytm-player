@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**New features**
+
+- **Recently Played — YT Music account history tab** — the Recently Played page now has two tabs: **Local** (the existing SQLite play history recorded inside this app) and **YT Music** (your account-wide play history fetched from the server via ytmusicapi `get_history()`). Switch tabs by clicking the labels or with the keyboard (`Tab` / `Shift+Tab` to focus a tab label, `Enter` to activate) — consistent with the Browse page. Each tab is cached so switching back doesn't refetch. Both tabs are capped at 100 rows to keep the TUI responsive. `[▶ Start Radio]` and filtering work on both. No new keybinding — both views live under `g r`.
+- **Plays sync to your YouTube Music history** — tracks played in the TUI are now reported back to your YT Music account (via `add_history_item()`), so they show up in your history and feed recommendations like any other client. Fired best-effort in the background so it never blocks playback, and only after ~10s of listening so skips aren't logged. Opt-out via `playback.sync_history_to_ytmusic = false`.
+
+---
+
 ### v1.9.5 (2026-06-28)
 
 **New features**

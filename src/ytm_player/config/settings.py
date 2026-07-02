@@ -44,6 +44,10 @@ class PlaybackSettings:
     gapless: bool = True
     api_timeout: int = 15
     resume_on_launch: bool = True
+    # Report plays back to your YouTube Music account history (so tracks
+    # played in the TUI show up in YT Music like any other client). Opt-out:
+    # set to false to keep TUI listening off your account.
+    sync_history_to_ytmusic: bool = True
 
 
 @dataclass
