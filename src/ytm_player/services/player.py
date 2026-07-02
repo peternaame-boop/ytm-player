@@ -449,9 +449,10 @@ class Player:
     async def play(self, url: str, track_info: dict) -> None:
         """Play a stream URL with associated track metadata."""
         with self._skip_lock:
-            if self._current_track is not None:
-                # A track is still playing — mpv will fire end-file for it
-                # when we load the new URL.  Tell the callback to ignore it.
+            # A track is still playing — mpv will fire end-file for it
+            # when we load the new URL.  Tell the callback to ignore it.
+            skip_armed = self._current_track is not None
+            if skip_armed:
                 self._end_file_skip += 1
             self._current_track = track_info
         try:
@@ -459,7 +460,17 @@ class Player:
             self._dispatch(PlayerEvent.TRACK_CHANGE, track_info)
         except Exception as exc:
             with self._skip_lock:
-                self._current_track = None
+                # Clean up only if no other operation replaced the current
+                # track while _play_sync was in flight — the counter and
+                # track would belong to that operation, not this call.
+                if self._current_track is track_info:
+                    # The load failed, so no end-file will arrive for it —
+                    # roll back the pre-incremented counter, or a later
+                    # legitimate end-file gets swallowed and auto-advance
+                    # silently stops.
+                    if skip_armed and self._end_file_skip > 0:
+                        self._end_file_skip -= 1
+                    self._current_track = None
             logger.error("Failed to play %s: %s", track_info.get("video_id", "?"), exc)
             self._dispatch(PlayerEvent.ERROR, exc)
 
@@ -477,20 +488,32 @@ class Player:
                 raise RuntimeError("mpv recovery failed")
 
     async def pause(self) -> None:
-        self._mpv.pause = True
+        try:
+            self._mpv.pause = True
+        except mpv.ShutdownError:
+            pass
 
     async def resume(self) -> None:
-        self._mpv.pause = False
+        try:
+            self._mpv.pause = False
+        except mpv.ShutdownError:
+            pass
 
     async def toggle_pause(self) -> None:
-        self._mpv.pause = not self._mpv.pause
+        try:
+            self._mpv.pause = not self._mpv.pause
+        except mpv.ShutdownError:
+            pass
 
     async def stop(self) -> None:
         with self._skip_lock:
             if self._current_track is not None:
                 self._end_file_skip += 1
             self._current_track = None
-        self._mpv.stop()
+        try:
+            self._mpv.stop()
+        except mpv.ShutdownError:
+            pass
 
     def _clamp_seek_target(self, target: float) -> float:
         """Clamp a seek target to [0, duration] (duration 0.0 = unknown)."""
@@ -526,7 +549,10 @@ class Player:
     async def set_volume(self, level: int) -> None:
         """Set volume to a specific level (clamped to 0-100)."""
         level = max(0, min(100, level))
-        self._mpv.volume = level
+        try:
+            self._mpv.volume = level
+        except mpv.ShutdownError:
+            return
         self._dispatch(PlayerEvent.VOLUME_CHANGE, level)
 
     async def change_volume(self, delta: int) -> None:
@@ -535,7 +561,10 @@ class Player:
 
     async def mute(self) -> None:
         """Toggle mute state."""
-        self._mpv.mute = not self._mpv.mute
+        try:
+            self._mpv.mute = not self._mpv.mute
+        except mpv.ShutdownError:
+            pass
 
     # ── Health & Recovery ────────────────────────────────────────────
 
