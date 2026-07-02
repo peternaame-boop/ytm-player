@@ -16,20 +16,17 @@ that to a typed Literal so per-cause toasts are possible.
 
 from __future__ import annotations
 
-import threading
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import requests
 from ytmusicapi.exceptions import YTMusicServerError
 
-from ytm_player.services.ytmusic import YTMusicService, mutation_failure_suffix
+from tests.conftest import make_ytmusic_service
+from ytm_player.services.ytmusic import mutation_failure_suffix
 
 
 async def test_rate_song_returns_success_on_ok(monkeypatch):
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._ytm = MagicMock(name="fake-ytm-client")
-    svc._consecutive_api_failures = 0
-    svc._client_init_lock = threading.Lock()
+    svc = make_ytmusic_service()
 
     fake_call = AsyncMock(return_value=None)
     monkeypatch.setattr(svc, "_call", fake_call)
@@ -39,10 +36,7 @@ async def test_rate_song_returns_success_on_ok(monkeypatch):
 
 
 async def test_rate_song_returns_network_on_connection_failure(monkeypatch):
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._ytm = MagicMock(name="fake-ytm-client")
-    svc._consecutive_api_failures = 0
-    svc._client_init_lock = threading.Lock()
+    svc = make_ytmusic_service()
 
     fake_call = AsyncMock(side_effect=requests.ConnectionError("network unreachable"))
     monkeypatch.setattr(svc, "_call", fake_call)
@@ -57,10 +51,7 @@ async def test_rate_song_returns_auth_expired_on_http_401(monkeypatch):
     """Auth-expired must map to the dedicated Literal, not "server_error",
     so cascade sites can prompt the user to re-run `ytm setup`.
     """
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._ytm = MagicMock(name="fake-ytm-client")
-    svc._consecutive_api_failures = 0
-    svc._client_init_lock = threading.Lock()
+    svc = make_ytmusic_service()
 
     fake_call = AsyncMock(
         side_effect=YTMusicServerError(
@@ -78,10 +69,7 @@ async def test_add_playlist_items_returns_kind_per_batch(monkeypatch):
     """Verifies the spotify-import flow's per-batch failure tracking still
     works under the typed contract — three batches: ok, network-fail, ok.
     """
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._ytm = MagicMock(name="fake-ytm-client")
-    svc._consecutive_api_failures = 0
-    svc._client_init_lock = threading.Lock()
+    svc = make_ytmusic_service()
 
     call_count = 0
 
@@ -109,10 +97,7 @@ async def test_add_playlist_items_uniform_failure_reports_kind(monkeypatch):
     service-side contract; the popup-side composition is tested implicitly
     by relying on the same suffix helper.
     """
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._ytm = MagicMock(name="fake-ytm-client")
-    svc._consecutive_api_failures = 0
-    svc._client_init_lock = threading.Lock()
+    svc = make_ytmusic_service()
 
     fake_call = AsyncMock(
         side_effect=YTMusicServerError("Server returned HTTP 401: Unauthorized.\n")

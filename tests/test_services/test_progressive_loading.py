@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from tests.conftest import make_ytmusic_service
+from ytm_player.services.ytmusic import YTMusicService
 
 
 def _make_playlist_data(num_tracks: int, track_count: int | None = None) -> dict:
@@ -32,15 +34,7 @@ class TestCallTimeoutOverride:
 
     async def test_default_timeout_used(self):
         """_call() uses api_timeout from settings when no override is given."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
+        svc = make_ytmusic_service()
 
         async def fake_wait_for(awaitable, **_kwargs):
             # Drain the to_thread coroutine so it doesn't warn at GC,
@@ -58,15 +52,7 @@ class TestCallTimeoutOverride:
 
     async def test_custom_timeout_override(self):
         """_call() uses the provided timeout when explicitly given."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
+        svc = make_ytmusic_service()
 
         async def fake_wait_for(awaitable, **_kwargs):
             return await awaitable
@@ -86,15 +72,7 @@ class TestGetPlaylistRemaining:
 
     async def test_returns_tracks_after_offset(self):
         """get_playlist_remaining slices off tracks we already have."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
+        svc = make_ytmusic_service()
 
         full_data = _make_playlist_data(500)
 
@@ -107,15 +85,7 @@ class TestGetPlaylistRemaining:
 
     async def test_returns_empty_when_no_more(self):
         """get_playlist_remaining returns empty list when already_have >= total."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
+        svc = make_ytmusic_service()
 
         full_data = _make_playlist_data(300)
 
@@ -125,15 +95,7 @@ class TestGetPlaylistRemaining:
 
     async def test_uses_extended_timeout(self):
         """get_playlist_remaining passes _LARGE_PLAYLIST_TIMEOUT to get_playlist."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
+        svc = make_ytmusic_service()
 
         with patch.object(
             svc, "get_playlist", new_callable=AsyncMock, return_value={"tracks": []}
@@ -148,15 +110,7 @@ class TestGetPlaylistRemaining:
 
     async def test_forwards_order_parameter(self):
         """get_playlist_remaining forwards the order parameter."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
+        svc = make_ytmusic_service()
 
         with patch.object(
             svc, "get_playlist", new_callable=AsyncMock, return_value={"tracks": []}
@@ -170,16 +124,7 @@ class TestGetPlaylistLimitForwarding:
 
     async def test_limit_forwarded_to_client(self):
         """get_playlist passes the limit parameter to the underlying client."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
-        svc._ytm = MagicMock()
+        svc = make_ytmusic_service()
         svc._ytm.get_playlist = MagicMock(return_value={"tracks": []})
 
         with patch.object(svc, "_call", new_callable=AsyncMock, return_value={"tracks": []}) as mc:
@@ -188,16 +133,7 @@ class TestGetPlaylistLimitForwarding:
 
     async def test_timeout_forwarded(self):
         """get_playlist passes the timeout parameter to _call."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
-        svc._ytm = MagicMock()
+        svc = make_ytmusic_service()
         svc._ytm.get_playlist = MagicMock(return_value={"tracks": []})
 
         with patch.object(svc, "_call", new_callable=AsyncMock, return_value={"tracks": []}) as mc:
@@ -210,16 +146,7 @@ class TestGetLikedSongsTimeout:
 
     async def test_timeout_forwarded(self):
         """get_liked_songs passes timeout to _call."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
-        svc._ytm = MagicMock()
+        svc = make_ytmusic_service()
         svc._ytm.get_liked_songs = MagicMock(return_value={"tracks": []})
 
         with patch.object(svc, "_call", new_callable=AsyncMock, return_value={"tracks": []}) as mc:
@@ -228,16 +155,7 @@ class TestGetLikedSongsTimeout:
 
     async def test_default_timeout_is_none(self):
         """get_liked_songs passes timeout=None by default (uses api_timeout)."""
-        from ytm_player.services.ytmusic import YTMusicService
-
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._consecutive_api_failures = 0
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
-        svc._ytm = MagicMock()
+        svc = make_ytmusic_service()
         svc._ytm.get_liked_songs = MagicMock(return_value={"tracks": []})
 
         with patch.object(svc, "_call", new_callable=AsyncMock, return_value={"tracks": []}) as mc:
@@ -250,6 +168,4 @@ class TestLargePlaylistTimeout:
 
     def test_large_playlist_timeout_value(self):
         """Ensure _LARGE_PLAYLIST_TIMEOUT is sufficient for large playlists."""
-        from ytm_player.services.ytmusic import YTMusicService
-
         assert YTMusicService._LARGE_PLAYLIST_TIMEOUT >= 60

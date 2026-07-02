@@ -8,7 +8,7 @@ and pick up file edits naturally.
 
 from __future__ import annotations
 
-import time
+import os
 
 
 def _write_theme(path, primary: str = "#ff0000", surface: str = "#1a1a1a") -> None:
@@ -53,9 +53,11 @@ class TestThemeTomlCache:
         first = app_module._read_theme_toml_cached()
         assert first.get("primary") == "#ff0000"
 
-        # Wait so mtime changes (mtime resolution is typically 1s on ext4).
-        time.sleep(1.1)
         _write_theme(theme_file, primary="#00ff00")
+        # Force a distinct, newer mtime so the cache invalidates immediately —
+        # no need to wait out the filesystem's mtime resolution (~1s on ext4).
+        bumped = theme_file.stat().st_mtime + 10
+        os.utime(theme_file, (bumped, bumped))
 
         second = app_module._read_theme_toml_cached()
         assert second.get("primary") == "#00ff00"

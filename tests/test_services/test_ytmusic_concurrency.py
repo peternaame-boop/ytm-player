@@ -14,24 +14,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.conftest import make_ytmusic_service
+
 
 @pytest.fixture
 def ytmusic_service():
     """Construct YTMusicService with a fake client (bypasses __init__)."""
-    from ytm_player.services.ytmusic import YTMusicService
-
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._auth_path = MagicMock()
-    svc._auth_manager = None
-    svc._user = None
-    svc._consecutive_api_failures = 0
-    svc._order_lock = asyncio.Lock()  # needed since we bypass __init__
-    svc._no_patch = asyncio.Event()
-    svc._no_patch.set()
-    svc._inflight = 0
-    svc._no_inflight = asyncio.Event()
-    svc._no_inflight.set()
-
     fake_client = MagicMock()
     # Real send_request impl we want to be restored.
     fake_client._original_send = lambda endpoint, body, *a, **kw: {"contents": []}
@@ -42,8 +30,7 @@ def ytmusic_service():
         return {"tracks": []}
 
     fake_client.get_playlist = fake_get_playlist
-    svc._ytm = fake_client
-    return svc
+    return make_ytmusic_service(_ytm=fake_client)
 
 
 class TestSendRequestRaceCondition:

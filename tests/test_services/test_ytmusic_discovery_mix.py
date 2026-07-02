@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ytm_player.services.ytmusic import YTMusicService
+from tests.conftest import make_ytmusic_service
 
 # Source mapping: 1=charts, 2=trending, 3=home,
 #                 4=liked_songs, 5=artist, 6=history
@@ -17,22 +15,7 @@ from ytm_player.services.ytmusic import YTMusicService
 
 @pytest.fixture
 def svc():
-    s = YTMusicService.__new__(YTMusicService)
-    s._auth_path = Path(__file__)
-    s._auth_manager = None
-    s._user = None
-    s._consecutive_api_failures = 0
-    s._order_lock = asyncio.Lock()
-    s._no_patch = asyncio.Event()
-    s._no_patch.set()
-    s._inflight = 0
-    s._no_inflight = asyncio.Event()
-    s._no_inflight.set()
-    s._last_discovery_source = 0
-    s._last_chart_shelf = 0
-    s._client_init_lock = MagicMock()
-    s._ytm = MagicMock()
-    return s
+    return make_ytmusic_service()
 
 
 class TestGetDiscoveryMix:

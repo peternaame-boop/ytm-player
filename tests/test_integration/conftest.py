@@ -2,7 +2,7 @@
 
 Pattern: real services wired together, mocked at the outermost boundary.
 
-- HTTP via `responses` (replaces requests.Session calls inside ytmusicapi)
+- ytmusicapi mocked per-test at the service boundary (monkeypatch)
 - mpv at the FFI boundary via existing test stubs
 - Disk via tmp_path
 - Singletons reset between tests so parallel runs don't collide
@@ -20,7 +20,6 @@ from collections.abc import Iterator
 from unittest.mock import MagicMock
 
 import pytest
-import responses as _responses_lib
 
 from ytm_player.services.player import Player
 from ytm_player.services.queue import QueueManager
@@ -51,9 +50,6 @@ def fresh_ytmusic() -> YTMusicService:
         def test_something(fresh_ytmusic, monkeypatch):
             monkeypatch.setattr(fresh_ytmusic, "search", lambda *a, **kw: [...])
             # ...
-
-    Or for HTTP-level mocking via ``responses``, leave fresh_ytmusic alone
-    and use the ``mocked_http`` fixture to stage HTTP responses.
     """
     svc = YTMusicService()
     svc._ytm = None
@@ -66,21 +62,6 @@ def fresh_queue() -> QueueManager:
     qm = QueueManager()
     qm.clear()
     return qm
-
-
-@pytest.fixture
-def mocked_http() -> Iterator[_responses_lib.RequestsMock]:
-    """Yield a `responses.RequestsMock` that patches `requests.Session`.
-
-    Use in tests that exercise ytmusicapi paths — register expected HTTP
-    responses, call the service, assert the call shape.
-
-    `assert_all_requests_are_fired=False` because some integration tests
-    don't care about every URL the service might hit; they assert on the
-    behavior, not the HTTP traffic shape.
-    """
-    with _responses_lib.RequestsMock(assert_all_requests_are_fired=False) as rsps:
-        yield rsps
 
 
 @pytest.fixture

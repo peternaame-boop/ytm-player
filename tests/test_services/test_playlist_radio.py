@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tests.conftest import make_ytmusic_service
 from ytm_player.services.ytmusic import YTMusicService
 
 
@@ -23,11 +24,7 @@ def _make_raw_track(video_id: str = "abc123", title: str = "Song") -> dict:
 
 @pytest.fixture
 def service() -> YTMusicService:
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._ytm = MagicMock()
-    svc._consecutive_api_failures = 0
-    svc._order_lock = None
-    return svc
+    return make_ytmusic_service()
 
 
 async def test_get_playlist_radio_strips_vl_prefix(service: YTMusicService) -> None:

@@ -2,30 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-import threading
 from unittest.mock import MagicMock
 
-import pytest
-
 from ytm_player.services.ytmusic import YTMusicService
-
-
-@pytest.fixture
-def ytmusic_service():
-    """Create a YTMusicService with a mocked YTMusic client."""
-    service = YTMusicService.__new__(YTMusicService)
-    service._ytm = MagicMock()
-    service._consecutive_api_failures = 0
-    service._client_init_lock = threading.Lock()
-    service._order_lock = asyncio.Lock()
-    service._no_patch = asyncio.Event()
-    service._no_patch.set()
-    service._inflight = 0
-    service._no_inflight = asyncio.Event()
-    service._no_inflight.set()
-    service._last_discovery_source = -1
-    return service
 
 
 async def test_subscribe_artist_success(ytmusic_service: YTMusicService):

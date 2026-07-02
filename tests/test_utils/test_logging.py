@@ -293,11 +293,13 @@ class TestFaulthandlerEnable:
 
 
 class TestAsyncioExceptionHandlerPattern:
-    """Verify the asyncio exception handler signature + write path.
+    """Exercise the REAL asyncio exception handler's crash-file write path.
 
-    The handler in _app.py is a method, but its core (extract exception,
-    write to crashes/) is unit-testable in isolation by replicating the
-    function shape here.
+    Calls ``YTMPlayerApp._asyncio_exception_handler`` directly rather than a
+    replica, so a regression in the real handler is caught here. The method
+    never touches instance state, so it is called unbound with a dummy
+    ``self``. The handler swallows all internal errors, so assertions are on
+    the crash-file side effect, not on any return value.
     """
 
     @pytest.fixture(autouse=True)
@@ -308,29 +310,30 @@ class TestAsyncioExceptionHandlerPattern:
         yield
 
     def test_asyncio_handler_writes_crash_file_with_exception(self, tmp_path: Path, monkeypatch):
+        from ytm_player.app._app import YTMPlayerApp
         from ytm_player.utils import logging as logmod
 
         crash_dir = tmp_path / "crashes"
         monkeypatch.setattr(logmod, "_crash_dir", crash_dir)
         crash_dir.mkdir(parents=True, exist_ok=True)
 
-        # Simulate the handler body (matches _app.py:_asyncio_exception_handler).
         try:
             raise RuntimeError("loop boom")
         except RuntimeError as exc:
-            text = "".join(
-                __import__("traceback").format_exception(type(exc), exc, exc.__traceback__)
-            )
-            logmod.write_crash_file(text, label="Asyncio loop exception")
+            context = {"exception": exc}
+
+        # Unbound call with a dummy self — the handler never uses self.
+        YTMPlayerApp._asyncio_exception_handler(object(), None, context)
 
         files = list(crash_dir.glob("ytm-crash-*.log"))
         assert len(files) == 1
-        body = files[0].read_text()
+        body = files[0].read_text(encoding="utf-8")
         assert "Asyncio loop exception" in body
         assert "RuntimeError: loop boom" in body
 
     def test_asyncio_handler_writes_crash_file_with_message_only(self, tmp_path: Path, monkeypatch):
         """Handler must also work when context has no exception (rare)."""
+        from ytm_player.app._app import YTMPlayerApp
         from ytm_player.utils import logging as logmod
 
         crash_dir = tmp_path / "crashes"
@@ -338,16 +341,11 @@ class TestAsyncioExceptionHandlerPattern:
         crash_dir.mkdir(parents=True, exist_ok=True)
 
         context = {"message": "Custom asyncio warning"}
-        text = (
-            f"asyncio loop exception (no traceback available)\n"
-            f"Message: {context.get('message')}\n"
-            f"Context: {context!r}"
-        )
-        logmod.write_crash_file(text, label="Asyncio loop exception")
+        YTMPlayerApp._asyncio_exception_handler(object(), None, context)
 
         files = list(crash_dir.glob("ytm-crash-*.log"))
         assert len(files) == 1
-        assert "Custom asyncio warning" in files[0].read_text()
+        assert "Custom asyncio warning" in files[0].read_text(encoding="utf-8")
 
 
 class TestUnraisableHook:

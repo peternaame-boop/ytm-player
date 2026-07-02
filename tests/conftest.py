@@ -1,6 +1,48 @@
 """Shared test fixtures for ytm-player."""
 
+import asyncio
+import threading
+from unittest.mock import MagicMock
+
 import pytest
+
+
+def make_ytmusic_service(**overrides):
+    """Construct a ``YTMusicService`` bypassing ``__init__`` for tests.
+
+    Mirrors the real ``YTMusicService.__init__`` attribute shape (real
+    ``threading.Lock`` / ``asyncio.Lock`` / set ``asyncio.Event``s, a fake
+    ``_ytm`` client) so unit tests don't hand-roll the boilerplate. Pass
+    keyword ``overrides`` to deviate a single attribute, e.g.
+    ``make_ytmusic_service(_ytm=None)`` to exercise the lazy client path.
+    """
+    from ytm_player.services.ytmusic import YTMusicService
+
+    svc = YTMusicService.__new__(YTMusicService)
+    svc._auth_path = MagicMock()
+    svc._auth_manager = None
+    svc._user = None
+    svc._ytm = MagicMock(name="fake-ytm-client")
+    svc._consecutive_api_failures = 0
+    svc._client_init_lock = threading.Lock()
+    svc._order_lock = asyncio.Lock()
+    svc._no_patch = asyncio.Event()
+    svc._no_patch.set()
+    svc._inflight = 0
+    svc._no_inflight = asyncio.Event()
+    svc._no_inflight.set()
+    svc._last_discovery_source = 0
+    svc._last_chart_shelf = 0
+    svc.last_added_set_video_ids = {}
+    for name, value in overrides.items():
+        setattr(svc, name, value)
+    return svc
+
+
+@pytest.fixture
+def ytmusic_service():
+    """A ``YTMusicService`` with a fake client (bypasses ``__init__``)."""
+    return make_ytmusic_service()
 
 
 @pytest.fixture

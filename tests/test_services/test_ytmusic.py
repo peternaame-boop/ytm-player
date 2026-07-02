@@ -19,26 +19,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-
-@pytest.fixture
-def ytmusic_service():
-    """Construct YTMusicService with a fake client (bypasses __init__)."""
-    from ytm_player.services.ytmusic import YTMusicService
-
-    svc = YTMusicService.__new__(YTMusicService)
-    svc._auth_path = MagicMock()
-    svc._auth_manager = None
-    svc._user = None
-    svc._consecutive_api_failures = 0
-    svc._client_init_lock = threading.Lock()
-    svc._order_lock = asyncio.Lock()
-    svc._no_patch = asyncio.Event()
-    svc._no_patch.set()
-    svc._inflight = 0
-    svc._no_inflight = asyncio.Event()
-    svc._no_inflight.set()
-    svc._ytm = MagicMock(name="fake-ytm-client")
-    return svc
+from tests.conftest import make_ytmusic_service
 
 
 class TestCallNarrowedCatch:
@@ -112,8 +93,6 @@ class TestClientThreadSafety:
         ``None``. Only one ``YTMusic`` instance must be created and all four
         threads must see the same instance.
         """
-        from ytm_player.services.ytmusic import YTMusicService
-
         construction_count = 0
         construction_lock = threading.Lock()
 
@@ -131,19 +110,7 @@ class TestClientThreadSafety:
 
         monkeypatch.setattr("ytm_player.services.ytmusic.YTMusic", fake_ytmusic_ctor)
 
-        svc = YTMusicService.__new__(YTMusicService)
-        svc._auth_path = MagicMock()
-        svc._auth_manager = None
-        svc._user = None
-        svc._ytm = None
-        svc._consecutive_api_failures = 0
-        svc._client_init_lock = threading.Lock()
-        svc._order_lock = asyncio.Lock()
-        svc._no_patch = asyncio.Event()
-        svc._no_patch.set()
-        svc._inflight = 0
-        svc._no_inflight = asyncio.Event()
-        svc._no_inflight.set()
+        svc = make_ytmusic_service(_ytm=None)
 
         n_threads = 4
         barrier = threading.Barrier(n_threads)
