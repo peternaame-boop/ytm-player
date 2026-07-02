@@ -327,6 +327,26 @@ def _display_candidate(idx: int, candidate: dict) -> str:
     return f"  {idx}. {title} — {artist_str} ({duration}){suffix}"
 
 
+def _summarize_results(
+    results: list[MatchResult],
+) -> tuple[list[MatchResult], list[str], int]:
+    """Split match results into confirmed selections, playable IDs, and skips.
+
+    A result is *confirmed* when it has a non-``None`` ``selected`` candidate;
+    every other result is *skipped* (``skipped = total - confirmed``). Confirmed
+    selections whose extracted video ID is empty are dropped from the returned
+    ID list (unplayable) but are NOT counted as skipped — so ``len(video_ids)``
+    may be smaller than the confirmed count.
+
+    Returns ``(confirmed_results, video_ids, skipped)``.
+    """
+    confirmed = [r for r in results if r.selected is not None]
+    skipped = len(results) - len(confirmed)
+    video_ids = [get_video_id(r.selected) for r in confirmed if r.selected]
+    video_ids = [vid for vid in video_ids if vid]  # Filter empty.
+    return confirmed, video_ids, skipped
+
+
 def run_import(spotify_url: str, auth_file: Path) -> None:
     """Orchestrate the full interactive Spotify → YTM import flow."""
     if not _HAS_SPOTIFY_DEPS:
@@ -447,8 +467,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
         console.print()
 
     # Step 6: Collect confirmed track IDs.
-    confirmed = [r for r in results if r.selected is not None]
-    skipped = len(results) - len(confirmed)
+    confirmed, video_ids, skipped = _summarize_results(results)
 
     if not confirmed:
         console.print("[yellow]No tracks to add. Import cancelled.[/yellow]")
@@ -465,9 +484,6 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     console.print()
     with console.status(f'Creating playlist "{final_name}" on YouTube Music...'):
         try:
-            video_ids = [get_video_id(r.selected) for r in confirmed if r.selected]
-            video_ids = [vid for vid in video_ids if vid]  # Filter empty.
-
             playlist_id = ytmusic.create_playlist(
                 final_name,
                 f"Imported from Spotify: {playlist_name}",
