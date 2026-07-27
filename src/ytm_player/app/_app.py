@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import sys
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ else:
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
+from textual.theme import Theme
 
 from ytm_player.app._ipc import IPCMixin
 from ytm_player.app._keys import KeyHandlingMixin
@@ -407,6 +409,40 @@ class YTMPlayerApp(
             tc._apply_toml_overrides()
             set_theme(tc)
             self.theme_colors = tc
+
+            # Textual's own get_css_variables() derives every auto-generated
+            # design token (block-cursor-background, block-cursor-blurred-
+            # background, etc. -- used by DataTable/OptionList/Tree/Tabs/
+            # ListView cursor and selection highlights) from the
+            # *registered* Theme object's base colors via
+            # Theme.to_color_system().generate(), not from `tc`/theme.toml
+            # overrides applied above -- those only patch the app-specific
+            # variables dict afterward (see get_css_variables()). Without
+            # this, cursor/selection highlights stay pinned to whatever
+            # `t.primary` was when the theme was first registered (YTM_DARK's
+            # hardcoded "#ff0000" for the default theme), no matter what
+            # theme.toml says. Re-register the active theme with the fully
+            # resolved colors so Textual derives those tokens correctly too,
+            # then force a CSS refresh -- re-registering under the same name
+            # doesn't change the `theme` reactive's value, so Textual's own
+            # theme-switch refresh (which normally fires from a name change)
+            # won't trigger on its own.
+            updated_theme = Theme(
+                name=t.name,
+                primary=tc.primary,
+                secondary=tc.secondary,
+                warning=tc.warning,
+                error=tc.error,
+                success=tc.success,
+                accent=tc.accent,
+                foreground=tc.foreground,
+                background=tc.background,
+                surface=tc.surface,
+                dark=t.dark,
+                variables=t.variables,
+            )
+            self.register_theme(updated_theme)
+            self.call_next(partial(self.refresh_css, animate=False))
         except Exception:
             pass
 

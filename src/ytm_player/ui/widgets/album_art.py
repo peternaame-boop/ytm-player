@@ -38,6 +38,27 @@ _ART_CACHE_MAX = 20
 _DOWNLOAD_TIMEOUT = 5
 
 
+def _readable_on(bg_hex: str, *, light: str, dark: str) -> str:
+    """Pick whichever of *light*/*dark* is more readable on *bg_hex*.
+
+    The placeholder's note glyph used to hardcode ``theme.foreground`` as
+    its color regardless of the background it sits on -- correct for the
+    stock theme (dark red primary, near-white foreground contrasts fine),
+    but the glyph goes nearly invisible on any theme with a light/pastel
+    ``primary`` (foreground and background end up close in luminance).
+    Relative luminance (simplified sRGB weights, WCAG-style) decides which
+    of the two supplied colors actually contrasts against this specific
+    background, so it stays readable regardless of the active theme.
+    """
+    try:
+        hex_str = bg_hex.lstrip("#")
+        r, g, b = (int(hex_str[i : i + 2], 16) for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        return light
+    luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+    return dark if luminance > 0.5 else light
+
+
 class AlbumArt(Widget):
     """Displays album art in the terminal using half-block Unicode rendering.
 
@@ -202,8 +223,9 @@ class AlbumArt(Widget):
                 result.append(_BLOCK_TOP * w, style=f"{accent} on {bg}")
             elif row == h // 2:
                 pad = (w - 1) // 2
+                note_color = _readable_on(accent, light=theme.foreground, dark=theme.background)
                 result.append(_BLOCK_FULL * pad, style=accent)
-                result.append(_NOTE, style=f"bold {theme.foreground} on {accent}")
+                result.append(_NOTE, style=f"bold {note_color} on {accent}")
                 result.append(_BLOCK_FULL * (w - pad - 1), style=accent)
             else:
                 result.append(_BLOCK_FULL * w, style=accent)
