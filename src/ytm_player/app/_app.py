@@ -421,23 +421,34 @@ class YTMPlayerApp(
             # this, cursor/selection highlights stay pinned to whatever
             # `t.primary` was when the theme was first registered (YTM_DARK's
             # hardcoded "#ff0000" for the default theme), no matter what
-            # theme.toml says. Re-register the active theme with the fully
+            # theme.toml says. Re-register the active theme with the
             # resolved colors so Textual derives those tokens correctly too,
             # then force a CSS refresh -- re-registering under the same name
             # doesn't change the `theme` reactive's value, so Textual's own
             # theme-switch refresh (which normally fires from a name change)
             # won't trigger on its own.
+            #
+            # Deliberately built from `t`'s raw values plus a fresh read of
+            # theme.toml, not from `tc`. ThemeColors.__post_init__ runs every
+            # field through rich_safe_color(), which strips Textual-only
+            # tokens like "ansi_cyan" down to "cyan" so Rich markup doesn't
+            # choke on them -- correct for the Rich-text widgets that read
+            # `tc`, but it would silently rewrite anyone using Textual's
+            # ansi-dark/ansi-light base themes (or a custom theme built on
+            # ansi_* tokens) into plain named colors here, changing what
+            # those tokens actually mean to Textual's ColorSystem.
+            toml_colors = _read_theme_toml_cached()
             updated_theme = Theme(
                 name=t.name,
-                primary=tc.primary,
-                secondary=tc.secondary,
-                warning=tc.warning,
-                error=tc.error,
-                success=tc.success,
-                accent=tc.accent,
-                foreground=tc.foreground,
-                background=tc.background,
-                surface=tc.surface,
+                primary=toml_colors.get("primary", t.primary),
+                secondary=toml_colors.get("secondary", t.secondary),
+                warning=toml_colors.get("warning", t.warning),
+                error=toml_colors.get("error", t.error),
+                success=toml_colors.get("success", t.success),
+                accent=toml_colors.get("accent", t.accent),
+                foreground=toml_colors.get("foreground", t.foreground),
+                background=toml_colors.get("background", t.background),
+                surface=toml_colors.get("surface", t.surface),
                 dark=t.dark,
                 variables=t.variables,
             )
