@@ -490,10 +490,35 @@ class TestExtractSpotipy:
 # ── extract_spotify_tracks (dispatcher + scraper fallback) ────────────
 
 
-def _install_fake_scraper(monkeypatch, playlist_info):
+def _scraper_track(name: str, artist: str, album: str | None = "Al", ms: int = 1000):
+    """A fake ``spotify_scraper.models.track.Track``, attribute-shaped only.
+
+    Built with ``SimpleNamespace`` rather than importing the real dataclass,
+    since ``spotify_scraper`` is an optional dependency the test suite must
+    not require.
+    """
+    return types.SimpleNamespace(
+        name=name,
+        duration_ms=ms,
+        artists=(types.SimpleNamespace(name=artist),),
+        album=types.SimpleNamespace(name=album) if album else None,
+    )
+
+
+def _scraper_item(name: str, artist: str, album: str | None = "Al", ms: int = 1000):
+    """A fake ``spotify_scraper.models.playlist.PlaylistTrack``."""
+    return types.SimpleNamespace(track=_scraper_track(name, artist, album, ms))
+
+
+def _scraper_playlist(name: str, total_tracks: int, tracks: list):
+    """A fake ``spotify_scraper.models.playlist.Playlist``."""
+    return types.SimpleNamespace(name=name, total_tracks=total_tracks, tracks=tuple(tracks))
+
+
+def _install_fake_scraper(monkeypatch, playlist):
     """Inject a fake ``spotify_scraper`` module; return the client mock."""
     client = MagicMock(name="scraper-client")
-    client.get_playlist_info.return_value = playlist_info
+    client.get_playlist.return_value = playlist
     mod = types.ModuleType("spotify_scraper")
     mod.SpotifyClient = MagicMock(return_value=client)  # type: ignore[attr-defined]
     monkeypatch.setitem(__import__("sys").modules, "spotify_scraper", mod)
@@ -519,14 +544,7 @@ class TestExtractDispatcher:
         monkeypatch.setattr(si, "extract_spotify_tracks_spotipy", boom)
         client = _install_fake_scraper(
             monkeypatch,
-            {
-                "name": "Scraped",
-                "track_count": 2,
-                "tracks": [
-                    _spotipy_item("S1", "A1"),
-                    {"name": "S2", "artists": [{"name": "A2"}], "album": {"name": "Al"}},
-                ],
-            },
+            _scraper_playlist("Scraped", 2, [_scraper_item("S1", "A1"), _scraper_item("S2", "A2")]),
         )
         name, tracks = si.extract_spotify_tracks("https://open.spotify.com/playlist/x")
         assert name == "Scraped"
@@ -542,21 +560,31 @@ class TestExtractDispatcher:
             MagicMock(side_effect=AssertionError("spotipy must not be called")),
         )
         client = _install_fake_scraper(
-            monkeypatch, {"name": "S", "track_count": 1, "tracks": [_spotipy_item("Only", "A")]}
+            monkeypatch, _scraper_playlist("S", 1, [_scraper_item("Only", "A")])
         )
         name, tracks = si.extract_spotify_tracks("https://open.spotify.com/playlist/x")
         assert name == "S"
         assert [t["name"] for t in tracks] == ["Only"]
         client.close.assert_called_once()
 
+    def test_fetches_without_a_track_cap(self, monkeypatch):
+        """No more hardcoded ~100-track ceiling: max_tracks=None fetches all."""
+        monkeypatch.setattr(si, "has_spotify_creds", lambda: False)
+        client = _install_fake_scraper(
+            monkeypatch, _scraper_playlist("S", 1, [_scraper_item("Only", "A")])
+        )
+        si.extract_spotify_tracks("https://open.spotify.com/playlist/x")
+        client.get_playlist.assert_called_once_with(
+            "https://open.spotify.com/playlist/x", max_tracks=None
+        )
+
     def test_truncation_is_logged(self, monkeypatch, caplog):
         import logging
 
         monkeypatch.setattr(si, "has_spotify_creds", lambda: False)
         _install_fake_scraper(
-            monkeypatch,
-            {"name": "Big", "track_count": 500, "tracks": [_spotipy_item("One", "A")]},
+            monkeypatch, _scraper_playlist("Big", 500, [_scraper_item("One", "A")])
         )
         with caplog.at_level(logging.WARNING, logger=si.logger.name):
             si.extract_spotify_tracks("https://open.spotify.com/playlist/x")
-        assert any("limit" in rec.message.lower() for rec in caplog.records)
+        assert any("scraper returned" in rec.message.lower() for rec in caplog.records)
