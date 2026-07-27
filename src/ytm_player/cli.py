@@ -39,7 +39,7 @@ from ytm_player.config.paths import (
 )
 from ytm_player.config.settings import get_settings
 from ytm_player.ipc import ipc_request, is_tui_running, try_claim_pid
-from ytm_player.services.auth import AuthManager
+from ytm_player.services.auth import AuthManager, OAuthSlowDownError
 from ytm_player.utils.logging import install_excepthooks, setup_logging
 
 # ---------------------------------------------------------------------------
@@ -253,10 +253,15 @@ def _setup_oauth_cli(auth: AuthManager, client_id: str | None, client_secret: st
 
     elapsed = 0
     while elapsed < expires_in:
-        time.sleep(interval)
-        elapsed += interval
+        sleep_for = min(interval, expires_in - elapsed)
+        time.sleep(sleep_for)
+        elapsed += sleep_for
         try:
             token = auth.oauth_poll(credentials, device_code)
+        except OAuthSlowDownError:
+            # RFC 8628 §3.5: back off by increasing the interval, keep polling.
+            interval += 5
+            continue
         except Exception as exc:
             click.echo(f"Error: OAuth sign-in failed: {exc}", err=True)
             return False

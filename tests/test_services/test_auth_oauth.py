@@ -13,7 +13,7 @@ import pytest
 from ytmusicapi.auth.oauth import RefreshingToken
 
 from ytm_player.config.paths import SECURE_FILE_MODE
-from ytm_player.services.auth import AuthManager
+from ytm_player.services.auth import AuthManager, OAuthSlowDownError
 
 
 def _make_auth(tmp_path: Path) -> AuthManager:
@@ -51,6 +51,22 @@ class TestLoadOAuthCreds:
             json.dumps({"client_id": "", "client_secret": ""})
         )
         assert auth.load_oauth_creds() is None
+
+    def test_returns_none_when_fields_are_not_strings(self, tmp_path):
+        """A corrupted-but-truthy file (e.g. client_id written as an int)
+        must not be returned as-is — it would crash OAuthCredentials() later."""
+        auth = _make_auth(tmp_path)
+        (tmp_path / "oauth_creds.json").write_text(
+            json.dumps({"client_id": 12345, "client_secret": "secret456"})
+        )
+        assert auth.load_oauth_creds() is None
+
+    def test_drops_unexpected_extra_fields(self, tmp_path):
+        auth = _make_auth(tmp_path)
+        (tmp_path / "oauth_creds.json").write_text(
+            json.dumps({"client_id": "id123", "client_secret": "secret456", "extra": "junk"})
+        )
+        assert auth.load_oauth_creds() == {"client_id": "id123", "client_secret": "secret456"}
 
 
 class TestHasOAuth:
@@ -150,12 +166,16 @@ class TestOAuthPoll:
 
         assert auth.oauth_poll(credentials, "dev-code") is None
 
-    def test_returns_none_on_slow_down(self, tmp_path):
+    def test_raises_slow_down_error_on_slow_down(self, tmp_path):
+        """RFC 8628 §3.5: "slow_down" must be distinguishable from "authorization_pending"
+        so callers can back off their polling interval instead of treating it as
+        either a no-op or a terminal failure."""
         auth = _make_auth(tmp_path)
         credentials = MagicMock()
         credentials.token_from_code.return_value = {"error": "slow_down"}
 
-        assert auth.oauth_poll(credentials, "dev-code") is None
+        with pytest.raises(OAuthSlowDownError):
+            auth.oauth_poll(credentials, "dev-code")
 
     def test_raises_on_terminal_error(self, tmp_path):
         auth = _make_auth(tmp_path)
@@ -249,6 +269,21 @@ class TestSaveOAuth:
         auth.save_oauth("id123", "secret456", cast(RefreshingToken, _FakeToken()))
 
         mode = stat.S_IMODE((tmp_path / "oauth_creds.json").stat().st_mode)
+        assert mode == SECURE_FILE_MODE
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
+    def test_tightens_permissions_on_a_preexisting_creds_file(self, tmp_path):
+        """os.open()'s mode only applies on create; a stale creds file left
+        over from before this permissions guarantee existed must still get
+        tightened, not just left at whatever it already had."""
+        creds_file = tmp_path / "oauth_creds.json"
+        creds_file.write_text("{}")
+        creds_file.chmod(0o644)
+        auth = _make_auth(tmp_path)
+
+        auth.save_oauth("id123", "secret456", cast(RefreshingToken, _FakeToken()))
+
+        mode = stat.S_IMODE(creds_file.stat().st_mode)
         assert mode == SECURE_FILE_MODE
 
     def test_returns_false_on_write_failure(self, tmp_path):

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from ytm_player.cli import _setup_oauth_cli, main
-from ytm_player.services.auth import AuthManager
+from ytm_player.services.auth import AuthManager, OAuthSlowDownError
 
 # ── _setup_oauth_cli unit tests ───────────────────────────────────────────
 
@@ -150,6 +150,62 @@ class TestSetupOAuthCLI:
 
         assert result is False
         auth.save_oauth.assert_not_called()
+
+    def test_slow_down_backs_off_and_keeps_polling(self):
+        """RFC 8628 §3.5: "slow_down" must not abort the flow — the loop
+        should increase its interval and keep polling until it succeeds."""
+        auth = self._mock_auth(saved_creds={"client_id": "id", "client_secret": "secret"})
+        auth.oauth_start.return_value = (
+            MagicMock(),
+            {
+                "device_code": "dev-code",
+                "user_code": "ABCD-1234",
+                "verification_url": "https://www.google.com/device",
+                "interval": 1,
+                "expires_in": 60,
+            },
+        )
+        token = MagicMock()
+        auth.oauth_poll.side_effect = [OAuthSlowDownError, OAuthSlowDownError, token]
+        auth.save_oauth.return_value = True
+
+        with (
+            patch("ytm_player.cli.click.prompt"),
+            patch("ytm_player.cli.time.sleep") as mock_sleep,
+        ):
+            result = _setup_oauth_cli(auth, None, None)
+
+        assert result is True
+        assert auth.oauth_poll.call_count == 3
+        # interval grows 1 -> 6 -> 11 after each slow_down (RFC 8628: +5s).
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [1, 6, 11]
+
+    def test_sleep_never_exceeds_remaining_time_before_expiry(self):
+        """A long interval near the end of the expiry window must not sleep
+        past it — otherwise expiry is reported later than it needs to be."""
+        auth = self._mock_auth(saved_creds={"client_id": "id", "client_secret": "secret"})
+        auth.oauth_start.return_value = (
+            MagicMock(),
+            {
+                "device_code": "dev-code",
+                "user_code": "ABCD-1234",
+                "verification_url": "https://www.google.com/device",
+                "interval": 5,
+                "expires_in": 7,
+            },
+        )
+        auth.oauth_poll.return_value = None  # never resolves
+
+        with (
+            patch("ytm_player.cli.click.prompt"),
+            patch("ytm_player.cli.time.sleep") as mock_sleep,
+        ):
+            result = _setup_oauth_cli(auth, None, None)
+
+        assert result is False
+        # First sleep is the full interval (5), second is capped to the
+        # remaining 2 seconds rather than sleeping a full 5.
+        assert [call.args[0] for call in mock_sleep.call_args_list] == [5, 2]
 
     def test_returns_false_when_save_fails(self):
         auth = self._mock_auth(saved_creds={"client_id": "id", "client_secret": "secret"})

@@ -16,7 +16,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Input, Static
 
-from ytm_player.services.auth import AuthManager
+from ytm_player.services.auth import AuthManager, OAuthSlowDownError
 from ytm_player.ui.popups.base import BasePopup
 from ytm_player.ui.theme import get_theme
 from ytm_player.utils.formatting import copy_to_clipboard
@@ -184,10 +184,15 @@ class OAuthSetupPopup(BasePopup[bool]):
         elapsed = 0
 
         while elapsed < expires_in:
-            await asyncio.sleep(interval)
-            elapsed += interval
+            sleep_for = min(interval, expires_in - elapsed)
+            await asyncio.sleep(sleep_for)
+            elapsed += sleep_for
             try:
                 token = await asyncio.to_thread(self._auth.oauth_poll, credentials, device_code)
+            except OAuthSlowDownError:
+                # RFC 8628 §3.5: back off by increasing the interval, keep polling.
+                interval += 5
+                continue
             except Exception as exc:
                 logger.exception("OAuth device flow failed")
                 status.update(f"[{error_color}]Sign-in failed:[/{error_color}] {exc}")

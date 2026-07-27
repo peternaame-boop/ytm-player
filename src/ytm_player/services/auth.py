@@ -90,6 +90,17 @@ def _patch_yt_dlp_browsers() -> None:
         )
 
 
+class OAuthSlowDownError(Exception):
+    """Google asked the device-flow poller to back off.
+
+    Per RFC 8628 §3.5, the client must increase its polling interval (the
+    spec recommends by 5 seconds) when this is received, and must not treat
+    it as a terminal failure. Raised instead of returned so callers can't
+    accidentally treat it the same as "authorization_pending" (which keeps
+    the same interval) via a missed branch.
+    """
+
+
 class AuthManager:
     """Manages YouTube Music authentication via browser cookie extraction."""
 
@@ -163,8 +174,15 @@ class AuthManager:
             return None
         try:
             data = json.loads(self._oauth_creds_file.read_text(encoding="utf-8"))
-            if data.get("client_id") and data.get("client_secret"):
-                return data
+            client_id = data.get("client_id")
+            client_secret = data.get("client_secret")
+            if (
+                isinstance(client_id, str)
+                and isinstance(client_secret, str)
+                and client_id
+                and client_secret
+            ):
+                return {"client_id": client_id, "client_secret": client_secret}
         except (OSError, json.JSONDecodeError):
             logger.debug("Failed to parse OAuth credentials file", exc_info=True)
         return None
@@ -188,8 +206,11 @@ class AuthManager:
         Returns the resulting token on success. Returns None if the user
         has not finished the browser step yet — the caller should wait
         `interval` seconds (from the code bundle) and call this again.
-        Raises on a terminal failure (expired code, access denied, or a
-        bad client_id/client_secret).
+        Raises ``OAuthSlowDownError`` if Google asked the caller to back off —
+        the caller should increase its polling interval (RFC 8628 §3.5
+        recommends by 5 seconds) and keep polling, not treat this as a
+        terminal failure. Raises on any other terminal failure (expired
+        code, access denied, or a bad client_id/client_secret).
 
         ytmusicapi's OAuthCredentials only raises on an HTTP 401 (bad
         client credentials); Google's normal "still waiting" response
@@ -204,8 +225,10 @@ class AuthManager:
         # bundle -- cast once here instead of narrowing every access below.
         raw = cast("dict[str, Any]", credentials.token_from_code(device_code))
         error = raw.get("error")
-        if error in ("authorization_pending", "slow_down"):
+        if error == "authorization_pending":
             return None
+        if error == "slow_down":
+            raise OAuthSlowDownError
         if error:
             raise RuntimeError(f"OAuth device flow failed: {error}")
 
@@ -235,6 +258,12 @@ class AuthManager:
             )
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump({"client_id": client_id, "client_secret": client_secret}, f, indent=2)
+            # os.open()'s mode only applies when creating the file (and is
+            # still subject to umask); if oauth_creds.json already existed
+            # with broader permissions from a prior run, neither of those
+            # tightens it. Chmod explicitly so the owner-only guarantee
+            # holds regardless of prior state.
+            secure_chmod(self._oauth_creds_file, SECURE_FILE_MODE)
 
             # RefreshingToken.store_token() does a plain open(), so lock
             # down permissions afterward the same way _save_youtube_cookies

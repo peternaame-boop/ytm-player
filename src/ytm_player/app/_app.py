@@ -602,7 +602,7 @@ class YTMPlayerApp(
                 self.notify(
                     "Your YouTube Music session expired. Run `ytm setup` to sign in again, "
                     'or open the command palette (ctrl+p) and run "Account: Sign in with '
-                    'Google" for a more durable OAuth login.',
+                    'Google (OAuth)" for a more durable OAuth login.',
                     severity="error",
                     timeout=8,
                 )
