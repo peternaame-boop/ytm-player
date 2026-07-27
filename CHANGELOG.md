@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**New features**
+
+- **OAuth device-flow login** — an alternative to browser-cookie auth that doesn't need daily
+  re-login. Run `ytm setup --oauth` or, from a running session, open the command palette
+  (`ctrl+p`) and run "Account: Sign in with Google (OAuth)". Needs a one-time, free Google Cloud
+  OAuth client (five-minute setup, see `docs/oauth-login.md`); ytm-player does not ship a shared
+  client. Your client ID/secret and the resulting token are saved locally with owner-only file
+  permissions.
+
 ### v2.0.0 (2026-07-04)
 
 **New features**

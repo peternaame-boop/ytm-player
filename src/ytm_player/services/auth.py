@@ -14,14 +14,19 @@ import sys
 import tempfile
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
+from typing import Any, cast
 
 import requests.exceptions
-from ytmusicapi import YTMusic
+from ytmusicapi import OAuthCredentials, YTMusic
+from ytmusicapi.auth.oauth import RefreshingToken
+from ytmusicapi.auth.oauth.models import AuthCodeDict, BaseTokenDict
 from ytmusicapi.helpers import get_authorization, initialize_headers, sapisid_from_cookie
 
 from ytm_player.config.paths import (
     AUTH_FILE,
     CONFIG_DIR,
+    OAUTH_CREDS_FILE,
+    OAUTH_FILE,
     SECURE_FILE_MODE,
     secure_chmod,
 )
@@ -93,17 +98,27 @@ class AuthManager:
         config_dir: Path = CONFIG_DIR,
         auth_file: Path = AUTH_FILE,
         cookies_file: str | None = None,
+        oauth_file: Path = OAUTH_FILE,
+        oauth_creds_file: Path = OAUTH_CREDS_FILE,
     ) -> None:
         self._config_dir = config_dir
         self._auth_file = auth_file
         self._cookies_file = normalize_cookiefile(cookies_file)
+        self._oauth_file = oauth_file
+        self._oauth_creds_file = oauth_creds_file
 
     @property
     def auth_file(self) -> Path:
         return self._auth_file
 
+    def has_oauth(self) -> bool:
+        """Check whether an OAuth token and its client credentials are both stored."""
+        return self._oauth_file.exists() and self.load_oauth_creds() is not None
+
     def is_authenticated(self) -> bool:
-        """Check whether a valid auth file exists on disk."""
+        """Check whether valid credentials exist on disk, OAuth or cookie."""
+        if self.has_oauth():
+            return True
         if not self._auth_file.exists():
             return False
         try:
@@ -114,7 +129,11 @@ class AuthManager:
             return False
 
     def create_ytmusic_client(self, user: str | None = None) -> YTMusic:
-        """Create a YTMusic client from the stored auth file."""
+        """Create a YTMusic client from stored OAuth credentials, falling back to cookies."""
+        creds = self.load_oauth_creds()
+        if creds and self._oauth_file.exists():
+            oauth_credentials = OAuthCredentials(creds["client_id"], creds["client_secret"])
+            return YTMusic(str(self._oauth_file), user=user, oauth_credentials=oauth_credentials)
         return YTMusic(str(self._auth_file), user=user)
 
     def validate(self) -> bool:
@@ -136,6 +155,97 @@ class AuthManager:
             logger.debug("Auth validation failed — credentials may be expired.", exc_info=True)
             return False
 
+    # ── OAuth device-flow login ──────────────────────────────────────
+
+    def load_oauth_creds(self) -> dict[str, str] | None:
+        """Load the stored OAuth client_id/client_secret, or None."""
+        if not self._oauth_creds_file.exists():
+            return None
+        try:
+            data = json.loads(self._oauth_creds_file.read_text(encoding="utf-8"))
+            if data.get("client_id") and data.get("client_secret"):
+                return data
+        except (OSError, json.JSONDecodeError):
+            logger.debug("Failed to parse OAuth credentials file", exc_info=True)
+        return None
+
+    def oauth_start(
+        self, client_id: str, client_secret: str
+    ) -> tuple[OAuthCredentials, AuthCodeDict]:
+        """Start the OAuth device flow.
+
+        Returns the OAuthCredentials (needed for the next poll step) plus
+        the code bundle from Google (verification_url, user_code,
+        device_code, interval, expires_in).
+        """
+        credentials = OAuthCredentials(client_id, client_secret)
+        code = credentials.get_code()
+        return credentials, code
+
+    def oauth_poll(self, credentials: OAuthCredentials, device_code: str) -> RefreshingToken | None:
+        """Poll once for the device-code exchange to complete.
+
+        Returns the resulting token on success. Returns None if the user
+        has not finished the browser step yet — the caller should wait
+        `interval` seconds (from the code bundle) and call this again.
+        Raises on a terminal failure (expired code, access denied, or a
+        bad client_id/client_secret).
+
+        ytmusicapi's OAuthCredentials only raises on an HTTP 401 (bad
+        client credentials); Google's normal "still waiting" response
+        during the device flow is an HTTP 200/400 with an "error" field
+        in the body, which token_from_code() returns as a plain dict
+        rather than raising. That "error" field is what distinguishes
+        "keep polling" from "something is actually wrong" here.
+        """
+        # token_from_code()'s declared return type marks every field
+        # optional (it is a generic JSON response shape), but a response
+        # with no "error" key is, in practice, always the full token
+        # bundle -- cast once here instead of narrowing every access below.
+        raw = cast("dict[str, Any]", credentials.token_from_code(device_code))
+        error = raw.get("error")
+        if error in ("authorization_pending", "slow_down"):
+            return None
+        if error:
+            raise RuntimeError(f"OAuth device flow failed: {error}")
+
+        # Mirrors ytmusicapi's own RefreshingToken.prompt_for_token, minus
+        # the blocking input() call that makes it unusable inside Textual's
+        # event loop.
+        refresh_token_expires_in = raw.get("refresh_token_expires_in", raw["expires_in"])
+        token = RefreshingToken(
+            credentials=credentials,
+            access_token=raw["access_token"],
+            refresh_token=raw["refresh_token"],
+            scope=raw["scope"],
+            token_type=raw["token_type"],
+            expires_in=refresh_token_expires_in,
+        )
+        token.update(cast("BaseTokenDict", raw))
+        return token
+
+    def save_oauth(self, client_id: str, client_secret: str, token: RefreshingToken) -> bool:
+        """Persist the OAuth client credentials and the token together."""
+        try:
+            self._config_dir.mkdir(parents=True, exist_ok=True)
+            fd = os.open(
+                str(self._oauth_creds_file),
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                SECURE_FILE_MODE,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"client_id": client_id, "client_secret": client_secret}, f, indent=2)
+
+            # RefreshingToken.store_token() does a plain open(), so lock
+            # down permissions afterward the same way _save_youtube_cookies
+            # does for the cookie auth file below.
+            token.local_cache = self._oauth_file
+            secure_chmod(self._oauth_file, SECURE_FILE_MODE)
+        except OSError:
+            logger.exception("Failed to persist OAuth credentials/token")
+            return False
+        return True
+
     # ── Auto-refresh ──────────────────────────────────────────────────
 
     def try_auto_refresh(self) -> bool:
@@ -143,7 +253,16 @@ class AuthManager:
 
         Called when the app detects an auth failure at runtime. Returns
         True if fresh cookies were extracted and validation passed.
+
+        OAuth tokens refresh themselves transparently on access (handled
+        internally by RefreshingToken), so there is nothing to do here if
+        OAuth is the active auth method — a failure there means the
+        refresh_token itself is no longer valid, which only a fresh
+        device-flow login can fix, not a background retry.
         """
+        if self.has_oauth():
+            return False
+
         if self._cookies_file and self._refresh_from_cookies_file(Path(self._cookies_file)):
             return True
 

@@ -24,6 +24,11 @@ class YTMCommandProvider(Provider):
             self._host.action_set_current_theme_as_default,
             help="Save the active theme to config.toml",
         )
+        yield DiscoveryHit(
+            "Account: Sign in with Google (OAuth)",
+            self._host.action_oauth_login,
+            help="More durable than browser cookies; takes effect on next launch",
+        )
 
     async def search(self, query: str) -> Hits:
         """Fuzzy search ytm-player commands."""
@@ -33,6 +38,11 @@ class YTMCommandProvider(Provider):
                 "Theme: Set Current as Default",
                 self._host.action_set_current_theme_as_default,
                 "Save the active theme to config.toml",
+            ),
+            (
+                "Account: Sign in with Google (OAuth)",
+                self._host.action_oauth_login,
+                "More durable than browser cookies; takes effect on next launch",
             ),
         ]
         for name, callback, help_text in commands:
