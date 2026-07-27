@@ -140,9 +140,9 @@ async def navigate_browse_item(host: "YTMHostBase", item: dict[str, Any]) -> Non
     """Route a get_home()-shaped item to the right context page, or play it
     directly if it's a track.
 
-    Shared by every page that surfaces raw get_home() shelf content — the
-    Browse page's own For You tab and the standalone Mixes page
-    (ui/pages/mixes.py) — so the routing rules live in exactly one place.
+    Shared by every Browse tab that surfaces raw get_home() shelf content
+    (For You and Mixes), plus the Releases and Subscriptions tabs, so the
+    routing rules live in exactly one place.
     """
     result_type = (item.get("resultType") or item.get("type") or "").lower()
     video_id = get_video_id(item)
@@ -1223,10 +1223,10 @@ class SubscriptionsSection(Widget):
 
 
 class BrowsePage(Widget):
-    """Tabbed browse page: Mixes, For You, Charts, New Releases, Subscriptions.
+    """Tabbed browse page: Mixes, For You, Charts, Releases, Subs.
 
     Mixes leads — it's the most immediately actionable content (a specific
-    Discover Mix / New Release Mix to start playing) and matches YouTube
+    Discovery Mix / New Release Mix to start playing) and matches YouTube
     Music's own home page, where these surface before the app's other
     generic recommendation shelves.
 
@@ -1610,8 +1610,8 @@ class BrowsePage(Widget):
 
             case Action.PICK_COUNTRY:
                 # Charts sub-tab only — index 2 in the (Mixes, For You,
-                # Charts, New Releases, Subscriptions) tab order. No-op on
-                # other sub-tabs.
+                # Charts, Releases, Subs) tab order. No-op on other
+                # sub-tabs.
                 if self.active_tab != 2:
                     return
                 from ytm_player.ui.popups.country_picker import CountryPickerModal
