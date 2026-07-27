@@ -163,7 +163,9 @@ def normalize_tracks(raw_tracks: list[dict]) -> list[dict]:
         )
         duration = extract_duration(t) if raw_dur is not None else None
         thumbnail = None
-        thumbs = t.get("thumbnails")
+        # get_watch_playlist(radio=True) tracks carry this under the singular
+        # "thumbnail" key instead of "thumbnails" — same list-of-dicts shape.
+        thumbs = t.get("thumbnails") or t.get("thumbnail")
         if isinstance(thumbs, list) and thumbs:
             thumbnail = thumbs[-1].get("url") if isinstance(thumbs[-1], dict) else None
 
