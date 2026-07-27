@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # Tab bar
 # ---------------------------------------------------------------------------
 
-_TABS = ("For You", "Charts", "New Releases")
+_TABS = ("Mixes", "For You", "Charts", "Releases", "Subs")
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +129,50 @@ def _split_events_and_charts(
         key=_chart_sort_key,
     )
     return events, charts
+
+
+# ---------------------------------------------------------------------------
+# Shared item routing
+# ---------------------------------------------------------------------------
+
+
+async def navigate_browse_item(host: "YTMHostBase", item: dict[str, Any]) -> None:
+    """Route a get_home()-shaped item to the right context page, or play it
+    directly if it's a track.
+
+    Shared by every page that surfaces raw get_home() shelf content — the
+    Browse page's own For You tab and the standalone Mixes page
+    (ui/pages/mixes.py) — so the routing rules live in exactly one place.
+    """
+    result_type = (item.get("resultType") or item.get("type") or "").lower()
+    video_id = get_video_id(item)
+    browse_id = item.get("browseId")
+    playlist_id = item.get("playlistId") or item.get("audioPlaylistId")
+
+    if result_type in ("song", "video", "flat_song") or video_id:
+        normalized_tracks = normalize_tracks([item])
+        track_to_play = normalized_tracks[0] if normalized_tracks else item
+        # Replace the queue instead of playing around it — otherwise the
+        # queue page goes stale and next-track resumes the old queue.
+        await host._replace_queue_and_play([track_to_play])
+    elif result_type in ("album", "single"):
+        if browse_id:
+            await host.navigate_to("context", context_type="album", context_id=browse_id)
+    elif result_type == "artist":
+        if browse_id:
+            await host.navigate_to("context", context_type="artist", context_id=browse_id)
+    elif result_type == "playlist":
+        if playlist_id or browse_id:
+            await host.navigate_to(
+                "context", context_type="playlist", context_id=playlist_id or browse_id
+            )
+    elif playlist_id:
+        # Shelves like "Mixed for you", "Listen again" radio entries, mixes
+        # etc. have a playlistId but no resultType.
+        await host.navigate_to("context", context_type="playlist", context_id=playlist_id)
+    elif browse_id:
+        # Fallback: treat any remaining browseId as an album/playlist context.
+        await host.navigate_to("context", context_type="album", context_id=browse_id)
 
 
 class BrowseTab(Static):
@@ -897,13 +941,294 @@ class NewReleasesSection(Widget):
             logger.exception("NewReleasesSection.on_list_view_selected failed")
 
 
+class MixesSection(Widget):
+    """YouTube's own auto-generated mixes — Discovery Mix, New Release Mix,
+    Your Mix, and similar — pulled out of get_home() and given their own
+    dedicated, browsable view instead of being buried in For You.
+
+    Confirmed live against a real account's home feed that these don't sit
+    under one single shelf: the same mix names ("Discover Mix", "New
+    Release Mix") turned up under "Listen again" AND "Fresh finds, old
+    favourites" in the same fetch, while "Mixed for you" held a third,
+    different batch of genre-style mixes ("My Supermix", etc.) — shelf
+    titles aren't a reliable way to isolate them. Every playlist-shaped
+    entry across every shelf is collected instead, deduped by playlistId,
+    with a higher shelf limit than the For You tab so more of them surface
+    in one fetch. Chart and community-playlist entries end up in this list
+    too, alongside the personalised mixes — same tradeoff as ForYouSection
+    accepts for its own generic shelf rendering.
+    """
+
+    DEFAULT_CSS = """
+    MixesSection {
+        height: 1fr;
+        width: 1fr;
+        padding: 0 1;
+    }
+
+    MixesSection .loading {
+        height: 1fr;
+        width: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+    }
+
+    MixesSection .section-title {
+        text-style: bold;
+        color: $text;
+        height: 1;
+        padding: 0 0 1 0;
+    }
+
+    MixesSection ListView {
+        height: 1fr;
+    }
+    """
+
+    is_loading: reactive[bool] = reactive(True)
+
+    # Fetch far more shelves than For You's default (3). Confirmed live
+    # against a real account: get_home() can return upwards of a dozen
+    # named shelves (Listen again, Fresh finds old favourites, Mixed for
+    # you, Forgotten favourites, Recaps, Long listens, and more), and mix
+    # entries are genuinely scattered across many of them, not one or two
+    # shelves deep — a low limit silently drops whole shelves' worth of
+    # mixes rather than just trimming a couple of extra entries.
+    _SHELF_LIMIT = 25
+
+    class MixSelected(Message):
+        def __init__(self, mix: dict[str, Any]) -> None:
+            super().__init__()
+            self.mix = mix
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._mixes: list[dict[str, Any]] = []
+
+    def on_unmount(self) -> None:
+        self._mixes.clear()
+
+    def compose(self) -> ComposeResult:
+        yield Static("Loading mixes...", id="mixes-loading", classes="loading")
+        with Vertical(id="mixes-content"):
+            yield Label("Mixes", classes="section-title")
+            yield ListView(id="mixes-list")
+
+    def on_mount(self) -> None:
+        try:
+            self.query_one("#mixes-content").display = False
+        except Exception:
+            logger.debug("Failed to hide mixes content on mount", exc_info=True)
+
+    async def load_data(self) -> None:
+        """Fetch home shelves and filter down to playlist-shaped (mix) entries."""
+        self.is_loading = True
+        try:
+            ytmusic = cast("YTMHostBase", self.app).ytmusic
+            assert ytmusic is not None
+            shelves = await ytmusic.get_home(limit=self._SHELF_LIMIT)
+        except Exception:
+            logger.exception("Failed to load mixes")
+            self._show_error("Failed to load mixes.")
+            self.is_loading = False
+            return
+        if shelves is None:
+            self._show_error("Failed to load mixes.")
+            self.is_loading = False
+            return
+
+        seen_ids: set[str] = set()
+        mixes: list[dict[str, Any]] = []
+        for shelf in shelves:
+            for item in shelf.get("contents", []):
+                mix_id = item.get("playlistId") or item.get("audioPlaylistId")
+                if not mix_id or mix_id in seen_ids:
+                    continue
+                seen_ids.add(mix_id)
+                mixes.append(item)
+        self._mixes = mixes
+
+        try:
+            self._populate_mixes()
+        except Exception:
+            logger.debug("Failed to render mixes", exc_info=True)
+            self._show_error("Failed to load mixes.")
+        finally:
+            self.is_loading = False
+
+    def _populate_mixes(self) -> None:
+        loading = self.query_one("#mixes-loading", Static)
+        loading.display = False
+
+        content = self.query_one("#mixes-content")
+        content.display = True
+
+        list_view = self.query_one("#mixes-list", ListView)
+        list_view.clear()
+
+        if not self._mixes:
+            content.display = False
+            self._show_error("No mixes found in your home feed right now — check back later.")
+            return
+
+        for mix in self._mixes:
+            title = mix.get("title", "Untitled mix")
+            parts = [title]
+            description = mix.get("description", "")
+            count = mix.get("count", "")
+            meta_parts: list[str] = []
+            if description:
+                meta_parts.append(str(description))
+            elif count:
+                meta_parts.append(f"{count} songs")
+            if meta_parts:
+                parts.append(f"({', '.join(meta_parts)})")
+            display = truncate(" ".join(parts), 80)
+            list_view.append(ListItem(Label(display)))
+
+    def _show_error(self, message: str) -> None:
+        loading = self.query_one("#mixes-loading", Static)
+        loading.update(message)
+        loading.display = True
+        try:
+            self.query_one("#mixes-content").display = False
+        except Exception:
+            logger.debug("Failed to hide mixes content on error", exc_info=True)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        try:
+            idx = event.list_view.index
+            if idx is not None and 0 <= idx < len(self._mixes):
+                self.post_message(self.MixSelected(self._mixes[idx]))
+        except Exception:
+            logger.exception("MixesSection.on_list_view_selected failed")
+
+
+class SubscriptionsSection(Widget):
+    """Artists the user is subscribed to (get_library_artists()).
+
+    The service call already existed — get_discovery_mix() uses it
+    internally as one of its randomised sources — but nothing surfaced it
+    as a browsable list of its own before this.
+    """
+
+    DEFAULT_CSS = """
+    SubscriptionsSection {
+        height: 1fr;
+        width: 1fr;
+        padding: 0 1;
+    }
+
+    SubscriptionsSection .loading {
+        height: 1fr;
+        width: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+    }
+
+    SubscriptionsSection .section-title {
+        text-style: bold;
+        color: $text;
+        height: 1;
+        padding: 0 0 1 0;
+    }
+
+    SubscriptionsSection ListView {
+        height: 1fr;
+    }
+    """
+
+    is_loading: reactive[bool] = reactive(True)
+
+    class ArtistSelected(Message):
+        def __init__(self, artist: dict[str, Any]) -> None:
+            super().__init__()
+            self.artist = artist
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._artists: list[dict[str, Any]] = []
+
+    def on_unmount(self) -> None:
+        self._artists.clear()
+
+    def compose(self) -> ComposeResult:
+        yield Static("Loading subscriptions...", id="subs-loading", classes="loading")
+        with Vertical(id="subs-content"):
+            yield Label("Subscriptions", classes="section-title")
+            yield ListView(id="subs-list")
+
+    def on_mount(self) -> None:
+        try:
+            self.query_one("#subs-content").display = False
+        except Exception:
+            logger.debug("Failed to hide subscriptions content on mount", exc_info=True)
+
+    async def load_data(self) -> None:
+        """Fetch and display subscribed artists."""
+        self.is_loading = True
+        try:
+            ytmusic = cast("YTMHostBase", self.app).ytmusic
+            assert ytmusic is not None
+            self._artists = await ytmusic.get_library_artists(limit=50)
+            self._populate_subscriptions()
+        except Exception:
+            logger.exception("Failed to load subscriptions")
+            self._show_error("Failed to load subscriptions.")
+        finally:
+            self.is_loading = False
+
+    def _populate_subscriptions(self) -> None:
+        loading = self.query_one("#subs-loading", Static)
+        loading.display = False
+
+        content = self.query_one("#subs-content")
+        content.display = True
+
+        list_view = self.query_one("#subs-list", ListView)
+        list_view.clear()
+
+        if not self._artists:
+            content.display = False
+            self._show_error("No subscriptions yet — follow an artist to see them here.")
+            return
+
+        for artist in self._artists:
+            name = artist.get("artist", "Unknown artist")
+            subscribers = artist.get("subscribers", "")
+            display = f"{name}  ({subscribers} subscribers)" if subscribers else name
+            list_view.append(ListItem(Label(truncate(display, 80))))
+
+    def _show_error(self, message: str) -> None:
+        loading = self.query_one("#subs-loading", Static)
+        loading.update(message)
+        loading.display = True
+        try:
+            self.query_one("#subs-content").display = False
+        except Exception:
+            logger.debug("Failed to hide subscriptions content on error", exc_info=True)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        try:
+            idx = event.list_view.index
+            if idx is not None and 0 <= idx < len(self._artists):
+                self.post_message(self.ArtistSelected(self._artists[idx]))
+        except Exception:
+            logger.exception("SubscriptionsSection.on_list_view_selected failed")
+
+
 # ---------------------------------------------------------------------------
 # Main browse page
 # ---------------------------------------------------------------------------
 
 
 class BrowsePage(Widget):
-    """Tabbed browse page: For You, Charts, New Releases.
+    """Tabbed browse page: Mixes, For You, Charts, New Releases, Subscriptions.
+
+    Mixes leads — it's the most immediately actionable content (a specific
+    Discover Mix / New Release Mix to start playing) and matches YouTube
+    Music's own home page, where these surface before the app's other
+    generic recommendation shelves.
 
     Each tab lazily loads its data on first activation.
     """
@@ -955,9 +1280,11 @@ class BrowsePage(Widget):
         with Vertical():
             yield BrowseTabBar(id="browse-tabs")
             with Vertical(id="browse-content"):
-                yield ForYouSection(id="section-foryou", classes="active-section")
+                yield MixesSection(id="section-mixes", classes="active-section")
+                yield ForYouSection(id="section-foryou")
                 yield ChartsSection(id="section-charts")
                 yield NewReleasesSection(id="section-releases")
+                yield SubscriptionsSection(id="section-subscriptions")
 
     def on_mount(self) -> None:
         if self._restore_tab and self._restore_tab > 0:
@@ -991,9 +1318,11 @@ class BrowsePage(Widget):
     def _switch_section(self, index: int) -> None:
         """Show the section at *index* and hide all others."""
         section_ids = [
+            "section-mixes",
             "section-foryou",
             "section-charts",
             "section-releases",
+            "section-subscriptions",
         ]
 
         for i, sid in enumerate(section_ids):
@@ -1017,6 +1346,14 @@ class BrowsePage(Widget):
 
         match index:
             case 0:
+                section = self.query_one("#section-mixes", MixesSection)
+                self.run_worker(
+                    section.load_data(),
+                    name="load-mixes",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
+            case 1:
                 section = self.query_one("#section-foryou", ForYouSection)
                 self.run_worker(
                     section.load_data(),
@@ -1024,7 +1361,7 @@ class BrowsePage(Widget):
                     exclusive=True,
                     exit_on_error=False,
                 )
-            case 1:
+            case 2:
                 section = self.query_one("#section-charts", ChartsSection)
                 self.run_worker(
                     section.load_data(),
@@ -1032,11 +1369,19 @@ class BrowsePage(Widget):
                     exclusive=True,
                     exit_on_error=False,
                 )
-            case 2:
+            case 3:
                 section = self.query_one("#section-releases", NewReleasesSection)
                 self.run_worker(
                     section.load_data(),
                     name="load-releases",
+                    exclusive=True,
+                    exit_on_error=False,
+                )
+            case 4:
+                section = self.query_one("#section-subscriptions", SubscriptionsSection)
+                self.run_worker(
+                    section.load_data(),
+                    name="load-subscriptions",
                     exclusive=True,
                     exit_on_error=False,
                 )
@@ -1045,8 +1390,20 @@ class BrowsePage(Widget):
     # Section focus traversal (Tab labels → content)
     # ------------------------------------------------------------------
 
-    _SECTION_IDS = ("section-foryou", "section-charts", "section-releases")
-    _LOAD_WORKER_TABS = {"load-foryou": 0, "load-charts": 1, "load-releases": 2}
+    _SECTION_IDS = (
+        "section-mixes",
+        "section-foryou",
+        "section-charts",
+        "section-releases",
+        "section-subscriptions",
+    )
+    _LOAD_WORKER_TABS = {
+        "load-mixes": 0,
+        "load-foryou": 1,
+        "load-charts": 2,
+        "load-releases": 3,
+        "load-subscriptions": 4,
+    }
 
     def _focus_active_tab_label(self) -> None:
         """Focus the currently-active tab label."""
@@ -1144,8 +1501,11 @@ class BrowsePage(Widget):
 
     async def on_for_you_section_item_selected(self, event: ForYouSection.ItemSelected) -> None:
         """Handle item selection from the For You shelves."""
-        item = event.item
-        await self._navigate_item(item)
+        await navigate_browse_item(cast("YTMHostBase", self.app), event.item)
+
+    async def on_mixes_section_mix_selected(self, event: MixesSection.MixSelected) -> None:
+        """Open the selected mix as a playable playlist."""
+        await navigate_browse_item(cast("YTMHostBase", self.app), event.mix)
 
     async def on_new_releases_section_album_selected(
         self, event: NewReleasesSection.AlbumSelected
@@ -1156,6 +1516,16 @@ class BrowsePage(Widget):
         if album_id:
             host = cast("YTMHostBase", self.app)
             await host.navigate_to("context", context_type="album", context_id=album_id)
+
+    async def on_subscriptions_section_artist_selected(
+        self, event: SubscriptionsSection.ArtistSelected
+    ) -> None:
+        """Navigate to the selected subscribed artist."""
+        artist = event.artist
+        browse_id = artist.get("browseId")
+        if browse_id:
+            host = cast("YTMHostBase", self.app)
+            await host.navigate_to("context", context_type="artist", context_id=browse_id)
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected chart track and populate the queue."""
@@ -1169,39 +1539,6 @@ class BrowsePage(Widget):
             autoplay=False,
         )
         await host.play_track(event.track)
-
-    async def _navigate_item(self, item: dict[str, Any]) -> None:
-        """Route an item to the appropriate context page or play it directly."""
-        result_type = (item.get("resultType") or item.get("type") or "").lower()
-        video_id = get_video_id(item)
-        browse_id = item.get("browseId")
-        playlist_id = item.get("playlistId") or item.get("audioPlaylistId")
-        host = cast("YTMHostBase", self.app)
-
-        if result_type in ("song", "video", "flat_song") or video_id:
-            normalized_tracks = normalize_tracks([item])
-            track_to_play = normalized_tracks[0] if normalized_tracks else item
-            # Replace the queue instead of playing around it — otherwise the
-            # queue page goes stale and next-track resumes the old queue.
-            await host._replace_queue_and_play([track_to_play])
-        elif result_type in ("album", "single"):
-            if browse_id:
-                await host.navigate_to("context", context_type="album", context_id=browse_id)
-        elif result_type == "artist":
-            if browse_id:
-                await host.navigate_to("context", context_type="artist", context_id=browse_id)
-        elif result_type == "playlist":
-            if playlist_id or browse_id:
-                await host.navigate_to(
-                    "context", context_type="playlist", context_id=playlist_id or browse_id
-                )
-        elif playlist_id:
-            # Shelves like "Mixed for you", "Listen again" radio entries, mixes etc.
-            # have a playlistId but no resultType.
-            await host.navigate_to("context", context_type="playlist", context_id=playlist_id)
-        elif browse_id:
-            # Fallback: treat any remaining browseId as an album/playlist context.
-            await host.navigate_to("context", context_type="album", context_id=browse_id)
 
     # ------------------------------------------------------------------
     # Vim-style action handler
@@ -1272,9 +1609,10 @@ class BrowsePage(Widget):
                     await focused.handle_action(action, count)
 
             case Action.PICK_COUNTRY:
-                # Charts sub-tab only — index 1 in the (For You, Charts, New
-                # Releases) tab order. No-op on other sub-tabs.
-                if self.active_tab != 1:
+                # Charts sub-tab only — index 2 in the (Mixes, For You,
+                # Charts, New Releases, Subscriptions) tab order. No-op on
+                # other sub-tabs.
+                if self.active_tab != 2:
                     return
                 from ytm_player.ui.popups.country_picker import CountryPickerModal
 
