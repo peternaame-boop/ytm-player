@@ -2,7 +2,8 @@
 Purpose: Integrate ytm-player with macOS media keys and Now Playing center.
 Interface: MacOSMediaService.start/stop/update_metadata/update_playback_status/update_position.
 Invariants: Missing MediaPlayer bindings degrade to no-op behavior without crashing the app.
-Decisions: Keep metadata updates local (no artwork download) and dispatch callbacks on the app loop.
+Decisions: Keep metadata updates local (no artwork download), dispatch callbacks on the app loop,
+and briefly pump Cocoa's main run loop without blocking Textual.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import threading
 from typing import Any
 
 from ytm_player.services._dispatch import (
@@ -27,6 +29,11 @@ try:
 except ImportError:
     _MP = None
     _MEDIA_PLAYER_AVAILABLE = False
+
+try:
+    _FOUNDATION = importlib.import_module("Foundation")
+except ImportError:
+    _FOUNDATION = None
 
 _STATUS_SUCCESS = 0
 _STATUS_FAILED = 200
@@ -69,6 +76,7 @@ class MacOSMediaService:
         self._registered_targets: list[tuple[Any, Any]] = []
         self._now_playing: dict[str, Any] = {}
         self._is_playing = False
+        self._run_loop_task: asyncio.Task[None] | None = None
 
     async def start(
         self,
@@ -78,6 +86,8 @@ class MacOSMediaService:
         """Register MPRemoteCommandCenter handlers."""
         if not _MEDIA_PLAYER_AVAILABLE:
             logger.info("MediaPlayer framework bindings not installed — macOS media keys disabled")
+            return
+        if self._running:
             return
 
         self._callbacks = callbacks
@@ -99,12 +109,23 @@ class MacOSMediaService:
 
         self._running = True
         self._publish_now_playing()
+        if _FOUNDATION is not None:
+            if threading.current_thread() is threading.main_thread():
+                self._run_loop_task = loop.create_task(self._pump_run_loop())
+            else:
+                logger.warning("macOS Now Playing requires the asyncio loop on the main thread")
         logger.info("macOS media key integration enabled")
 
     def stop(self) -> None:
         """Unregister command handlers and clear Now Playing state."""
         if not _MEDIA_PLAYER_AVAILABLE:
             return
+
+        self._running = False
+        if self._run_loop_task is not None:
+            self._run_loop_task.cancel()
+            self._run_loop_task = None
+
         mp = _MP
         if mp is None:
             return
@@ -121,10 +142,31 @@ class MacOSMediaService:
         except Exception:
             logger.debug("Failed to clear macOS Now Playing info", exc_info=True)
 
-        self._running = False
         self._now_playing.clear()
         self._is_playing = False
         logger.info("macOS media key integration stopped")
+
+    async def _pump_run_loop(self) -> None:
+        """Let MediaPlayer service Cocoa callbacks alongside Textual's asyncio loop."""
+        foundation = _FOUNDATION
+        if foundation is None:
+            return
+        run_loop = foundation.NSRunLoop.mainRunLoop()
+        task = asyncio.current_task()
+        try:
+            while self._running:
+                run_loop.runMode_beforeDate_(
+                    foundation.NSDefaultRunLoopMode,
+                    foundation.NSDate.date(),
+                )
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Failed to pump macOS main run loop")
+        finally:
+            if self._run_loop_task is task:
+                self._run_loop_task = None
 
     async def update_metadata(
         self,
