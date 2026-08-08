@@ -32,6 +32,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **yt-dlp's own warnings and errors now reach `ytm.log`** — yt-dlp's default logger dropped them, so failures like "Signature solving failed" or "Skipping client … since it does not support cookies" left no trace. Thanks @wgordon17 (#136).
 - **Stream resolver reset fixes** — resetting the resolver (a quality change, or the automatic reset after repeated failures) no longer closes the yt-dlp instance under a resolve that is still running (a ~30 s stall), no longer loses a reset that lands while the instance is being built, and a resolve that finishes after a reset no longer puts its result back into the cleared cache. Concurrent resolves are serialized on the shared yt-dlp instance, which is not thread-safe. Thanks @wgordon17 (#136).
 - **`pycryptodomex` is now a core dependency** — yt-dlp uses it to decrypt Chromium cookies during `ytm setup`; without it the pure-Python fallback took ~26 s instead of ~2 s on a large profile. Thanks @wgordon17 (#136).
+- **macOS Now Playing stays active** — the Cocoa main run loop is serviced alongside Textual's asyncio loop, so published track metadata appears reliably in Control Center.
 
 ### v2.0.0 (2026-07-04)
 
