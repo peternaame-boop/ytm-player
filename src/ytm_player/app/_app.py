@@ -527,6 +527,10 @@ class YTMPlayerApp(
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
+    async def _notify_auth_refresh(self) -> None:
+        self.notify("Session expired — refreshing browser credentials…", timeout=10)
+        await self.wait_for_refresh()
+
     async def on_mount(self) -> None:
         """Initialize services and navigate to the startup page."""
         # Wire the asyncio loop exception handler so background-task
@@ -586,6 +590,7 @@ class YTMPlayerApp(
                 auth.auth_file,
                 auth_manager=auth,
                 user=self.settings.general.brand_account_id,
+                on_auth_refresh=self._notify_auth_refresh,
             )
             self.player = Player()
             self.player.set_event_loop(asyncio.get_running_loop())
