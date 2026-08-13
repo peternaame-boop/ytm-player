@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ytm_player.services.macos_app import hide_dock_icon
 from ytm_player.utils.compat import StrEnum, auto
 
 if sys.platform == "win32":
@@ -256,6 +257,13 @@ class Player:
             log_handler=_on_mpv_log,
             loglevel="warn",
         )
+
+        # Creating the mpv handle initialises Cocoa in-process, which promotes
+        # this process to a foreground GUI app: macOS then shows a generic
+        # "Python" Dock tile that bounces indefinitely, because nothing ever
+        # signals that app launch finished.  Demote it now that mpv is up —
+        # doing this earlier is useless, since libmpv re-promotes it.
+        hide_dock_icon()
 
         # Enable gapless playback if configured.
         if settings.playback.gapless:
