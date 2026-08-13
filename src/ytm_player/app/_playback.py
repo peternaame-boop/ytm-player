@@ -600,6 +600,20 @@ class PlaybackMixin(YTMHostBase):
         if self._current_page != "queue":
             await self.navigate_to("queue")
 
+    async def _start_new_release_mix(self) -> None:
+        """Fetch a radio seeded from a random new release, replace the
+        queue, and start playing. Mirrors _start_discovery_mix exactly."""
+        if not self.ytmusic:
+            return
+        self.notify("Loading new release mix...", timeout=3)
+        seeds, source = await self.ytmusic.get_new_release_mix()
+        if not seeds:
+            self.notify("New release mix failed — no content available", severity="warning")
+            return
+        await self._fetch_and_play_radio(seeds, label=source or "New Release Mix")
+        if self._current_page != "queue":
+            await self.navigate_to("queue")
+
     def _on_volume_change(self, volume: int) -> None:
         """Handle volume change events."""
         try:

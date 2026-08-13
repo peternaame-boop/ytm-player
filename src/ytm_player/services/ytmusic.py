@@ -751,6 +751,43 @@ class YTMusicService:
 
         return [], ""
 
+    async def get_new_release_mix(self) -> tuple[list[dict], str]:
+        """Seed a radio from a random new release.
+
+        ytm-player's own equivalent of YouTube Music's "New Release Mix" —
+        built from get_new_releases() (a reliable, dedicated endpoint)
+        rather than depending on get_home()'s "Listen again"/"Fresh finds,
+        old favourites" shelves, which aren't consistently present in what
+        the API actually returns: confirmed live that get_home(limit=100)
+        returned only 5 shelves for a real account, none of them the ones
+        YouTube's own website groups these mixes under. Returns
+        (seed_tracks, label); ([], "") if new releases are unavailable or
+        none have a playable audioPlaylistId.
+        """
+        import random
+
+        releases = await self.get_new_releases()
+        if not releases:
+            return [], ""
+        release = random.choice(releases)
+        playlist_id = release.get("audioPlaylistId")
+        if not playlist_id:
+            return [], ""
+        try:
+            wl = await self._call(
+                self.client.get_watch_playlist, playlistId=playlist_id, shuffle=True
+            )
+        except Exception:
+            logger.exception("get_new_release_mix: get_watch_playlist failed")
+            return [], ""
+        items = wl.get("tracks", []) if isinstance(wl, dict) else []
+        playable = [t for t in items if isinstance(t, dict) and t.get("videoId")]
+        if not playable:
+            return [], ""
+        sampled = random.sample(playable, min(3, len(playable)))
+        title = release.get("title", "New Release")
+        return sampled, f"New Release Mix: {title}"
+
     async def get_playlist_radio(self, playlist_id: str) -> list[dict]:
         """Start a radio from a playlist via RDAMPL prefix."""
         stripped = playlist_id.removeprefix("VL")

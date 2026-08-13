@@ -16,7 +16,7 @@ from textual.widget import Widget
 
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.services.queue import QueueManager
-from ytm_player.ui.pages.browse import BrowsePage
+from ytm_player.ui.pages.browse import BrowsePage, navigate_browse_item
 from ytm_player.ui.pages.context import ContextPage
 from ytm_player.ui.pages.library import LibraryPage
 from ytm_player.ui.pages.liked_songs import LikedSongsPage
@@ -114,16 +114,17 @@ async def test_helper_explicit_shuffle_with_saved_off_pref():
 # ── Browse "For You" single-track play ───────────────────────────────
 
 
-async def test_browse_for_you_song_replaces_queue(monkeypatch):
+async def test_browse_for_you_song_replaces_queue():
     old_queue = QueueManager()
     old_queue.add_multiple([_track("old1"), _track("old2")])
     old_queue.jump_to_real(0)
 
-    page = BrowsePage.__new__(BrowsePage)
     host = _make_host(queue=old_queue, real_helper=True)
-    _attach_fake_app(page, host, monkeypatch)
 
-    await page._navigate_item({"resultType": "song", "videoId": "v1", "title": "Song"})
+    # navigate_browse_item is the module-level function BrowsePage's own
+    # For You and Mixes tab handlers both route through — takes the host
+    # directly rather than needing a live page/app.
+    await navigate_browse_item(host, {"resultType": "song", "videoId": "v1", "title": "Song"})
 
     # Queue is REPLACED with the selection; next-track can't resume the
     # old queue (the old code played around the queue entirely).
