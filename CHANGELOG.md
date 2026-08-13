@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**Fixes**
+
+- **macOS Now Playing stays active** — the Cocoa main run loop is serviced alongside Textual's asyncio loop, so published track metadata appears reliably in Control Center.
+
+---
+
 ### v2.0.0 (2026-07-04)
 
 **New features**
