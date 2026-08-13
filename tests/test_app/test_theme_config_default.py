@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
+from textual.command import DiscoveryHit
 
 from ytm_player.app._app import YTMPlayerApp
 from ytm_player.app._commands import YTMCommandProvider
@@ -75,13 +77,17 @@ async def test_ytm_command_provider_discover_yields_theme_command():
     screen.app = app
 
     provider = YTMCommandProvider(screen)
-    hits = [hit async for hit in provider.discover()]
+    hits = [cast(DiscoveryHit, hit) async for hit in provider.discover()]
 
-    assert len(hits) == 1
-    hit = hits[0]
-    assert "Theme: Set Current as Default" in str(hit.display)
-    assert hit.command is app.action_set_current_theme_as_default
-    assert "Save the active theme to config.toml" in str(hit.help)
+    assert len(hits) == 2
+    theme_hit = next(hit for hit in hits if "Theme:" in str(hit.display))
+    assert "Theme: Set Current as Default" in str(theme_hit.display)
+    assert theme_hit.command is app.action_set_current_theme_as_default
+    assert "Save the active theme to config.toml" in str(theme_hit.help)
+
+    oauth_hit = next(hit for hit in hits if "OAuth" in str(hit.display))
+    assert "Account: Sign in with Google (OAuth)" in str(oauth_hit.display)
+    assert oauth_hit.command is app.action_oauth_login
 
 
 @pytest.mark.asyncio

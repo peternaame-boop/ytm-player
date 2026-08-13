@@ -66,6 +66,9 @@ ytm setup    # one-time auth (auto-detects browser cookies)
 ytm          # launch the TUI
 ```
 
+Cookie auth needs no setup but expires often. For a login that stays signed in, see
+[docs/oauth-login.md](https://github.com/peternaame-boop/ytm-player/blob/master/docs/oauth-login.md).
+
 Windows: replace `ytm` with `py -m ytm_player`.
 
 ## Documentation
@@ -77,6 +80,7 @@ Windows: replace `ytm` with `py -m ytm_player`.
 | Full keyboard + mouse keybindings | [docs/keybindings.md](https://github.com/peternaame-boop/ytm-player/blob/master/docs/keybindings.md) |
 | All `ytm` CLI subcommands | [docs/cli-reference.md](https://github.com/peternaame-boop/ytm-player/blob/master/docs/cli-reference.md) |
 | Spotify playlist import | [docs/spotify-import.md](https://github.com/peternaame-boop/ytm-player/blob/master/docs/spotify-import.md) |
+| OAuth login (durable, no daily re-login) | [docs/oauth-login.md](https://github.com/peternaame-boop/ytm-player/blob/master/docs/oauth-login.md) |
 | Troubleshooting (mpv / auth / MPRIS / macOS / cache) | [docs/troubleshooting.md](https://github.com/peternaame-boop/ytm-player/blob/master/docs/troubleshooting.md) |
 | File layout + stack | [docs/architecture.md](https://github.com/peternaame-boop/ytm-player/blob/master/docs/architecture.md) |
 | Contributing | [CONTRIBUTING.md](https://github.com/peternaame-boop/ytm-player/blob/master/CONTRIBUTING.md) |

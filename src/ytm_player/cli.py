@@ -18,6 +18,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
@@ -38,7 +39,7 @@ from ytm_player.config.paths import (
 )
 from ytm_player.config.settings import get_settings
 from ytm_player.ipc import ipc_request, is_tui_running, try_claim_pid
-from ytm_player.services.auth import AuthManager
+from ytm_player.services.auth import AuthManager, OAuthSlowDownError
 from ytm_player.utils.logging import install_excepthooks, setup_logging
 
 # ---------------------------------------------------------------------------
@@ -213,6 +214,71 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _setup_oauth_cli(auth: AuthManager, client_id: str | None, client_secret: str | None) -> bool:
+    """Blocking CLI walk-through of the OAuth device flow.
+
+    Same underlying AuthManager calls as the in-app popup
+    (ui/popups/oauth_setup.py), just driven with click.prompt/time.sleep
+    instead of an async worker updating Textual widgets.
+    """
+    saved = auth.load_oauth_creds()
+    if saved and not (client_id or client_secret):
+        resolved_id, resolved_secret = saved["client_id"], saved["client_secret"]
+        click.echo("Using previously saved OAuth client credentials.")
+    else:
+        resolved_id = client_id or click.prompt("Google OAuth Client ID")
+        resolved_secret = client_secret or click.prompt(
+            "Google OAuth Client Secret", hide_input=True
+        )
+
+    click.echo("\nRequesting a login code from Google...")
+    try:
+        credentials, code = auth.oauth_start(resolved_id, resolved_secret)
+    except Exception as exc:
+        click.echo(f"Error: could not start OAuth device flow: {exc}", err=True)
+        return False
+
+    # AuthCodeDict marks every field optional in its declared type, but
+    # oauth_start() only returns normally on success, where all of these
+    # are always present.
+    code_data = cast("dict[str, Any]", code)
+    verification_url = code_data["verification_url"]
+    user_code = code_data["user_code"]
+    device_code = code_data["device_code"]
+    interval = code_data.get("interval", 5)
+    expires_in = code_data.get("expires_in", 1800)
+
+    click.echo(f"\nGo to {verification_url} and enter this code: {user_code}")
+    click.echo("Waiting for you to finish signing in...")
+
+    elapsed = 0
+    while elapsed < expires_in:
+        sleep_for = min(interval, expires_in - elapsed)
+        time.sleep(sleep_for)
+        elapsed += sleep_for
+        try:
+            token = auth.oauth_poll(credentials, device_code)
+        except OAuthSlowDownError:
+            # RFC 8628 §3.5: back off by increasing the interval, keep polling.
+            interval += 5
+            continue
+        except Exception as exc:
+            click.echo(f"Error: OAuth sign-in failed: {exc}", err=True)
+            return False
+        if token is not None:
+            if auth.save_oauth(resolved_id, resolved_secret, token):
+                click.echo("Signed in successfully.")
+                return True
+            click.echo("Error: signed in, but saving credentials failed.", err=True)
+            return False
+
+    click.echo(
+        "Error: code expired before you finished signing in. Run `ytm setup --oauth` again.",
+        err=True,
+    )
+    return False
+
+
 @main.command()
 @click.option("--manual", is_flag=True, help="Skip browser detection, paste headers manually.")
 @click.option(
@@ -221,7 +287,32 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
     default=None,
     help="Extract cookies from a specific browser (chrome, firefox, brave, edge, etc.).",
 )
-def setup(manual: bool, browser: str | None) -> None:
+@click.option(
+    "--oauth",
+    is_flag=True,
+    help="Sign in via Google OAuth device flow instead of browser cookies. "
+    "More durable than cookies but needs a free Google Cloud OAuth client "
+    "(see docs/oauth-login.md).",
+)
+@click.option(
+    "--client-id",
+    type=str,
+    default=None,
+    help="OAuth client ID (with --oauth). Only needed the first time; saved for reuse.",
+)
+@click.option(
+    "--client-secret",
+    type=str,
+    default=None,
+    help="OAuth client secret (with --oauth). Only needed the first time; saved for reuse.",
+)
+def setup(
+    manual: bool,
+    browser: str | None,
+    oauth: bool,
+    client_id: str | None,
+    client_secret: str | None,
+) -> None:
     """Interactive authentication wizard for YouTube Music."""
     auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
 
@@ -231,7 +322,10 @@ def setup(manual: bool, browser: str | None) -> None:
             click.echo("Setup cancelled.")
             return
 
-    success = auth.setup_interactive(manual=manual, browser=browser)
+    if oauth:
+        success = _setup_oauth_cli(auth, client_id, client_secret)
+    else:
+        success = auth.setup_interactive(manual=manual, browser=browser)
     if not success:
         _error("Authentication setup failed.")
 

@@ -13,7 +13,13 @@ Windows: replace `ytm` with `py -m ytm_player` in any of the commands below.
 ytm setup                    # Auto-detect browser cookies
 ytm setup --browser firefox  # Target a specific browser (chrome, firefox, brave, edge, chromium, vivaldi, opera, helium)
 ytm setup --manual           # Skip detection, paste raw request headers
+ytm setup --oauth            # Sign in via Google OAuth device flow instead (see docs/oauth-login.md)
 ```
+
+Browser-cookie auth (the default) needs no setup beyond a signed-in browser, but cookies are
+short-lived and typically need re-running `ytm setup` every day or so. OAuth is more durable
+(access tokens refresh themselves automatically) but needs a one-time, free Google Cloud OAuth
+client — see [docs/oauth-login.md](oauth-login.md) for the five-minute setup.
 
 ## Search
 

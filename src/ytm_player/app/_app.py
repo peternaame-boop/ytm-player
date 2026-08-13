@@ -429,6 +429,40 @@ class YTMPlayerApp(
 
         self.notify(f"Saved {current_theme} as default theme", timeout=3)
 
+    def action_oauth_login(self) -> None:
+        """Sign in to YouTube Music via Google's OAuth device flow.
+
+        Available from the command palette at any time, not just at
+        startup — this is the in-app entry point for the same device
+        flow ``ytm setup --oauth`` drives from the CLI. A successful
+        sign-in only takes effect for the *next* launch: the running
+        session's YTMusicService already holds a constructed client, and
+        rebuilding it live is out of scope here (same as ``ytm setup``
+        itself, which is a separate, restart-before-it-applies step).
+        """
+        self.run_worker(self._oauth_login_flow(), name="oauth_login", exclusive=True)
+
+    async def _oauth_login_flow(self) -> None:
+        """Push the OAuth popup and wait for it to dismiss.
+
+        push_screen_wait() requires an active worker context -- calling it
+        directly from an ``action_*`` callback raises NoActiveWorker at
+        runtime (confirmed live: it doesn't crash the app since
+        _handle_exception below keeps the TUI alive, but the action fails
+        silently with nothing visible on screen). Split into its own
+        worker-run coroutine so the wait is valid.
+        """
+        from ytm_player.services.auth import AuthManager
+        from ytm_player.ui.popups.oauth_setup import OAuthSetupPopup
+
+        auth = AuthManager(cookies_file=self.settings.yt_dlp.cookies_file)
+        signed_in = await self.push_screen_wait(OAuthSetupPopup(auth))
+        if signed_in:
+            self.notify(
+                "Signed in. Restart ytm-player for the new session to take effect.",
+                timeout=6,
+            )
+
     # ── Crash diagnostics ────────────────────────────────────────────
 
     def _handle_exception(self, error: Exception) -> None:
@@ -566,7 +600,9 @@ class YTMPlayerApp(
                 logger.info("Auto-refresh succeeded.")
             else:
                 self.notify(
-                    "Your YouTube Music session expired. Run `ytm setup` to sign in again.",
+                    "Your YouTube Music session expired. Run `ytm setup` to sign in again, "
+                    'or open the command palette (ctrl+p) and run "Account: Sign in with '
+                    'Google (OAuth)" for a more durable OAuth login.',
                     severity="error",
                     timeout=8,
                 )
