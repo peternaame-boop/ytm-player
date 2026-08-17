@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**Fixes**
+
+- **Playback no longer risks an unauthenticated `android_vr` 403** — stream resolution now reuses the same browser-cookie detection `ytm setup` already relies on, so it authenticates the way search/browse already do. Without cookies, yt-dlp's default YouTube client set includes `android_vr`, which is currently subject to an intermittent PO-token-gated 403 (upstream yt-dlp #16796, #17395); authenticated clients avoid it entirely.
+- **Missing yt-dlp JS challenge solver now surfaces as an actionable prompt, not silent skips** — tracks that fail because `remote_components` isn't configured used to be reported as generic "region-locked" skips. Playback now detects this specific case, pauses on the first occurrence to offer enabling yt-dlp's JS challenge solver (`ejs:github`, sandboxed via Deno) and retrying the same track, and gives an accurate error message on any later occurrence instead of guessing.
+- **Five concurrency bugs in stream resolution, all confirmed in practice**: a UI freeze from closing a live `YoutubeDL` instance out from under an in-flight resolve; a reset that landed while a slow options-build was in flight being silently lost, failing every subsequent track identically; a lock held across the entire (slow, Keychain-backed) cookie-decryption step blocking the UI thread for its full duration; duplicate "setting up playback" toasts when the startup warmup and a direct play action raced each other; and two concurrent resolves both independently re-decrypting the same browser's entire cookie store.
+- **Cookie decryption no longer silently invisible** — `yt-dlp`'s own diagnostic output during browser cookie extraction (`Extracting cookies from X`, cookie counts, warnings) now reaches `ytm.log` instead of being dropped by yt-dlp's default logger.
+
+**Changes**
+
+- **Browser cookies are decrypted once per hour, not once per launch** — extracted cookies are persisted to a local file and reused across restarts within a 1-hour freshness window, instead of re-decrypting the full browser cookie store from scratch on every relaunch.
+- **Cookie decryption now happens at startup, not on first play** — the stream resolver is warmed in the background as soon as the library loads (using the resume target, current queue track, recent local history, or the YT Music home feed as a fallback, in that priority order), so the one-time cost is paid before the user presses play rather than during it. A toast now explains the delay ("Setting up playback — decrypting browser cookies...") whenever a resolve does have to pay it live.
+
+**Internal**
+
+- Added `pycryptodomex` as a core dependency. yt-dlp treats it as optional and falls back to a pure-Python AES implementation without it, which is fine for occasional use but noticeably slow for a full browser cookie store decrypt — measured locally at ~26s vs ~2.4s for a ~3500-cookie Chromium-based profile.
+
 ### v2.0.0 (2026-07-04)
 
 **New features**

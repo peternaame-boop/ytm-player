@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import asyncio
+    from collections.abc import Callable
     from typing import Any, Protocol
 
     from textual.app import App
@@ -113,6 +114,7 @@ if TYPE_CHECKING:
         _local_history_claim: _LocalHistoryClaim | None
         _ytm_history: list[dict] | None
         _play_lock: asyncio.Lock
+        _remote_components_prompted: bool
 
         # ── Pending resume from prior session ──────────────────────────
         _pending_resume_video_id: str | None
@@ -143,6 +145,15 @@ if TYPE_CHECKING:
 
         # Defined in PlaybackMixin (_playback.py)
         async def play_track(self, track: dict | None) -> None: ...
+        def _show_remote_components_prompt(
+            self,
+            *,
+            message: str,
+            confirm_label: str = "Enable",
+            cancel_label: str = "Not now",
+            on_accept: Callable[[], None],
+            on_decline: Callable[[], None] | None = None,
+        ) -> None: ...
         async def _download_track(self, track: dict) -> None: ...
         async def _toggle_play_pause(self) -> None: ...
         async def _play_next(self, *, ended_track: dict | None = None) -> None: ...
