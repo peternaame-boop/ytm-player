@@ -9,6 +9,24 @@ import pytest
 from ytm_player.services.stream import StreamInfo, StreamResolver
 
 
+@pytest.fixture(autouse=True)
+def _no_real_cookie_detection(monkeypatch):
+    """_build_ydl_opts() calls _detect_stream_cookies() for real whenever
+    cookiefile/cookiesfrombrowser aren't already configured (the default —
+    see YtDlpSettings.cookies_file) — and that function delegates to
+    AuthManager.detect_browser(), which decrypts real browser cookie
+    stores via yt-dlp's extract_cookies_from_browser (Keychain-backed on
+    macOS). TestResolveSync/TestResolveAsync below exercise resolve_sync()/
+    resolve() through the real _build_ydl_opts() path with only
+    yt_dlp.YoutubeDL mocked, so without stubbing this out, a routine test
+    run would trigger a real, slow Keychain/browser-store touch and a real
+    file write on a developer machine — the side effect this project's
+    test suite is built to avoid. Mirrors tests/test_app/test_playback.py's
+    _no_cookie_extraction_toast fixture.
+    """
+    monkeypatch.setattr("ytm_player.services.stream._detect_stream_cookies", lambda: (None, None))
+
+
 def _make_info(video_id: str = "test123", ttl: float = 18000) -> StreamInfo:
     return StreamInfo(
         url=f"https://stream.example.com/{video_id}",
@@ -59,6 +77,21 @@ class TestStreamInfoCache:
         resolver.clear_cache()
         assert resolver._get_cached("a") is None
         assert resolver._get_cached("b") is None
+
+    def test_clear_cache_also_clears_stranded_missing_remote_components_entries(self):
+        """A prefetched-then-skipped-without-playing video's flag is never
+        consumed (only play_track()/the resolver-warmup path consume by
+        video_id) -- clear_cache() is the natural "start fresh" point that
+        sweeps those stranded entries, since a quality change or accepting
+        the remote_components prompt both make any pending diagnosis moot."""
+        resolver = StreamResolver()
+        resolver._resolving_video_id.value = "stranded_vid"
+        resolver._flag_missing_remote_components()
+        assert resolver._peek_missing_remote_components("stranded_vid") is True
+
+        resolver.clear_cache()
+
+        assert resolver._peek_missing_remote_components("stranded_vid") is False
 
 
 class TestStreamExpiry:

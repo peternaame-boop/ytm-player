@@ -231,6 +231,18 @@ class TestResolverWarmup:
 
         h._show_remote_components_prompt.assert_not_called()
 
+    def test_notify_remote_components_enabled_shows_toast(self, monkeypatch):
+        """The shared on_accept callback (extracted to dedupe a closure and
+        a lambda that both did this same notify call -- see _session.py)
+        is only ever handed to a mocked _show_remote_components_prompt in
+        these tests, so it's never actually invoked; call it directly."""
+        h = _fresh_session_host(monkeypatch)
+
+        h._notify_remote_components_enabled()
+
+        h.notify.assert_called_once()
+        assert "Enabled yt-dlp's JS challenge solver" in h.notify.call_args[0][0]
+
 
 class TestWarmStreamResolverFallbackChain:
     """_warm_stream_resolver() picks a video_id to warm with via a priority
@@ -309,11 +321,43 @@ class TestWarmStreamResolverFallbackChain:
 
         h.stream_resolver.prefetch.assert_not_called()
 
+    async def test_history_error_falls_back_to_ytmusic_home_feed(self, monkeypatch):
+        h = self._host(monkeypatch)
+        h.queue.current_track = None
+        h.history = MagicMock()
+        h.history.get_recently_played = AsyncMock(side_effect=RuntimeError("db locked"))
+        h.ytmusic = MagicMock()
+        h.ytmusic.get_home = AsyncMock(
+            return_value=[
+                {"contents": [{"videoId": "home999"}]},
+            ]
+        )
+        monkeypatch.setattr(
+            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
+        )
 
-class TestWarmRemoteComponentsCheck:
-    """_warm_remote_components_check() prefetches the chosen track and, if
-    that surfaces the missing-remote_components signal, shows the same
-    one-shot prompt a real playback failure would."""
+        # Must not raise -- falls through to the next tier.
+        await h._warm_stream_resolver(None)
+
+        h.stream_resolver.prefetch.assert_awaited_once_with("home999")
+
+    async def test_ytmusic_error_gives_up_silently(self, monkeypatch):
+        h = self._host(monkeypatch)
+        h.queue.current_track = None
+        h.history = None
+        h.ytmusic = MagicMock()
+        h.ytmusic.get_home = AsyncMock(side_effect=RuntimeError("network error"))
+
+        # Must not raise -- no video_id found, nothing to prefetch.
+        await h._warm_stream_resolver(None)
+
+        h.stream_resolver.prefetch.assert_not_called()
+
+
+class TestWarmResolverAndCheckRemoteComponents:
+    """_warm_resolver_and_check_remote_components() prefetches the chosen
+    track and, if that surfaces the missing-remote_components signal,
+    shows the same one-shot prompt a real playback failure would."""
 
     def _host(self, monkeypatch):
         h = _fresh_session_host(monkeypatch)
@@ -328,7 +372,7 @@ class TestWarmRemoteComponentsCheck:
             "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: True
         )
 
-        await h._warm_remote_components_check("vid1")
+        await h._warm_resolver_and_check_remote_components("vid1")
 
         h.notify.assert_called_once()
         assert "decrypting browser cookies" in h.notify.call_args[0][0]
@@ -341,7 +385,7 @@ class TestWarmRemoteComponentsCheck:
             "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
         )
 
-        await h._warm_remote_components_check("vid1")
+        await h._warm_resolver_and_check_remote_components("vid1")
 
         h.notify.assert_not_called()
 
@@ -352,7 +396,7 @@ class TestWarmRemoteComponentsCheck:
             "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
         )
 
-        await h._warm_remote_components_check("vid1")
+        await h._warm_resolver_and_check_remote_components("vid1")
 
         h._show_remote_components_prompt.assert_called_once()
 
@@ -361,7 +405,7 @@ class TestWarmRemoteComponentsCheck:
         h.stream_resolver = None
 
         # Must not raise.
-        await h._warm_remote_components_check("vid1")
+        await h._warm_resolver_and_check_remote_components("vid1")
 
 
 def _save_session_host(tmp_path, monkeypatch=None):

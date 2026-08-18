@@ -37,7 +37,7 @@ dependencies = [
     # whole browser cookie store at once. Measured locally: ~26s with
     # the pure-Python fallback vs ~2.4s with pycryptodomex's native AES
     # for a ~3500-cookie Chromium-based profile.
-    "pycryptodomex>=3.19",
+    "pycryptodomex>=3.19.1",
     "python-mpv>=1.0.0",
     "aiosqlite>=0.20.0",
     "click>=8.1.0",

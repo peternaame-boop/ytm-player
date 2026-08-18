@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ytm_player.app._playback import PlaybackMixin
+from ytm_player.app._session import SessionMixin
 
 
 @pytest.fixture(autouse=True)
@@ -363,6 +364,73 @@ class TestMissingRemoteComponentsHandling:
         )
 
         host.push_screen.assert_not_called()
+
+
+class _SessionAndPlaybackHost(SessionMixin, PlaybackMixin):
+    """Combines both mixins so the _remote_components_prompted guard can be
+    exercised through a real caller from each side on one instance."""
+
+
+def _fresh_combined_host():
+    """Minimal host wiring for the guard shared between SessionMixin's
+    startup-warmup callers and PlaybackMixin's playback-failure caller (see
+    _show_remote_components_prompt's docstring: one flag, regardless of
+    caller). Only stubs what this specific flow reads — unrelated attrs from
+    _fresh_playback_host()/_fresh_session_host() are intentionally omitted.
+    """
+    host = _SessionAndPlaybackHost()
+    host._remote_components_prompted = False
+    host.push_screen = MagicMock()
+    host.settings = MagicMock()
+    host.stream_resolver = MagicMock()
+    host.stream_resolver.clear_cache = MagicMock()
+    host.notify = MagicMock()
+    host.queue = MagicMock()
+    host.queue.next_track = MagicMock(return_value=None)
+    host.call_later = MagicMock()
+    host.run_worker = MagicMock()
+    host._last_play_video_id = ""
+    host._last_play_time = 0.0
+    host._consecutive_failures = 0
+    return host
+
+
+class TestRemoteComponentsPromptSharedAcrossMixins:
+    """_show_remote_components_prompt's one-shot guard lives in PlaybackMixin
+    but is deliberately shared "regardless of caller" with SessionMixin's
+    startup warmup (see its docstring). Prove it end-to-end on a host that
+    actually mixes both, instead of only exercising each caller in isolation
+    against its own stub."""
+
+    def test_session_side_prompt_then_playback_failure_prompts_once(self):
+        host = _fresh_combined_host()
+
+        def _fake_push_screen(screen, callback):
+            callback(True)  # user accepts the first (SessionMixin-side) prompt
+
+        host.push_screen = MagicMock(side_effect=_fake_push_screen)
+
+        # What _restore_session_state / _warm_resolver_and_check_remote_components
+        # (SessionMixin) does on startup when the JS solver isn't ready.
+        host._show_remote_components_prompt(
+            message="Playback needs yt-dlp's JS challenge solver...",
+            on_accept=MagicMock(),
+        )
+        assert host._remote_components_prompted is True
+        assert host.push_screen.call_count == 1
+
+        # A later playback failure (PlaybackMixin) hits the SAME guard and
+        # must not show a second popup — it should fall straight to the
+        # "already asked" error + skip path instead.
+        host._handle_missing_remote_components_failure({"video_id": "abc", "title": "Track"})
+
+        host.push_screen.assert_called_once()
+        error_calls = [
+            c
+            for c in host.notify.call_args_list
+            if "remote_components" in c.args[0] and "Skipping" in c.args[0]
+        ]
+        assert len(error_calls) == 1
 
 
 class TestToggleLikeCurrent:

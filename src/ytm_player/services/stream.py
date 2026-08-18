@@ -37,15 +37,19 @@ def _is_stale(expires_at: float) -> bool:
 
 
 # Cached for the process lifetime — see _detect_stream_cookies. Guarded by
-# _stream_cookies_lock: _get_ydl() only ever calls this from a background
-# thread (via asyncio.to_thread), so holding a lock for the full slow
-# extraction is safe — it can never block the UI thread. Without it, two
-# resolves starting close together (the startup warmup and a direct play
-# action, say) both see "not yet probed" and both run the full Keychain
-# extraction concurrently: confirmed in practice as one thread finishing
-# in ~19s while the other, contending for the same Keychain access, took
-# ~48s — plus each thread independently deciding to show its own "this
-# might take a while" toast, since neither had finished yet either.
+# _stream_cookies_lock: _detect_stream_cookies() only ever runs from a
+# background thread (via asyncio.to_thread), so holding this lock for the
+# full slow extraction there is safe — it can never block the UI thread.
+# claim_cookie_extraction_notification() below is the exception: it's
+# called directly and synchronously from the Textual event loop, so it
+# uses a non-blocking acquire instead of `with _stream_cookies_lock:`.
+# Without the lock at all, two resolves starting close together (the
+# startup warmup and a direct play action, say) both see "not yet probed"
+# and both run the full Keychain extraction concurrently: confirmed in
+# practice as one thread finishing in ~19s while the other, contending for
+# the same Keychain access, took ~48s — plus each thread independently
+# deciding to show its own "this might take a while" toast, since neither
+# had finished yet either.
 _stream_browser_probed = False
 _cached_stream_browser: str | None = None
 _cached_stream_cookiefile: str | None = None
@@ -104,15 +108,32 @@ def claim_cookie_extraction_notification() -> bool:
     _detect_stream_cookies() is about to reuse it instead of extracting,
     so there's nothing slow to warn about even though this is the first
     call this process has made.
+
+    Uses a non-blocking lock acquisition: unlike _detect_stream_cookies(),
+    which only ever runs inside asyncio.to_thread(), this function is
+    called directly and synchronously from the Textual event loop
+    (play_track() in app/_playback.py, _warm_resolver_and_check_remote_components()
+    in app/_session.py — neither runs on a worker thread). If a background
+    extraction already holds _stream_cookies_lock for its full 5-20s+
+    duration, blocking here would freeze the entire UI for that long —
+    reintroducing, via a second lock, the exact UI-freeze bug class this
+    module's _get_ydl()/_reset_ydl() split already fixed for _ydl_lock.
+    Declining to claim the toast when the lock is contended is also the
+    semantically correct outcome: contention means an extraction is
+    already under way, so there's nothing new to announce.
     """
     global _cookie_extraction_notify_claimed
-    with _stream_cookies_lock:
+    if not _stream_cookies_lock.acquire(blocking=False):
+        return False
+    try:
         if _stream_browser_probed or _cookie_extraction_notify_claimed:
             return False
         if _fresh_cached_cookiefile() is not None:
             return False
         _cookie_extraction_notify_claimed = True
         return True
+    finally:
+        _stream_cookies_lock.release()
 
 
 def _detect_stream_cookies() -> tuple[str | None, str | None]:
@@ -159,7 +180,7 @@ def _detect_stream_cookies() -> tuple[str | None, str | None]:
         from ytm_player.services.auth import AuthManager
 
         try:
-            _cached_stream_browser = AuthManager._detect_browser()
+            _cached_stream_browser = AuthManager.detect_browser()
         except Exception:
             logger.debug("Browser cookie detection failed for stream resolution", exc_info=True)
             _cached_stream_browser = None
@@ -189,14 +210,64 @@ def _extract_and_cache_cookiefile(browser: str) -> str | None:
         # concurrent extractions fighting over the Keychain were silently
         # invisible. _YtDlpLogger routes them into the normal log instead.
         jar = extract_cookies_from_browser(browser, logger=_YtDlpLogger())  # type: ignore[arg-type]
+
+        # extract_cookies_from_browser() returns the browser's ENTIRE cookie
+        # store — every domain, unfiltered. Unlike yt-dlp's own in-memory-only
+        # use of this jar, this function persists it to disk, so writing it
+        # unfiltered would durably store the user's complete browser session
+        # state (banking, email, anything else they're logged into) just to
+        # stream YouTube audio. Scope to the youtube.com/google.com domain
+        # family actually needed for YouTube auth — accounts.google.com and
+        # similar Google-auth subdomains can be touched during login/consent
+        # flows — mirroring the domain filtering AuthManager._extract_and_save()
+        # already applies, widened from its youtube.com-only cut since a
+        # cookiejar-based cookiefile (unlike auth.py's flattened single
+        # header string) needs the wider family for yt-dlp's own
+        # domain-scoped requests to succeed.
+        for cookie in list(jar):
+            domain = cookie.domain.lstrip(".")
+            if not (domain.endswith("youtube.com") or domain.endswith("google.com")):
+                jar.clear(cookie.domain, cookie.path, cookie.name)
+
         path = CONFIG_DIR / "stream_cookies_cache.txt"
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        jar.save(str(path), ignore_discard=True, ignore_expires=True)
+        # O_NOFOLLOW (POSIX-only; getattr fallback for Windows) refuses to
+        # follow a symlink at the target path — defense-in-depth against a
+        # malicious local user planting a symlink in CONFIG_DIR, matching
+        # the pattern AuthManager already uses for auth.json. Passing the
+        # resulting file object to jar.save() (YoutubeDLCookieJar.save)
+        # bypasses its own internal, symlink-following open() entirely, so
+        # the cookie data can never land somewhere other than this path.
+        # YoutubeDLCookieJar.open() explicitly supports a non-path-like
+        # file argument (see its is_path_like branch) — save()'s type stub
+        # just doesn't declare that overload, hence the ignore.
+        fd = os.open(
+            str(path),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+            SECURE_FILE_MODE,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            jar.save(f, ignore_discard=True, ignore_expires=True)  # type: ignore[arg-type]
         secure_chmod(path, SECURE_FILE_MODE)
         return str(path)
     except Exception:
         logger.debug("Failed to persist browser cookies to a local file", exc_info=True)
         return None
+
+
+# Shared wording for the remote_components ("JS challenge solver") prompt
+# shown by _show_remote_components_prompt() (app/_playback.py). Both
+# app/_session.py (startup warmup) and app/_playback.py (mid-playback
+# failure) build a message from this same body text — the only difference
+# between call sites is the lead-in clause naming what needs it ("Playback"
+# vs. the specific track title) — so only that clause is left to each
+# caller as an f-string prefix, and a future wording/URL change only has
+# one place to land instead of three.
+REMOTE_COMPONENTS_PROMPT_BODY = (
+    "needs yt-dlp's JS challenge solver to decode YouTube's "
+    "stream signatures. Download and run it from GitHub "
+    "(yt-dlp/ejs, sandboxed via Deno)?"
+)
 
 
 def looks_like_js_solver_ready() -> bool:
@@ -285,6 +356,21 @@ class _YtDlpLogger:
         # failed" repeats every time, so treat that as an equally valid
         # trigger — it's yt-dlp's own wording, not something we're
         # inferring from a generic error.
+        #
+        # This couples us to yt-dlp's exact log wording, with no structured
+        # alternative (exception type/error code) available upstream. Source
+        # of the two strings in yt-dlp's EJS system (introduced 2025.11.12):
+        #   - "remote components ... skipped":
+        #     yt_dlp/extractor/youtube/jsc/_director.py (_director.py's
+        #     "Remote components {...} were skipped" message)
+        #   - "challenge ... solving failed":
+        #     yt_dlp/extractor/youtube/_video.py ("n challenge solving
+        #     failed: Some formats may be missing." message)
+        # yt-dlp's own boosty.py extractor test hardcodes both strings in its
+        # expected_warnings list, so an upstream wording change would break
+        # yt-dlp's own test suite too — a real, if informal, stability
+        # signal. If this stops firing after a yt-dlp upgrade, check those
+        # two files first for wording drift.
         is_missing_remote_components = (
             "remote components" in lowered and "skipped" in lowered
         ) or ("challenge" in lowered and "solving failed" in lowered)
@@ -348,10 +434,27 @@ class StreamResolver:
         # until 5 consecutive failures forced an unrelated reset.
         self._ydl_generation = 0
         # Set by _YtDlpLogger when yt-dlp reports it skipped downloading its
-        # JS challenge-solver script (remote_components unset). One-shot —
-        # read via consume_missing_remote_components(), which resets it, so
-        # callers only act on a *fresh* occurrence.
-        self._missing_remote_components = False
+        # JS challenge-solver script (remote_components unset). Keyed by
+        # video_id rather than a single shared flag: the cached YoutubeDL
+        # instance (and therefore its logger callback) is reused across
+        # every resolve, and two DIFFERENT videos can be resolving
+        # concurrently (e.g. the startup warmup and a direct play action
+        # on another track) — a single boolean can't tell them apart, so
+        # whichever caller drains it first gets the accurate diagnosis and
+        # the other silently falls through to a generic failure message
+        # even though its own resolve hit the identical cause. One-shot
+        # per video_id — read via consume_missing_remote_components(video_id),
+        # which discards that entry, so callers only act on a *fresh*
+        # occurrence for their own video.
+        self._missing_remote_components_lock = threading.Lock()
+        self._missing_remote_components_video_ids: set[str] = set()
+        # Set on the CURRENT thread by _try_resolve() right before calling
+        # extract_info(), so _flag_missing_remote_components() — invoked
+        # synchronously by yt-dlp's logger from inside that same call, on
+        # that same thread — knows which video_id to attribute the
+        # failure to. Needed because the shared logger callback carries no
+        # video context of its own.
+        self._resolving_video_id = threading.local()
 
     @property
     def quality(self) -> str:
@@ -401,31 +504,59 @@ class StreamResolver:
         return opts
 
     def _flag_missing_remote_components(self) -> None:
-        """Callback for _YtDlpLogger: record that a resolve needs remote_components."""
-        self._missing_remote_components = True
+        """Callback for _YtDlpLogger: record that the resolve currently
+        running on this thread needs remote_components.
 
-    def consume_missing_remote_components(self) -> bool:
-        """Return and clear whether the last resolve hit the missing-remote-components case.
-
-        One-shot by design — a caller that acts on ``True`` (e.g. prompting
-        the user) should see ``False`` on subsequent calls until it recurs.
+        Reads the video_id _try_resolve() stashed on this thread just
+        before calling extract_info() — see _resolving_video_id. If that's
+        unset for some reason, there's nothing safe to attribute the flag
+        to, so it's dropped rather than guessed.
         """
-        was_missing = self._missing_remote_components
-        self._missing_remote_components = False
-        return was_missing
+        video_id = getattr(self._resolving_video_id, "value", None)
+        if video_id is None:
+            return
+        with self._missing_remote_components_lock:
+            self._missing_remote_components_video_ids.add(video_id)
 
-    @property
-    def missing_remote_components(self) -> bool:
-        """Non-destructive peek at the missing-remote-components flag.
+    def consume_missing_remote_components(self, video_id: str) -> bool:
+        """Return and clear whether *video_id*'s last resolve hit the
+        missing-remote-components case.
+
+        One-shot per video_id by design — a caller that acts on ``True``
+        (e.g. prompting the user) should see ``False`` on subsequent calls
+        for that video until it recurs.
+        """
+        with self._missing_remote_components_lock:
+            if video_id in self._missing_remote_components_video_ids:
+                self._missing_remote_components_video_ids.discard(video_id)
+                return True
+            return False
+
+    def _peek_missing_remote_components(self, video_id: str) -> bool:
+        """Non-destructive check of whether *video_id* hit the
+        missing-remote-components case.
 
         Used by _resolve_sync to short-circuit its own retry loop without
-        stealing the signal consume_missing_remote_components() later
+        stealing the signal consume_missing_remote_components(video_id) later
         delivers to the caller (e.g. the UI's one-time prompt).
         """
-        return self._missing_remote_components
+        with self._missing_remote_components_lock:
+            return video_id in self._missing_remote_components_video_ids
 
     def _get_ydl(self) -> Any:
-        """Return a reusable YoutubeDL instance, creating it lazily.
+        """Return a reusable YoutubeDL instance, creating it lazily, with
+        _active_resolves already incremented on the caller's behalf.
+
+        Incrementing _active_resolves here — still inside self._ydl_lock,
+        at every return point — instead of via a separate, later lock
+        acquisition in _try_resolve() closes a TOCTOU gap: previously the
+        lock was released between obtaining the reference and bumping the
+        counter, during which _reset_ydl() could observe
+        _active_resolves == 0 for an instance a caller already held and
+        was about to call extract_info() on, and close it out from under
+        that in-flight call — reintroducing the exact "closing a live
+        instance mid-resolve" bug this counter exists to prevent. Callers
+        must still decrement it in a finally block (see _try_resolve).
 
         _build_ydl_opts() is called OUTSIDE self._ydl_lock on purpose: it
         can trigger _detect_stream_cookies()'s one-time browser cookie
@@ -464,6 +595,7 @@ class StreamResolver:
         while True:
             with self._ydl_lock:
                 if self._ydl is not None:
+                    self._active_resolves += 1
                     return self._ydl
                 generation = self._ydl_generation
 
@@ -473,10 +605,12 @@ class StreamResolver:
 
             with self._ydl_lock:
                 if self._ydl is not None:
+                    self._active_resolves += 1
                     return self._ydl
                 if self._ydl_generation != generation:
                     continue  # reset landed mid-build; opts are stale, retry
                 self._ydl = yt_dlp.YoutubeDL(opts)  # type: ignore[arg-type]
+                self._active_resolves += 1
                 return self._ydl
 
     def _reset_ydl(self) -> None:
@@ -531,7 +665,7 @@ class StreamResolver:
             info = self._try_resolve(url, video_id, attempt)
             if info is not None:
                 return info
-            if self.missing_remote_components:
+            if self._peek_missing_remote_components(video_id):
                 # Deterministic, config-level failure (remote_components
                 # unset) — every remaining attempt would hit yt-dlp's same
                 # unmet prerequisite and fail identically. Retrying only
@@ -545,9 +679,13 @@ class StreamResolver:
         import yt_dlp  # Lazy import: needed for exception types
 
         try:
-            ydl = self._get_ydl()
-            with self._ydl_lock:
-                self._active_resolves += 1
+            # Set before _get_ydl() rather than after: nothing should sit
+            # between the increment _get_ydl() does on our behalf and the
+            # try/finally that guarantees its matching decrement below —
+            # if this attribute-set were ever to raise, doing it first
+            # means _get_ydl() (and its increment) never even runs.
+            self._resolving_video_id.value = video_id
+            ydl = self._get_ydl()  # increments _active_resolves; see _get_ydl's docstring
             try:
                 info = ydl.extract_info(url, download=False)
             finally:
@@ -741,6 +879,15 @@ class StreamResolver:
         with self._cache_lock:
             self._cache.clear()
         self._reset_ydl()
+        # A prefetched-then-skipped-without-playing video's flag is never
+        # consumed (only play_track()/the resolver-warmup path consume by
+        # video_id), so entries can otherwise strand here indefinitely.
+        # clear_cache() already fires exactly when that staleness stops
+        # mattering — a quality change or accepting the remote_components
+        # prompt both mean any pending diagnosis is moot; the next resolve
+        # re-flags it fresh if the cause recurs.
+        with self._missing_remote_components_lock:
+            self._missing_remote_components_video_ids.clear()
 
     def prune_expired(self) -> int:
         """Remove expired entries from the cache. Returns number removed."""

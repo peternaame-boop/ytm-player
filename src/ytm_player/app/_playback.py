@@ -173,7 +173,9 @@ class PlaybackMixin(YTMHostBase):
             return
 
         if stream_info is None:
-            if self.stream_resolver and self.stream_resolver.consume_missing_remote_components():
+            if self.stream_resolver and self.stream_resolver.consume_missing_remote_components(
+                video_id
+            ):
                 self._handle_missing_remote_components_failure(track)
                 return
 
@@ -375,10 +377,10 @@ class PlaybackMixin(YTMHostBase):
                 failure_kind="stream",
             )
 
+        from ytm_player.services.stream import REMOTE_COMPONENTS_PROMPT_BODY
+
         self._show_remote_components_prompt(
-            message=f"\"{title}\" needs yt-dlp's JS challenge solver to decode YouTube's "
-            "stream signatures. Download and run it from GitHub "
-            "(yt-dlp/ejs, sandboxed via Deno)?",
+            message=f'"{title}" {REMOTE_COMPONENTS_PROMPT_BODY}',
             confirm_label="Enable & Retry",
             cancel_label="Skip",
             on_accept=_on_accept,
@@ -418,6 +420,14 @@ class PlaybackMixin(YTMHostBase):
                 if on_decline is not None:
                     on_decline()
                 return
+            # "ejs:github" fetches the JS challenge solver from GitHub release
+            # assets under the yt-dlp org, not "ejs:npm" (a live npm-package
+            # fetch — an open community supply-chain concern, yt-dlp#15185,
+            # that does not apply to this path). yt-dlp does not checksum- or
+            # signature-verify the downloaded asset at fetch time; the actual
+            # safety boundary is Deno's default sandbox, which denies the
+            # solver script filesystem and network access (yt-dlp/yt-dlp
+            # wiki: EJS; yt-dlp#15012).
             self.settings.yt_dlp.remote_components = "ejs:github"
             self.settings.save()
             if self.stream_resolver:

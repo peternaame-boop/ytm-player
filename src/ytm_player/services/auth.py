@@ -147,7 +147,7 @@ class AuthManager:
         if self._cookies_file and self._refresh_from_cookies_file(Path(self._cookies_file)):
             return True
 
-        browser = self._detect_browser()
+        browser = self.detect_browser()
         if browser is None:
             return False
         try:
@@ -194,7 +194,7 @@ class AuthManager:
             return self._setup_manual()
 
         # Auto-detect browser.
-        detected = self._detect_browser()
+        detected = self.detect_browser()
         if detected:
             print(f"  Found YouTube cookies in {detected}.")
             print("  Extracting automatically...")
@@ -209,7 +209,7 @@ class AuthManager:
     # ── Browser cookie extraction ────────────────────────────────────
 
     @staticmethod
-    def _detect_browser() -> str | None:
+    def detect_browser() -> str | None:
         """Find a browser that has YouTube cookies."""
         try:
             from yt_dlp.cookies import extract_cookies_from_browser

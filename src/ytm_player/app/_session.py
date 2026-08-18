@@ -166,9 +166,6 @@ class SessionMixin(YTMHostBase):
             if self.stream_resolver:
                 self.run_worker(self._warm_stream_resolver(resumed_video_id))
 
-        def _on_remote_components_ready() -> None:
-            self.notify("Enabled yt-dlp's JS challenge solver.", timeout=3)
-
         # Whether a JS challenge solver is available is a property of
         # yt-dlp's local config/cache, not of which client or cookies a
         # given resolve ends up using — so we can answer "will
@@ -189,17 +186,29 @@ class SessionMixin(YTMHostBase):
         # decrypt into a ~28s wait when a user accepted the prompt and
         # started playback within seconds of each other. Racing them is
         # safe now; waiting was papering over bugs that no longer exist.
-        from ytm_player.services.stream import looks_like_js_solver_ready
+        from ytm_player.services.stream import (
+            REMOTE_COMPONENTS_PROMPT_BODY,
+            looks_like_js_solver_ready,
+        )
 
         if not looks_like_js_solver_ready():
             self._show_remote_components_prompt(
-                message="Playback needs yt-dlp's JS challenge solver to decode YouTube's "
-                "stream signatures. Download and run it from GitHub "
-                "(yt-dlp/ejs, sandboxed via Deno)?",
-                on_accept=_on_remote_components_ready,
+                message=f"Playback {REMOTE_COMPONENTS_PROMPT_BODY}",
+                on_accept=self._notify_remote_components_enabled,
             )
 
         _start_resolver_warmup()
+
+    def _notify_remote_components_enabled(self) -> None:
+        """Toast shown once the user accepts the remote_components prompt.
+
+        Shared by both call sites in this class — the startup warmup above
+        and the post-prefetch recheck in
+        ``_warm_resolver_and_check_remote_components`` — so the wording
+        can't drift between them the way two independently defined
+        closures risked.
+        """
+        self.notify("Enabled yt-dlp's JS challenge solver.", timeout=3)
 
     async def _warm_stream_resolver(self, preferred_video_id: str | None) -> None:
         """Pick a video_id to warm StreamResolver with, then resolve it silently.
@@ -247,9 +256,9 @@ class SessionMixin(YTMHostBase):
                     break
         if not video_id:
             return
-        await self._warm_remote_components_check(video_id)
+        await self._warm_resolver_and_check_remote_components(video_id)
 
-    async def _warm_remote_components_check(self, video_id: str) -> None:
+    async def _warm_resolver_and_check_remote_components(self, video_id: str) -> None:
         """Resolve the resume track early so the missing-remote-components
         signal (if any) surfaces during startup instead of on first play.
 
@@ -260,7 +269,10 @@ class SessionMixin(YTMHostBase):
         if not self.stream_resolver:
             return
 
-        from ytm_player.services.stream import claim_cookie_extraction_notification
+        from ytm_player.services.stream import (
+            REMOTE_COMPONENTS_PROMPT_BODY,
+            claim_cookie_extraction_notification,
+        )
 
         if claim_cookie_extraction_notification():
             # This resolve is about to pay a one-time, Keychain-backed
@@ -273,26 +285,20 @@ class SessionMixin(YTMHostBase):
             #
             # Textual's notify() has no public way to dismiss a specific
             # toast early or extend its timeout once shown, so this has to
-            # be a fixed guess rather than "close when actually done".
-            # 25s covers the observed single-extraction range (5-20s) with
-            # margin; the previous 15s was sized before a since-fixed
-            # concurrency bug let two resolves race to extract at once,
-            # which — by contending for the same Keychain access — pushed
-            # one of them to ~48s. That case shouldn't recur now that
-            # _detect_stream_cookies() serializes concurrent callers
-            # instead of both running the full extraction.
+            # be a fixed guess rather than "close when actually done". 25s
+            # covers the observed single-extraction range (5-20s) with
+            # margin, sized against contended extraction, not solo — see
+            # stream.py's _stream_cookies_lock comment for why.
             self.notify(
                 "Setting up playback — decrypting browser cookies, this can take a few seconds...",
                 timeout=25,
             )
 
         await self.stream_resolver.prefetch(video_id)
-        if self.stream_resolver.consume_missing_remote_components():
+        if self.stream_resolver.consume_missing_remote_components(video_id):
             self._show_remote_components_prompt(
-                message="Playback needs yt-dlp's JS challenge solver to decode YouTube's "
-                "stream signatures. Download and run it from GitHub "
-                "(yt-dlp/ejs, sandboxed via Deno)?",
-                on_accept=lambda: self.notify("Enabled yt-dlp's JS challenge solver.", timeout=3),
+                message=f"Playback {REMOTE_COMPONENTS_PROMPT_BODY}",
+                on_accept=self._notify_remote_components_enabled,
             )
 
     def _save_session_state(self) -> None:
