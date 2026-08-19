@@ -246,21 +246,35 @@ class AuthManager:
                 continue
         return None
 
+    @staticmethod
+    def _backup_bytes(path: Path, label: str) -> bytes | None:
+        """Snapshot *path*'s contents so a failed refresh can restore them."""
+        if not path.exists():
+            return None
+        try:
+            return path.read_bytes()
+        except OSError:
+            logger.debug("Could not backup existing %s", label, exc_info=True)
+            return None
+
+    @staticmethod
+    def _restore_or_remove(path: Path, backup: bytes | None, label: str) -> None:
+        """Undo a failed refresh: restore *path* from *backup*, or remove it
+        if there was no prior backup (the refresh wrote it fresh)."""
+        try:
+            if backup is not None:
+                path.write_bytes(backup)
+                secure_chmod(path, SECURE_FILE_MODE)
+                logger.debug("Restored previous %s after cookies file validation failure", label)
+            elif path.exists():
+                path.unlink()
+        except OSError:
+            logger.warning("Failed to restore previous %s", label, exc_info=True)
+
     def _refresh_from_cookies_file(self, cookies_file: Path, interactive: bool = False) -> bool:
         """Refresh auth from cookies file without losing working credentials."""
-        backup: bytes | None = None
-        if self._auth_file.exists():
-            try:
-                backup = self._auth_file.read_bytes()
-            except OSError:
-                logger.debug("Could not backup existing auth file", exc_info=True)
-
-        stream_backup: bytes | None = None
-        if self._stream_cookies_file.exists():
-            try:
-                stream_backup = self._stream_cookies_file.read_bytes()
-            except OSError:
-                logger.debug("Could not backup existing stream cookiejar", exc_info=True)
+        backup = self._backup_bytes(self._auth_file, "auth file")
+        stream_backup = self._backup_bytes(self._stream_cookies_file, "stream cookiejar")
 
         if not self._extract_and_save_from_cookies_file(cookies_file, interactive=interactive):
             return False
@@ -271,24 +285,8 @@ class AuthManager:
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             logger.warning("Network error during cookies-file validation; restoring backup")
 
-        try:
-            if backup is not None:
-                self._auth_file.write_bytes(backup)
-                secure_chmod(self._auth_file, SECURE_FILE_MODE)
-                logger.debug("Restored previous auth after cookies file validation failure")
-            elif self._auth_file.exists():
-                self._auth_file.unlink()
-        except OSError:
-            logger.warning("Failed to restore previous auth file", exc_info=True)
-
-        try:
-            if stream_backup is not None:
-                self._stream_cookies_file.write_bytes(stream_backup)
-                secure_chmod(self._stream_cookies_file, SECURE_FILE_MODE)
-            elif self._stream_cookies_file.exists():
-                self._stream_cookies_file.unlink()
-        except OSError:
-            logger.warning("Failed to restore previous stream cookiejar", exc_info=True)
+        self._restore_or_remove(self._auth_file, backup, "auth file")
+        self._restore_or_remove(self._stream_cookies_file, stream_backup, "stream cookiejar")
         return False
 
     def _extract_and_save_from_cookies_file(
@@ -511,7 +509,7 @@ class AuthManager:
                     (".youtube.com", ".google.com")
                 ):
                     value = cookie.value or ""
-                    if any(ch in cookie.name or ch in value for ch in ("\t", "\n", "\r")):
+                    if _has_control_chars(cookie.name, value):
                         continue
                     stream_jar.set_cookie(cookie)
 
@@ -606,6 +604,18 @@ class AuthManager:
 _PSEUDO_HEADERS = {":authority", ":method", ":path", ":scheme", ":status"}
 
 
+def _has_control_chars(*values: str) -> bool:
+    """True if any of *values* contains a tab/newline/carriage-return.
+
+    Both cookiejar formats this module writes (Netscape, and the raw-header
+    fallback) are line-oriented — an embedded control character in a cookie
+    name/value would corrupt the file. Shared by _save_stream_cookiejar and
+    _cookies_from_raw_header, the two places that build Cookie objects from
+    untrusted input (browser-extracted and user-pasted, respectively).
+    """
+    return any(ch in value for value in values for ch in ("\t", "\n", "\r"))
+
+
 def _normalize_raw_headers(raw: str) -> str:
     """Pre-process raw headers into ``Name: Value\\n`` format.
 
@@ -670,7 +680,7 @@ def _cookies_from_raw_header(cookie_header_value: str) -> list[Cookie]:
         if len(pieces) != 2:
             continue
         name, value = pieces[0].strip(), pieces[1].strip()
-        if any(ch in name or ch in value for ch in ("\t", "\n", "\r")):
+        if _has_control_chars(name, value):
             continue
         cookies.append(
             Cookie(
