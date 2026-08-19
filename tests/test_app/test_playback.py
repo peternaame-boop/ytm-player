@@ -12,26 +12,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from ytm_player.app._playback import PlaybackMixin
 from ytm_player.app._session import SessionMixin
-
-
-@pytest.fixture(autouse=True)
-def _no_cookie_extraction_toast(monkeypatch):
-    """play_track() checks claim_cookie_extraction_notification() before
-    resolving — a real module-level function backed by real global state
-    (see services/stream.py). Almost every test in this file reaches that
-    check (stream_resolver.resolve defaults to returning None, so nothing
-    short-circuits before it), and without stubbing this, whichever test
-    runs first "claims" it, leaving every later test to see a different,
-    run-order-dependent result. Default it to a stable False; tests that
-    specifically cover the toast override it explicitly.
-    """
-    monkeypatch.setattr(
-        "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
-    )
 
 
 def _fresh_playback_host():
@@ -242,35 +224,6 @@ class TestPlayTrackPendingResume:
         assert host._pending_resume_video_id is None
         assert host._pending_resume_position == 0.0
         assert host._track_start_position == 83.0
-
-
-class TestCookieExtractionToast:
-    """play_track() shows a one-time toast if it has to pay a cookie
-    extraction cost live, but only when it wins the process-wide claim —
-    otherwise the startup warmup (or a racing play_track call) already
-    claimed it."""
-
-    async def test_toast_shown_when_claim_granted(self, monkeypatch):
-        host = _fresh_playback_host()
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: True
-        )
-        host.stream_resolver.resolve = AsyncMock(return_value=None)
-
-        await host.play_track({"video_id": "abc", "title": "X"})
-
-        toast_calls = [c for c in host.notify.call_args_list if "decrypting" in c.args[0]]
-        assert len(toast_calls) == 1
-
-    async def test_no_toast_when_claim_denied(self):
-        """Default fixture behaviour: claim always denied (see autouse fixture)."""
-        host = _fresh_playback_host()
-        host.stream_resolver.resolve = AsyncMock(return_value=None)
-
-        await host.play_track({"video_id": "abc", "title": "X"})
-
-        toast_calls = [c for c in host.notify.call_args_list if "decrypting" in c.args[0]]
-        assert len(toast_calls) == 0
 
 
 class TestMissingRemoteComponentsHandling:

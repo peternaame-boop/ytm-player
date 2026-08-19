@@ -260,9 +260,6 @@ class TestWarmStreamResolverFallbackChain:
     async def test_prefers_preferred_video_id(self, monkeypatch):
         h = self._host(monkeypatch)
         h.queue.current_track = {"video_id": "should-not-be-used"}
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
-        )
 
         await h._warm_stream_resolver("preferred123")
 
@@ -271,9 +268,6 @@ class TestWarmStreamResolverFallbackChain:
     async def test_falls_back_to_queue_current_track(self, monkeypatch):
         h = self._host(monkeypatch)
         h.queue.current_track = {"video_id": "queued456"}
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
-        )
 
         await h._warm_stream_resolver(None)
 
@@ -284,9 +278,6 @@ class TestWarmStreamResolverFallbackChain:
         h.queue.current_track = None
         h.history = MagicMock()
         h.history.get_recently_played = AsyncMock(return_value=[{"video_id": "recent789"}])
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
-        )
 
         await h._warm_stream_resolver(None)
 
@@ -301,9 +292,6 @@ class TestWarmStreamResolverFallbackChain:
             return_value=[
                 {"contents": [{"videoId": "home999"}]},
             ]
-        )
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
         )
 
         await h._warm_stream_resolver(None)
@@ -331,9 +319,6 @@ class TestWarmStreamResolverFallbackChain:
             return_value=[
                 {"contents": [{"videoId": "home999"}]},
             ]
-        )
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
         )
 
         # Must not raise -- falls through to the next tier.
@@ -365,36 +350,9 @@ class TestWarmResolverAndCheckRemoteComponents:
         h.stream_resolver.prefetch = AsyncMock()
         return h
 
-    async def test_claims_toast_and_shows_it(self, monkeypatch):
-        h = self._host(monkeypatch)
-        h.stream_resolver.consume_missing_remote_components = MagicMock(return_value=False)
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: True
-        )
-
-        await h._warm_resolver_and_check_remote_components("vid1")
-
-        h.notify.assert_called_once()
-        assert "decrypting browser cookies" in h.notify.call_args[0][0]
-        h.stream_resolver.prefetch.assert_awaited_once_with("vid1")
-
-    async def test_no_toast_when_not_claimed(self, monkeypatch):
-        h = self._host(monkeypatch)
-        h.stream_resolver.consume_missing_remote_components = MagicMock(return_value=False)
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
-        )
-
-        await h._warm_resolver_and_check_remote_components("vid1")
-
-        h.notify.assert_not_called()
-
     async def test_missing_remote_components_triggers_prompt(self, monkeypatch):
         h = self._host(monkeypatch)
         h.stream_resolver.consume_missing_remote_components = MagicMock(return_value=True)
-        monkeypatch.setattr(
-            "ytm_player.services.stream.claim_cookie_extraction_notification", lambda: False
-        )
 
         await h._warm_resolver_and_check_remote_components("vid1")
 

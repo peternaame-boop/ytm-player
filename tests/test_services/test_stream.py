@@ -12,19 +12,17 @@ from ytm_player.services.stream import StreamInfo, StreamResolver
 @pytest.fixture(autouse=True)
 def _no_real_cookie_detection(monkeypatch):
     """_build_ydl_opts() calls _detect_stream_cookies() for real whenever
-    cookiefile/cookiesfrombrowser aren't already configured (the default —
-    see YtDlpSettings.cookies_file) — and that function delegates to
-    AuthManager.detect_browser(), which decrypts real browser cookie
-    stores via yt-dlp's extract_cookies_from_browser (Keychain-backed on
-    macOS). TestResolveSync/TestResolveAsync below exercise resolve_sync()/
+    cookiefile isn't already configured (the default — see
+    YtDlpSettings.cookies_file) — and that function checks whether
+    AuthManager has already written a stream cookiejar file to disk.
+    TestResolveSync/TestResolveAsync below exercise resolve_sync()/
     resolve() through the real _build_ydl_opts() path with only
     yt_dlp.YoutubeDL mocked, so without stubbing this out, a routine test
-    run would trigger a real, slow Keychain/browser-store touch and a real
-    file write on a developer machine — the side effect this project's
-    test suite is built to avoid. Mirrors tests/test_app/test_playback.py's
-    _no_cookie_extraction_toast fixture.
+    run could pick up a real cookiejar file from the developer's actual
+    ~/.config/ytm-player/ — the side effect this project's test suite is
+    built to avoid.
     """
-    monkeypatch.setattr("ytm_player.services.stream._detect_stream_cookies", lambda: (None, None))
+    monkeypatch.setattr("ytm_player.services.stream._detect_stream_cookies", lambda: None)
 
 
 def _make_info(video_id: str = "test123", ttl: float = 18000) -> StreamInfo:

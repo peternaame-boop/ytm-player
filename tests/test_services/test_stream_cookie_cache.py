@@ -1,12 +1,8 @@
-"""Tests for stream.py's cross-restart cookie caching, the remote_components
-missing-solver detection, and the StreamResolver concurrency fixes around
-resetting a live YoutubeDL instance mid-resolve.
+"""Tests for stream.py's stream-cookiejar existence check, the
+remote_components missing-solver detection, and the StreamResolver
+concurrency fixes around resetting a live YoutubeDL instance mid-resolve.
 
 All of these guard against bugs confirmed in practice during development:
-- Re-decrypting a whole browser cookie store on every relaunch (and on
-  every clear_cache()) when a valid cookiefile was already on disk.
-- Two concurrent resolves both extracting cookies at once, contending for
-  the OS keychain.
 - A reset landing while a slow options-build was in flight being silently
   lost, permanently caching a stale YoutubeDL instance.
 - Closing a live YoutubeDL instance out from under an in-flight resolve,
@@ -17,277 +13,30 @@ All of these guard against bugs confirmed in practice during development:
 
 from __future__ import annotations
 
-import http.cookiejar
 import sys
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-import ytm_player.services.stream as stream_mod
 from ytm_player.config.settings import Settings
 from ytm_player.services.stream import (
     StreamResolver,
-    _extract_and_cache_cookiefile,
-    _fresh_cached_cookiefile,
+    _detect_stream_cookies,
     _YtDlpLogger,
-    claim_cookie_extraction_notification,
     looks_like_js_solver_ready,
 )
 
 
-@pytest.fixture(autouse=True)
-def _reset_stream_cookie_globals():
-    """These are memoized at module scope for the process lifetime by
-    design (see _detect_stream_cookies' docstring) — reset them around
-    every test so tests don't leak state into each other."""
-    stream_mod._stream_browser_probed = False
-    stream_mod._cached_stream_browser = None
-    stream_mod._cached_stream_cookiefile = None
-    stream_mod._cookie_extraction_notify_claimed = False
-    yield
-    stream_mod._stream_browser_probed = False
-    stream_mod._cached_stream_browser = None
-    stream_mod._cached_stream_cookiefile = None
-    stream_mod._cookie_extraction_notify_claimed = False
-
-
-class TestFreshCachedCookiefile:
-    def test_missing_file_returns_none(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        assert _fresh_cached_cookiefile() is None
-
-    def test_fresh_file_returns_path(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        cookiefile = tmp_path / "stream_cookies_cache.txt"
-        cookiefile.write_text("# cookies\n")
-        assert _fresh_cached_cookiefile() == str(cookiefile)
-
-    def test_stale_file_returns_none(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        cookiefile = tmp_path / "stream_cookies_cache.txt"
-        cookiefile.write_text("# cookies\n")
-        import os
-
-        # Back-date mtime past the 1-hour freshness window.
-        stale_time = time.time() - stream_mod._STREAM_COOKIES_MAX_AGE_SECONDS - 60
-        os.utime(cookiefile, (stale_time, stale_time))
-        assert _fresh_cached_cookiefile() is None
-
-    def test_just_under_max_age_is_fresh(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        cookiefile = tmp_path / "stream_cookies_cache.txt"
-        cookiefile.write_text("# cookies\n")
-        import os
-
-        recent_time = time.time() - stream_mod._STREAM_COOKIES_MAX_AGE_SECONDS + 60
-        os.utime(cookiefile, (recent_time, recent_time))
-        assert _fresh_cached_cookiefile() == str(cookiefile)
-
-    def test_exact_boundary_age_is_stale(self, tmp_path, monkeypatch):
-        """age == _STREAM_COOKIES_MAX_AGE_SECONDS exactly — the >= boundary
-        itself, not "well past" or "just under" — must be treated as
-        stale. time.time() is pinned so the comparison is exact rather
-        than depending on how fast this test executes after os.utime()."""
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        cookiefile = tmp_path / "stream_cookies_cache.txt"
-        cookiefile.write_text("# cookies\n")
-        import os
-
-        fixed_now = 2_000_000_000.0
-        monkeypatch.setattr("ytm_player.services.stream.time.time", lambda: fixed_now)
-        boundary_time = fixed_now - stream_mod._STREAM_COOKIES_MAX_AGE_SECONDS
-        os.utime(cookiefile, (boundary_time, boundary_time))
-        assert _fresh_cached_cookiefile() is None
-
-
-class TestClaimCookieExtractionNotification:
-    def test_first_caller_claims_it(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        assert claim_cookie_extraction_notification() is True
-
-    def test_second_caller_does_not_claim_it(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        assert claim_cookie_extraction_notification() is True
-        assert claim_cookie_extraction_notification() is False
-
-    def test_no_claim_once_already_probed(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        stream_mod._stream_browser_probed = True
-        assert claim_cookie_extraction_notification() is False
-
-    def test_no_claim_when_fresh_cache_already_exists(self, tmp_path, monkeypatch):
-        """Nothing slow is about to happen — _detect_stream_cookies() will
-        just reuse the file — so there's nothing to warn about even though
-        this is the first call this process has made."""
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        (tmp_path / "stream_cookies_cache.txt").write_text("# cookies\n")
-        assert claim_cookie_extraction_notification() is False
-
-    def test_does_not_block_when_lock_contended(self, tmp_path, monkeypatch):
-        """Must never block -- it's called synchronously from the Textual
-        event loop, and blocking on a lock held by an in-progress
-        background extraction would freeze the whole UI for the
-        extraction's full duration. acquire(blocking=False) must return
-        immediately (False) rather than waiting for the lock to free up."""
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        stream_mod._stream_cookies_lock.acquire()
-        try:
-            assert claim_cookie_extraction_notification() is False
-        finally:
-            stream_mod._stream_cookies_lock.release()
-
-
 class TestDetectStreamCookies:
-    def test_reuses_fresh_cache_without_probing_browser(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        cookiefile = tmp_path / "stream_cookies_cache.txt"
+    def test_returns_path_when_file_exists(self, tmp_path, monkeypatch):
+        cookiefile = tmp_path / "stream_cookies.txt"
         cookiefile.write_text("# cookies\n")
+        monkeypatch.setattr("ytm_player.config.paths.STREAM_COOKIES_FILE", cookiefile)
+        assert _detect_stream_cookies() == str(cookiefile)
 
-        with patch("ytm_player.services.auth.AuthManager.detect_browser") as mock_detect:
-            browser, path = stream_mod._detect_stream_cookies()
-
-        mock_detect.assert_not_called()
-        assert browser is None  # not re-probed — nothing to report as "detected"
-        assert path == str(cookiefile)
-
-    def test_extracts_and_caches_when_no_fresh_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-
-        with (
-            patch(
-                "ytm_player.services.auth.AuthManager.detect_browser",
-                return_value="vivaldi",
-            ) as mock_detect,
-            patch(
-                "ytm_player.services.stream._extract_and_cache_cookiefile",
-                return_value=str(tmp_path / "stream_cookies_cache.txt"),
-            ) as mock_extract,
-        ):
-            browser, path = stream_mod._detect_stream_cookies()
-
-        mock_detect.assert_called_once()
-        mock_extract.assert_called_once_with("vivaldi")
-        assert browser == "vivaldi"
-        assert path == str(tmp_path / "stream_cookies_cache.txt")
-
-    def test_memoized_for_process_lifetime(self, tmp_path, monkeypatch):
-        """A second call within the same process must not re-probe, even
-        if the first call found no browser at all."""
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-
-        with patch(
-            "ytm_player.services.auth.AuthManager.detect_browser", return_value=None
-        ) as mock_detect:
-            stream_mod._detect_stream_cookies()
-            stream_mod._detect_stream_cookies()
-
-        mock_detect.assert_called_once()
-
-    def test_browser_detection_failure_is_swallowed(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        with patch(
-            "ytm_player.services.auth.AuthManager.detect_browser",
-            side_effect=RuntimeError("keychain locked"),
-        ):
-            browser, path = stream_mod._detect_stream_cookies()
-        assert browser is None
-        assert path is None
-
-
-def _cookie(domain: str, name: str = "cookie") -> http.cookiejar.Cookie:
-    """Build a minimal real Cookie for a given domain (used to build real
-    jars below — a MagicMock jar can't be iterated/filtered the way
-    _extract_and_cache_cookiefile's domain scoping requires)."""
-    return http.cookiejar.Cookie(
-        version=0,
-        name=name,
-        value="value",
-        port=None,
-        port_specified=False,
-        domain=domain,
-        domain_specified=True,
-        domain_initial_dot=domain.startswith("."),
-        path="/",
-        path_specified=True,
-        secure=False,
-        expires=None,
-        discard=True,
-        comment=None,
-        comment_url=None,
-        rest={},
-    )
-
-
-def _make_jar(*domains: str):
-    from yt_dlp.cookies import YoutubeDLCookieJar
-
-    jar = YoutubeDLCookieJar()
-    for i, domain in enumerate(domains):
-        jar.set_cookie(_cookie(domain, name=f"cookie{i}"))
-    return jar
-
-
-class TestExtractAndCacheCookiefile:
-    def test_success_writes_secure_file_scoped_to_youtube_google(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        expected_path = tmp_path / "stream_cookies_cache.txt"
-        jar = _make_jar(
-            ".youtube.com", "accounts.google.com", ".chase.com", "unrelated-shop.example"
-        )
-
-        with patch("yt_dlp.cookies.extract_cookies_from_browser", return_value=jar) as mock_extract:
-            result = _extract_and_cache_cookiefile("vivaldi")
-
-        assert result == str(expected_path)
-        mock_extract.assert_called_once()
-        # A logger was passed so yt-dlp's own diagnostics reach ytm.log
-        # instead of being dropped by its default stdout-only logger.
-        assert isinstance(mock_extract.call_args.kwargs["logger"], _YtDlpLogger)
-        assert expected_path.exists()
-        content = expected_path.read_text()
-        # Persisted: youtube.com/google.com family, needed for yt-dlp auth.
-        assert "youtube.com" in content
-        assert "accounts.google.com" in content
-        # NOT persisted: unrelated domains from the same browser profile —
-        # the whole point of scoping before writing anything to disk.
-        assert "chase.com" not in content
-        assert "unrelated-shop.example" not in content
-        if sys.platform != "win32":
-            assert oct(expected_path.stat().st_mode)[-3:] == "600"
-
-    def test_failure_returns_none(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        with patch(
-            "yt_dlp.cookies.extract_cookies_from_browser",
-            side_effect=FileNotFoundError("no cookies db"),
-        ):
-            result = _extract_and_cache_cookiefile("vivaldi")
-        assert result is None
-
-    def test_symlink_target_is_not_followed(self, tmp_path, monkeypatch):
-        """A symlink planted at the target path must not be written
-        through — proves O_NOFOLLOW is actually wired in, not just
-        documented. Without it, jar.save() + secure_chmod() would follow
-        the symlink and overwrite + chmod whatever it points at."""
-        if sys.platform == "win32":
-            pytest.skip("O_NOFOLLOW is a POSIX-only defense")
-        monkeypatch.setattr("ytm_player.config.paths.CONFIG_DIR", tmp_path)
-        target_path = tmp_path / "stream_cookies_cache.txt"
-        victim = tmp_path / "victim.txt"
-        victim.write_text("do not touch")
-        target_path.symlink_to(victim)
-        jar = _make_jar(".youtube.com")
-
-        with patch("yt_dlp.cookies.extract_cookies_from_browser", return_value=jar):
-            result = _extract_and_cache_cookiefile("vivaldi")
-
-        # os.open(..., O_NOFOLLOW) raises OSError on a symlink target,
-        # caught by the function's own broad except -> None, and the
-        # victim file must be untouched either way.
-        assert result is None
-        assert victim.read_text() == "do not touch"
+    def test_returns_none_when_file_missing(self, tmp_path, monkeypatch):
+        cookiefile = tmp_path / "stream_cookies.txt"
+        monkeypatch.setattr("ytm_player.config.paths.STREAM_COOKIES_FILE", cookiefile)
+        assert _detect_stream_cookies() is None
 
 
 class TestYtDlpLoggerMissingRemoteComponents:
@@ -693,41 +442,28 @@ class TestLooksLikeJsSolverReady:
 class TestBuildYdlOptsCookieInjection:
     """_build_ydl_opts()'s cookie-injection logic — this PR's headline
     change — had no direct test; every existing test in this file targets
-    _detect_stream_cookies, _extract_and_cache_cookiefile,
-    claim_cookie_extraction_notification, _YtDlpLogger, or
-    _get_ydl/_reset_ydl in isolation, none of them assert what actually
-    ends up in the opts dict."""
+    _detect_stream_cookies, _YtDlpLogger, or _get_ydl/_reset_ydl in
+    isolation, none of them assert what actually ends up in the opts
+    dict."""
 
     def test_injects_cookiefile_when_cache_available(self, monkeypatch):
         settings = Settings()
         monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
         with patch(
             "ytm_player.services.stream._detect_stream_cookies",
-            return_value=("vivaldi", "/fake/path/stream_cookies_cache.txt"),
+            return_value="/fake/path/stream_cookies.txt",
         ) as mock_detect:
             opts = StreamResolver()._build_ydl_opts()
         mock_detect.assert_called_once()
-        assert opts["cookiefile"] == "/fake/path/stream_cookies_cache.txt"
+        assert opts["cookiefile"] == "/fake/path/stream_cookies.txt"
         assert "cookiesfrombrowser" not in opts
 
-    def test_falls_back_to_cookiesfrombrowser_when_no_cached_file(self, monkeypatch):
+    def test_no_cookiejar_file_injects_nothing(self, monkeypatch):
         settings = Settings()
         monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
         with patch(
             "ytm_player.services.stream._detect_stream_cookies",
-            return_value=("vivaldi", None),
-        ) as mock_detect:
-            opts = StreamResolver()._build_ydl_opts()
-        mock_detect.assert_called_once()
-        assert opts["cookiesfrombrowser"] == ("vivaldi", None, None, None)
-        assert "cookiefile" not in opts
-
-    def test_no_browser_found_injects_nothing(self, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        with patch(
-            "ytm_player.services.stream._detect_stream_cookies",
-            return_value=(None, None),
+            return_value=None,
         ) as mock_detect:
             opts = StreamResolver()._build_ydl_opts()
         mock_detect.assert_called_once()
