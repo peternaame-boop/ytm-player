@@ -160,6 +160,10 @@ class AuthManager:
         if browser is None:
             return False
         try:
+            # Unlike _refresh_from_cookies_file, this path has no backup/restore
+            # for auth.json or stream_cookies.txt — a validate() failure below
+            # leaves freshly-extracted-but-invalid credentials on disk. Known,
+            # deliberately-deferred gap (see plan's exclusions), not an oversight.
             if self._extract_and_save(browser):
                 return self.validate()
         except Exception:
@@ -267,13 +271,15 @@ class AuthManager:
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             logger.warning("Network error during cookies-file validation; restoring backup")
 
-        if backup is not None:
-            try:
+        try:
+            if backup is not None:
                 self._auth_file.write_bytes(backup)
                 secure_chmod(self._auth_file, SECURE_FILE_MODE)
                 logger.debug("Restored previous auth after cookies file validation failure")
-            except OSError:
-                logger.warning("Failed to restore previous auth file", exc_info=True)
+            elif self._auth_file.exists():
+                self._auth_file.unlink()
+        except OSError:
+            logger.warning("Failed to restore previous auth file", exc_info=True)
 
         try:
             if stream_backup is not None:
@@ -504,6 +510,9 @@ class AuthManager:
                 if bare in ("youtube.com", "google.com") or bare.endswith(
                     (".youtube.com", ".google.com")
                 ):
+                    value = cookie.value or ""
+                    if any(ch in cookie.name or ch in value for ch in ("\t", "\n", "\r")):
+                        continue
                     stream_jar.set_cookie(cookie)
 
             self._config_dir.mkdir(parents=True, exist_ok=True)
