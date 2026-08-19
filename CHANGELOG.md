@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**Fixes**
+
+- **Playback no longer 403s on current YouTube streams** — yt-dlp's default client set now includes `android_vr`, whose googlevideo URLs are rejected by mpv (`HTTP 403`, `rqh=1`). Stream resolution and offline downloads use `tv_simply` / `tv_downgraded` (legacy format 18) instead. Deno or Node is auto-detected for yt-dlp JS challenges when `[yt_dlp] js_runtimes` is unset.
+
+---
+
 ### v2.0.0 (2026-07-04)
 
 **New features**

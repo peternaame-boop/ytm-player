@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,27 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# yt-dlp's "default" client set currently includes android_vr. Those
+# googlevideo URLs 403 in mpv/ffmpeg (rqh=1 plus a ~1MB GVS PO-token cap).
+# tv_simply still exposes legacy format 18, which plays without a PO token.
+YOUTUBE_PLAYER_CLIENTS = ["tv_simply", "tv_downgraded"]
+
+_JS_RUNTIME_NAMES = ("deno", "node")
+
+
+def youtube_extractor_args() -> dict:
+    """Return extractor_args that avoid ANDROID_VR 403s in mpv."""
+    return {"youtube": {"player_client": list(YOUTUBE_PLAYER_CLIENTS)}}
+
+
+def detect_js_runtimes() -> dict[str, dict] | None:
+    """Return yt-dlp js_runtimes for JS engines found on PATH."""
+    found: dict[str, dict] = {}
+    for name in _JS_RUNTIME_NAMES:
+        if shutil.which(name):
+            found[name] = {}
+    return found or None
 
 
 def _split_csv_or_space(value: str) -> list[str]:
@@ -124,6 +146,8 @@ def apply_configured_yt_dlp_options(opts: dict, yt_dlp_settings: YtDlpSettings) 
         opts["remote_components"] = remote_components
 
     js_runtimes = normalize_js_runtimes(yt_dlp_settings.js_runtimes)
+    if js_runtimes is None:
+        js_runtimes = detect_js_runtimes()
     if js_runtimes:
         opts["js_runtimes"] = js_runtimes
 

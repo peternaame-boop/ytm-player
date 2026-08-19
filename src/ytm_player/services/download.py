@@ -9,7 +9,10 @@ from pathlib import Path
 
 from ytm_player.config.paths import SECURE_FILE_MODE, secure_chmod
 from ytm_player.config.settings import get_settings
-from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
+from ytm_player.services.yt_dlp_options import (
+    apply_configured_yt_dlp_options,
+    youtube_extractor_args,
+)
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,7 @@ class DownloadService:
             "extract_flat": False,
             "writethumbnail": False,
             "writeinfojson": False,
+            "extractor_args": youtube_extractor_args(),
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",

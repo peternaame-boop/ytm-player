@@ -116,6 +116,31 @@ class TestStreamQuality:
             resolver.quality = "ultra"
 
 
+class TestYdlOpts:
+    """YouTube 403s ANDROID_VR progressive URLs in mpv (rqh=1 + 1MB cap).
+
+    tv_simply still offers legacy format 18, which mpv can play without a
+    PO token. See stream.py _build_ydl_opts.
+    """
+
+    def test_player_client_prefers_tv_simply_over_android_vr(self):
+        opts = StreamResolver()._build_ydl_opts()
+        clients = opts["extractor_args"]["youtube"]["player_client"]
+        assert "tv_simply" in clients
+        assert "android_vr" not in clients
+        assert "default" not in clients or ("-android_vr" in clients), (
+            "default includes android_vr, which 403s in mpv"
+        )
+
+    def test_js_runtimes_auto_detected_when_unset(self, monkeypatch):
+        monkeypatch.setattr(
+            "ytm_player.services.yt_dlp_options.shutil.which",
+            lambda name: "/usr/bin/deno" if name == "deno" else None,
+        )
+        opts = StreamResolver()._build_ydl_opts()
+        assert opts.get("js_runtimes") == {"deno": {}}
+
+
 class TestCacheEviction:
     def test_prune_expired(self):
         resolver = StreamResolver()

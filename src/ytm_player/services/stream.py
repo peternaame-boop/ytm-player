@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from ytm_player.config.settings import get_settings
-from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
+from ytm_player.services.yt_dlp_options import (
+    apply_configured_yt_dlp_options,
+    youtube_extractor_args,
+)
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -96,9 +99,9 @@ class StreamResolver:
             # Avoid writing any files to disk.
             "writeinfojson": False,
             "writethumbnail": False,
-            # Android client provides a non-PoT fallback path (legacy format 18)
-            # that unblocks madeForKids content which the default web client refuses.
-            "extractor_args": {"youtube": {"player_client": ["default", "android"]}},
+            # tv_simply/tv_downgraded expose legacy format 18. yt-dlp "default"
+            # includes android_vr, whose URLs 403 in mpv (rqh=1 + 1MB PO-token cap).
+            "extractor_args": youtube_extractor_args(),
         }
         return apply_configured_yt_dlp_options(opts, settings)
 

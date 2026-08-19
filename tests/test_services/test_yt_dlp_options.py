@@ -83,10 +83,29 @@ def test_apply_configured_options_warns_when_remote_components_enabled(caplog):
     assert "remote_components is enabled" in caplog.text
 
 
-def test_apply_configured_options_skips_unset_fields():
+def test_apply_configured_options_skips_unset_fields(monkeypatch):
+    monkeypatch.setattr("ytm_player.services.yt_dlp_options.shutil.which", lambda _name: None)
     settings = YtDlpSettings()
     opts = apply_configured_yt_dlp_options({"quiet": True}, settings)
     assert opts == {"quiet": True}
+
+
+def test_apply_configured_options_autodetects_js_runtimes(monkeypatch):
+    monkeypatch.setattr(
+        "ytm_player.services.yt_dlp_options.shutil.which",
+        lambda name: "/usr/bin/deno" if name == "deno" else None,
+    )
+    opts = apply_configured_yt_dlp_options({"quiet": True}, YtDlpSettings())
+    assert opts["js_runtimes"] == {"deno": {}}
+
+
+def test_configured_js_runtimes_win_over_autodetect(monkeypatch):
+    monkeypatch.setattr(
+        "ytm_player.services.yt_dlp_options.shutil.which",
+        lambda name: "/usr/bin/deno" if name == "deno" else None,
+    )
+    opts = apply_configured_yt_dlp_options({"quiet": True}, YtDlpSettings(js_runtimes="node"))
+    assert opts["js_runtimes"] == {"node": {}}
 
 
 def test_normalize_cafile_expands_home():

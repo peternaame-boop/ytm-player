@@ -1,5 +1,18 @@
 # Troubleshooting
 
+## Playback fails with HTTP 403 (no sound)
+
+YouTube's default yt-dlp clients currently hand mpv stream URLs that 403
+(`c=ANDROID_VR`, `rqh=1`). ytm-player uses the `tv_simply` / `tv_downgraded`
+clients instead, which still serve legacy format 18.
+
+If playback still 403s:
+
+1. Update yt-dlp: `uv tool upgrade ytm-player` (or reinstall).
+2. Install a JS runtime yt-dlp can use for nsig solving (`deno` recommended, or `node`).
+3. On Arch, install `yt-dlp-ejs` so the challenge solver scripts are local.
+4. Restart `ytm` after changing yt-dlp or `[yt_dlp]` config — the resolver caches its YoutubeDL instance for the process lifetime.
+
 ## "mpv not found" or playback doesn't start
 
 Ensure mpv is installed and in your `$PATH`:
