@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -36,223 +37,19 @@ def _is_stale(expires_at: float) -> bool:
     return time.time() >= expires_at - _EXPIRY_BUFFER_SECONDS
 
 
-# Cached for the process lifetime — see _detect_stream_cookies. Guarded by
-# _stream_cookies_lock: _detect_stream_cookies() only ever runs from a
-# background thread (via asyncio.to_thread), so holding this lock for the
-# full slow extraction there is safe — it can never block the UI thread.
-# claim_cookie_extraction_notification() below is the exception: it's
-# called directly and synchronously from the Textual event loop, so it
-# uses a non-blocking acquire instead of `with _stream_cookies_lock:`.
-# Without the lock at all, two resolves starting close together (the
-# startup warmup and a direct play action, say) both see "not yet probed"
-# and both run the full Keychain extraction concurrently: confirmed in
-# practice as one thread finishing in ~19s while the other, contending for
-# the same Keychain access, took ~48s — plus each thread independently
-# deciding to show its own "this might take a while" toast, since neither
-# had finished yet either.
-_stream_browser_probed = False
-_cached_stream_browser: str | None = None
-_cached_stream_cookiefile: str | None = None
-_stream_cookies_lock = threading.Lock()
-_cookie_extraction_notify_claimed = False
+def _detect_stream_cookies() -> str | None:
+    """Return the AuthManager-written stream cookiejar path if present, else None.
 
-# How long a previously-written cookiefile is trusted before re-extracting.
-# _stream_browser_probed only tracks "have we run this in THIS process" —
-# it resets on every launch — so without this, every fresh launch redid
-# the full browser-detection + extraction dance regardless of a valid
-# cache file sitting right there from the last launch, seconds or minutes
-# earlier. 1 hour balances that against actual staleness risk (a browser
-# logout or account switch invalidating the cached session) — short
-# enough that a genuinely stale cache doesn't linger for long, long
-# enough that closely-spaced restarts (this entire testing session, or
-# just normal quit/relaunch usage) actually benefit from it.
-_STREAM_COOKIES_MAX_AGE_SECONDS = 60 * 60
-
-
-def _fresh_cached_cookiefile() -> str | None:
-    """Return the on-disk cookiefile path if it exists and isn't stale.
-
-    Read-only and side-effect-free — safe to call from both the toast
-    claim check and _detect_stream_cookies() without them disagreeing
-    about whether a fresh extraction is about to happen.
+    AuthManager (services/auth.py) is the only component that ever decrypts
+    browser cookies — during `ytm setup` or a validate()-triggered
+    try_auto_refresh(). This function never triggers extraction itself; if
+    the file doesn't exist (e.g. extraction failed, or extraction hasn't
+    happened yet), resolution proceeds without cookies rather than
+    decrypting independently.
     """
-    from ytm_player.config.paths import CONFIG_DIR
+    from ytm_player.config.paths import STREAM_COOKIES_FILE
 
-    path = CONFIG_DIR / "stream_cookies_cache.txt"
-    try:
-        age = time.time() - path.stat().st_mtime
-    except OSError:
-        return None
-    if age >= _STREAM_COOKIES_MAX_AGE_SECONDS:
-        return None
-    return str(path)
-
-
-def claim_cookie_extraction_notification() -> bool:
-    """Atomically claim the right to show a "this might take a while" toast
-    for the upcoming one-time cookie decryption.
-
-    Returns True for at most one caller per process. A plain peek here
-    (an earlier version of this returned True/False without claiming
-    anything) let two resolves starting close together — the startup
-    warmup and a direct play action, say — both see "not yet probed" and
-    both show their own toast, even after _stream_cookies_lock started
-    correctly serializing the actual extraction between them: confirmed
-    directly, two identical toasts on screen at once. Claiming here,
-    separately from the lock that guards the real work, means whichever
-    caller asks first shows the toast and every other concurrent caller
-    just stays quiet — their resolve still correctly waits on the shared
-    extraction, it just doesn't announce it a second time.
-
-    Also returns False when a fresh cached cookiefile already exists —
-    _detect_stream_cookies() is about to reuse it instead of extracting,
-    so there's nothing slow to warn about even though this is the first
-    call this process has made.
-
-    Uses a non-blocking lock acquisition: unlike _detect_stream_cookies(),
-    which only ever runs inside asyncio.to_thread(), this function is
-    called directly and synchronously from the Textual event loop
-    (play_track() in app/_playback.py, _warm_resolver_and_check_remote_components()
-    in app/_session.py — neither runs on a worker thread). If a background
-    extraction already holds _stream_cookies_lock for its full 5-20s+
-    duration, blocking here would freeze the entire UI for that long —
-    reintroducing, via a second lock, the exact UI-freeze bug class this
-    module's _get_ydl()/_reset_ydl() split already fixed for _ydl_lock.
-    Declining to claim the toast when the lock is contended is also the
-    semantically correct outcome: contention means an extraction is
-    already under way, so there's nothing new to announce.
-    """
-    global _cookie_extraction_notify_claimed
-    if not _stream_cookies_lock.acquire(blocking=False):
-        return False
-    try:
-        if _stream_browser_probed or _cookie_extraction_notify_claimed:
-            return False
-        if _fresh_cached_cookiefile() is not None:
-            return False
-        _cookie_extraction_notify_claimed = True
-        return True
-    finally:
-        _stream_cookies_lock.release()
-
-
-def _detect_stream_cookies() -> tuple[str | None, str | None]:
-    """Find a browser with YouTube cookies and persist them to a file once.
-
-    Delegates to AuthManager's existing browser detection (used by `ytm
-    setup`) so stream resolution and ytmusicapi search agree on which
-    browser represents this user, instead of maintaining a second
-    independent cookie-detection path.
-
-    Returns (browser_name, cookiefile_path). Memoized at module scope —
-    but memoizing just the browser NAME (as an earlier version of this
-    function did) turned out to be an incomplete fix: yt-dlp's own
-    cookiesfrombrowser option re-decrypts the ENTIRE browser cookie store
-    from scratch on every fresh YoutubeDL instance, and _build_ydl_opts()
-    builds a fresh instance on every _reset_ydl() — including "reset
-    after 5 consecutive failures", a quality change, or accepting the
-    remote_components prompt (which calls clear_cache() to apply the new
-    setting). Confirmed in practice: Vivaldi's ~3500-cookie store got
-    fully re-decrypted (~7-13s) a second time moments after the first,
-    triggered by exactly that clear_cache() call. Extracting once here
-    and writing a plain cookiefile means every later YoutubeDL instance
-    just reads a small text file instead of re-hitting the OS keychain.
-    """
-    global _stream_browser_probed, _cached_stream_browser, _cached_stream_cookiefile
-    with _stream_cookies_lock:
-        if _stream_browser_probed:
-            return _cached_stream_browser, _cached_stream_cookiefile
-
-        # _stream_browser_probed only tracks this process's own lifetime,
-        # so without this check every fresh launch re-extracted from
-        # scratch regardless of a valid file already sitting on disk from
-        # the previous launch, seconds or minutes earlier — confirmed
-        # directly: with pycryptodomex installed, extraction dropped from
-        # ~26s to ~2.4s, but the "setting up playback" toast (and the
-        # ~2.4s itself) still fired on every single relaunch.
-        cached = _fresh_cached_cookiefile()
-        if cached is not None:
-            logger.debug("Reusing cached stream cookiefile: %s", cached)
-            _cached_stream_cookiefile = cached
-            _stream_browser_probed = True
-            return _cached_stream_browser, _cached_stream_cookiefile
-
-        from ytm_player.services.auth import AuthManager
-
-        try:
-            _cached_stream_browser = AuthManager.detect_browser()
-        except Exception:
-            logger.debug("Browser cookie detection failed for stream resolution", exc_info=True)
-            _cached_stream_browser = None
-
-        if _cached_stream_browser is not None:
-            _cached_stream_cookiefile = _extract_and_cache_cookiefile(_cached_stream_browser)
-
-        _stream_browser_probed = True
-        return _cached_stream_browser, _cached_stream_cookiefile
-
-
-def _extract_and_cache_cookiefile(browser: str) -> str | None:
-    """Extract *browser*'s cookies once and persist them to a local file.
-
-    Returns the path on success, or None on any failure — callers fall
-    back to cookiesfrombrowser in that case (slower, but still correct).
-    """
-    try:
-        from yt_dlp.cookies import extract_cookies_from_browser
-
-        from ytm_player.config.paths import CONFIG_DIR, SECURE_FILE_MODE, secure_chmod
-
-        # Without an explicit logger, this defaults to yt-dlp's own
-        # YDLLogger, which prints straight to stdout/stderr instead of
-        # going through ytm.log — meaning the "Extracting cookies from X"
-        # / "Extracted N cookies" lines that would have shown two
-        # concurrent extractions fighting over the Keychain were silently
-        # invisible. _YtDlpLogger routes them into the normal log instead.
-        jar = extract_cookies_from_browser(browser, logger=_YtDlpLogger())  # type: ignore[arg-type]
-
-        # extract_cookies_from_browser() returns the browser's ENTIRE cookie
-        # store — every domain, unfiltered. Unlike yt-dlp's own in-memory-only
-        # use of this jar, this function persists it to disk, so writing it
-        # unfiltered would durably store the user's complete browser session
-        # state (banking, email, anything else they're logged into) just to
-        # stream YouTube audio. Scope to the youtube.com/google.com domain
-        # family actually needed for YouTube auth — accounts.google.com and
-        # similar Google-auth subdomains can be touched during login/consent
-        # flows — mirroring the domain filtering AuthManager._extract_and_save()
-        # already applies, widened from its youtube.com-only cut since a
-        # cookiejar-based cookiefile (unlike auth.py's flattened single
-        # header string) needs the wider family for yt-dlp's own
-        # domain-scoped requests to succeed.
-        for cookie in list(jar):
-            domain = cookie.domain.lstrip(".")
-            if not (domain.endswith("youtube.com") or domain.endswith("google.com")):
-                jar.clear(cookie.domain, cookie.path, cookie.name)
-
-        path = CONFIG_DIR / "stream_cookies_cache.txt"
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        # O_NOFOLLOW (POSIX-only; getattr fallback for Windows) refuses to
-        # follow a symlink at the target path — defense-in-depth against a
-        # malicious local user planting a symlink in CONFIG_DIR, matching
-        # the pattern AuthManager already uses for auth.json. Passing the
-        # resulting file object to jar.save() (YoutubeDLCookieJar.save)
-        # bypasses its own internal, symlink-following open() entirely, so
-        # the cookie data can never land somewhere other than this path.
-        # YoutubeDLCookieJar.open() explicitly supports a non-path-like
-        # file argument (see its is_path_like branch) — save()'s type stub
-        # just doesn't declare that overload, hence the ignore.
-        fd = os.open(
-            str(path),
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
-            SECURE_FILE_MODE,
-        )
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            jar.save(f, ignore_discard=True, ignore_expires=True)  # type: ignore[arg-type]
-        secure_chmod(path, SECURE_FILE_MODE)
-        return str(path)
-    except Exception:
-        logger.debug("Failed to persist browser cookies to a local file", exc_info=True)
-        return None
+    return str(STREAM_COOKIES_FILE) if STREAM_COOKIES_FILE.exists() else None
 
 
 # Shared wording for the remote_components ("JS challenge solver") prompt
@@ -277,9 +74,8 @@ def looks_like_js_solver_ready() -> bool:
     Whether a JS challenge solver is available is a property of yt-dlp's
     local environment (config + on-disk cache), not of which YouTube
     client or cookies end up being used for a given resolve — so this
-    can answer the "will remote_components be needed" question entirely
-    independently of (and faster than) the cookie-decryption-gated
-    warmup in _detect_stream_cookies.
+    can answer the "will remote_components be needed" question
+    independently of _detect_stream_cookies()'s own (now fast) file check.
 
     True (skip the prompt) when either:
     - remote_components is already configured — yt-dlp will fetch/refresh
@@ -291,8 +87,8 @@ def looks_like_js_solver_ready() -> bool:
     cached solver could be for a stale player version and still need a
     fresh fetch), which is why the resolve-based detection in
     _YtDlpLogger still runs as ground truth. This only short-circuits the
-    common, obvious case so the prompt doesn't wait behind an unrelated
-    ~10-20s cookie decrypt just to tell you something answerable locally.
+    common, obvious case so the prompt doesn't wait behind an actual
+    yt-dlp resolve just to tell you something answerable locally.
     """
     from ytm_player.services.yt_dlp_options import normalize_remote_components
 
@@ -334,14 +130,9 @@ class _YtDlpLogger:
         logger.debug("yt-dlp: %s", message)
 
     def info(self, message: str) -> None:
-        # yt_dlp.cookies' browser extraction (extract_cookies_from_browser,
-        # called directly by _extract_and_cache_cookiefile above, not via
-        # YoutubeDL) logs its "Extracting cookies from X" / "Extracted N
-        # cookies" lines at info level, on a default logger that doesn't
-        # implement to_screen(). Without this method, passing this class
-        # as that logger silently dropped those lines entirely — the exact
-        # step that turned out to be worth seeing when two resolves raced
-        # to extract cookies concurrently.
+        # A default logger doesn't implement to_screen(), so without this
+        # method, yt-dlp's own info-level messages during extract_info()
+        # would be silently dropped rather than surfacing in ytm.log.
         logger.info("yt-dlp: %s", message)
 
     def warning(self, message: str, **_kwargs: object) -> None:
@@ -383,9 +174,19 @@ class _YtDlpLogger:
 
 # Quality presets mapping to yt-dlp format strings.
 QUALITY_FORMATS: dict[str, str] = {
-    "high": "bestaudio/best",
-    "medium": "bestaudio[abr<=128]/bestaudio/best",
-    "low": "bestaudio[abr<=64]/bestaudio/best",
+    "high": "best[vcodec!=none][acodec!=none][protocol^=m3u8]/best[vcodec!=none][acodec!=none]",
+    "medium": (
+        "best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=128]"
+        "/best[vcodec!=none][acodec!=none][abr<=128]"
+        "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
+        "/best[vcodec!=none][acodec!=none]"
+    ),
+    "low": (
+        "best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=64]"
+        "/best[vcodec!=none][acodec!=none][abr<=64]"
+        "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
+        "/best[vcodec!=none][acodec!=none]"
+    ),
 }
 
 
@@ -483,24 +284,20 @@ class StreamResolver:
             # Avoid writing any files to disk.
             "writeinfojson": False,
             "writethumbnail": False,
-            # Android client provides a non-PoT fallback path (legacy format 18)
-            # that unblocks madeForKids content which the default web client refuses.
-            "extractor_args": {"youtube": {"player_client": ["default", "android"]}},
+            # web_safari and web_embedded both support cookie-based auth (yt-dlp's
+            # SUPPORTS_COOKIES flag) and aren't silently dropped from the client
+            # list the way android was once cookies were present. Neither carries
+            # yt-dlp's "made for kids" restriction comment (only android_vr does,
+            # per yt_dlp.extractor.youtube._base.INNERTUBE_CLIENTS as installed —
+            # re-verify this if it's ever load-bearing again, since yt-dlp's
+            # client roster changes across releases).
+            "extractor_args": {"youtube": {"player_client": ["web_safari", "web_embedded"]}},
         }
         opts = apply_configured_yt_dlp_options(opts, settings)
-        # Without cookies, yt-dlp treats itself as unauthenticated and its
-        # default YouTube client set always includes android_vr — currently
-        # subject to an intermittent PO-token-gated 403 on the CDN request
-        # (upstream yt-dlp #16796/#17395). Authenticated default clients
-        # (tv_downgraded/web_safari) avoid android_vr entirely. Reuse the
-        # same browser-cookie detection `ytm setup` already relies on, so
-        # streaming inherits auth the way search/browse already does.
-        if "cookiefile" not in opts and "cookiesfrombrowser" not in opts:
-            browser, cookiefile = _detect_stream_cookies()
+        if "cookiefile" not in opts:
+            cookiefile = _detect_stream_cookies()
             if cookiefile:
                 opts["cookiefile"] = cookiefile
-            elif browser:
-                opts["cookiesfrombrowser"] = (browser, None, None, None)
         return opts
 
     def _flag_missing_remote_components(self) -> None:
@@ -558,27 +355,25 @@ class StreamResolver:
         instance mid-resolve" bug this counter exists to prevent. Callers
         must still decrement it in a finally block (see _try_resolve).
 
-        _build_ydl_opts() is called OUTSIDE self._ydl_lock on purpose: it
-        can trigger _detect_stream_cookies()'s one-time browser cookie
-        extraction, which is slow (Keychain-backed, 5-20s+ in practice).
-        _reset_ydl() (called from the UI thread — e.g. accepting the
-        remote_components prompt) needs the same lock; holding it for the
-        whole opts-build meant accepting the prompt while a resolve was
-        mid cookie-extraction blocked the UI thread on lock.acquire() for
-        however long that extraction took. Confirmed directly: a ~13-15s
-        UI stall lined up exactly with the cookie-extraction window in
-        the log. Building opts unlocked and only locking for the actual
-        (fast, in-memory) instance construction fixes that; the brief
-        double-checked-locking race (two threads both seeing self._ydl is
-        None and both building opts) is harmless — whichever assigns
-        first wins, the loser's opts are simply discarded.
+        _build_ydl_opts() is called OUTSIDE self._ydl_lock: even though
+        _detect_stream_cookies() is now a fast Path.exists() check rather
+        than a slow browser cookie extraction (that extraction now lives
+        solely in AuthManager, run once at `ytm setup`/try_auto_refresh
+        time — see services/auth.py), there's still no reason to hold a
+        lock whose only job is guarding the (fast, in-memory) YoutubeDL()
+        construction for any longer than that. _reset_ydl() (called from
+        the UI thread — e.g. accepting the remote_components prompt)
+        needs the same lock; the brief double-checked-locking race (two
+        threads both seeing self._ydl is None and both building opts) is
+        harmless — whichever assigns first wins, the loser's opts are
+        simply discarded.
 
         The generation check below covers a second, worse race the above
         alone doesn't: _build_ydl_opts() reads settings (e.g.
-        remote_components) in its first line, long before its slow
-        cookie-cache step even starts. If a reset lands while self._ydl
-        is still None (nothing built yet to reset), _reset_ydl() has
-        nothing to do and the reset is silently lost — the in-flight
+        remote_components) in its first line, before it even calls
+        _detect_stream_cookies()'s file check. If a reset lands while
+        self._ydl is still None (nothing built yet to reset), _reset_ydl()
+        has nothing to do and the reset is silently lost — the in-flight
         build then finishes and caches an instance with the *pre-reset*
         settings anyway, permanently, since nothing else was going to
         clear it out again. Confirmed in practice: accepting the
@@ -586,9 +381,9 @@ class StreamResolver:
         failed identically until 5 consecutive failures forced an
         unrelated reset. Looping on a generation mismatch instead means a
         reset that lands mid-build invalidates that build's result, and
-        the retry re-reads current settings — cheap the second time,
-        since _detect_stream_cookies() is separately memoized and won't
-        redo the slow cookie extraction.
+        the retry re-reads current settings — cheap on retry regardless,
+        since _detect_stream_cookies() is now a fast file check rather
+        than something that would need to redo slow work.
         """
         import yt_dlp  # Lazy import
 
@@ -732,11 +527,17 @@ class StreamResolver:
             )
 
         except yt_dlp.utils.DownloadError as exc:  # type: ignore[attr-defined]
+            hint = ""
+            if _detect_stream_cookies() and re.search(
+                r"sign in|login_required|confirm you", str(exc), re.I
+            ):
+                hint = " (stream cookiejar may be stale/revoked — try `ytm setup` to refresh it)"
             logger.warning(
-                "yt-dlp download error for video_id=%s (attempt %d): %s",
+                "yt-dlp download error for video_id=%s (attempt %d): %s%s",
                 video_id,
                 attempt + 1,
                 exc,
+                hint,
             )
             return None
         except Exception:
