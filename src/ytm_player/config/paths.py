@@ -43,6 +43,7 @@ else:
 
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 AUTH_FILE = CONFIG_DIR / "auth.json"
+STREAM_COOKIES_FILE = CONFIG_DIR / "stream_cookies.txt"
 OAUTH_FILE = CONFIG_DIR / "oauth.json"
 OAUTH_CREDS_FILE = CONFIG_DIR / "oauth_creds.json"
 SPOTIFY_CREDS_FILE = CONFIG_DIR / "spotify.json"
