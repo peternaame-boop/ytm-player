@@ -1,6 +1,7 @@
 """Tests for StreamResolver cache and expiry logic."""
 
 import asyncio
+import logging
 import time
 from unittest.mock import MagicMock, patch
 
@@ -236,6 +237,66 @@ class TestResolveSync:
         # Characters not matching [a-zA-Z0-9_-] should be rejected.
         result = resolver.resolve_sync("../etc/passwd")
         assert result is None
+
+
+class TestStaleCookieDiagnosticHint:
+    """_try_resolve()'s DownloadError handler appends a diagnostic hint when
+    a stream cookiejar exists and the error text looks auth-related. These
+    tests call _try_resolve() directly (bypassing resolve_sync()'s retry
+    loop and its real time.sleep() delays) and locally override the
+    module's autouse _no_real_cookie_detection fixture via patch(), since
+    that fixture always stubs _detect_stream_cookies() to return None."""
+
+    def _resolver_raising(self, message: str) -> StreamResolver:
+        import yt_dlp
+
+        resolver = StreamResolver()
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError(message)
+        resolver._get_ydl = MagicMock(return_value=mock_ydl)
+        return resolver
+
+    def test_hint_present_when_cookiejar_exists_and_error_is_auth_related(self, caplog):
+        resolver = self._resolver_raising("Sign in to confirm you are not a bot")
+
+        with (
+            patch(
+                "ytm_player.services.stream._detect_stream_cookies",
+                return_value="/fake/config/stream_cookies.txt",
+            ),
+            caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
+        ):
+            result = resolver._try_resolve("https://example.com/watch", "vid1", 0)
+
+        assert result is None
+        assert "stream cookiejar may be stale/revoked" in caplog.text
+
+    def test_hint_absent_when_no_cookiejar(self, caplog):
+        resolver = self._resolver_raising("Sign in to confirm you are not a bot")
+
+        with (
+            patch("ytm_player.services.stream._detect_stream_cookies", return_value=None),
+            caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
+        ):
+            result = resolver._try_resolve("https://example.com/watch", "vid2", 0)
+
+        assert result is None
+        assert "stream cookiejar may be stale/revoked" not in caplog.text
+
+    def test_hint_absent_when_error_is_unrelated_to_auth(self, caplog):
+        resolver = self._resolver_raising("video unavailable")
+
+        with (
+            patch(
+                "ytm_player.services.stream._detect_stream_cookies",
+                return_value="/fake/config/stream_cookies.txt",
+            ),
+            caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
+        ):
+            result = resolver._try_resolve("https://example.com/watch", "vid3", 0)
+
+        assert result is None
+        assert "stream cookiejar may be stale/revoked" not in caplog.text
 
 
 class TestResolveAsync:

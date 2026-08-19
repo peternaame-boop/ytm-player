@@ -135,6 +135,75 @@ def test_rejects_confusable_domain_suffix(tmp_path):
     assert names == {"yt_cookie"}
 
 
+# ── Step 2b: wide-jar wiring through the real extraction call sites ─────────
+
+
+def test_extract_and_save_threads_wide_jar_to_stream_cookiejar(tmp_path):
+    """_extract_and_save must pass the WIDE, unfiltered browser jar as
+    stream_jar -- not the narrower .youtube.com-exact yt_cookies list used
+    for auth.json -- so a google.com-family cookie invisible to yt_cookies
+    still lands in the stream cookiejar. A future edit that "simplifies" by
+    reusing yt_cookies for stream_jar would silently narrow the stream
+    cookiejar to youtube.com-only and this test would catch it."""
+    auth = _make_auth(tmp_path)
+    jar = [
+        _cookie(".youtube.com", name="SAPISID", value="secret"),
+        _cookie("accounts.google.com", name="google_cookie"),
+        _cookie(".chase.com", name="chase_cookie"),
+    ]
+
+    mock_ytm = MagicMock()
+    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
+
+    with (
+        _PATCH_SAPISID,
+        patch("yt_dlp.cookies.extract_cookies_from_browser", return_value=jar),
+        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+    ):
+        result = auth._extract_and_save("vivaldi")
+
+    assert result is True
+    assert auth.auth_file.exists()
+    names = _read_cookie_names(auth._stream_cookies_file)
+    assert names == {"SAPISID", "google_cookie"}
+
+
+def test_extract_and_save_from_cookies_file_threads_wide_jar_to_stream_cookiejar(tmp_path):
+    """Analogous to the browser-extraction case above: _extract_and_save_from_cookies_file
+    must pass the WIDE, unfiltered MozillaCookieJar loaded from the cookies.txt file as
+    stream_jar, not the narrower .youtube.com-only yt_cookies list. Unlike the
+    validate()-failure rollback tests elsewhere in this file, this is a genuine
+    happy path — validate() is never invoked by this call site."""
+    cookies_file = tmp_path / "cookies.txt"
+    cookies_file.write_text(
+        "\n".join(
+            [
+                "# Netscape HTTP Cookie File",
+                ".youtube.com\tTRUE\t/\tTRUE\t2147483647\tSAPISID\tabc123",
+                "accounts.google.com\tFALSE\t/\tTRUE\t2147483647\tgoogle_cookie\tg123",
+                ".chase.com\tTRUE\t/\tTRUE\t2147483647\tchase_cookie\tc123",
+            ]
+        )
+        + "\n"
+    )
+
+    auth = _make_auth(tmp_path)
+
+    mock_ytm = MagicMock()
+    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
+
+    with (
+        _PATCH_SAPISID,
+        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+    ):
+        result = auth._extract_and_save_from_cookies_file(cookies_file)
+
+    assert result is True
+    assert auth.auth_file.exists()
+    names = _read_cookie_names(auth._stream_cookies_file)
+    assert names == {"SAPISID", "google_cookie"}
+
+
 # ── Step 3: file mode ────────────────────────────────────────────────────────
 
 
