@@ -135,6 +135,24 @@ def test_rejects_confusable_domain_suffix(tmp_path):
     assert names == {"yt_cookie"}
 
 
+def test_rejects_cookie_with_embedded_control_character(tmp_path):
+    """_save_stream_cookiejar's own filter loop must reject control chars,
+    not just _cookies_from_raw_header's manual-paste path (SEC-001) --
+    the browser-extraction and cookies.txt-import call sites both reach
+    this method directly, so this is the coverage that actually protects
+    them."""
+    auth = _make_auth(tmp_path)
+    jar = [
+        _cookie(".youtube.com", name="clean_cookie"),
+        _cookie(".youtube.com", name="bad_cookie", value="ab\tcd"),
+    ]
+
+    auth._save_stream_cookiejar(jar)
+
+    names = _read_cookie_names(auth._stream_cookies_file)
+    assert names == {"clean_cookie"}
+
+
 # ── Step 2b: wide-jar wiring through the real extraction call sites ─────────
 
 
@@ -417,4 +435,5 @@ def test_refresh_from_cookies_file_removes_new_stream_cookiejar_when_no_prior_ba
         result = auth._refresh_from_cookies_file(cookies_file)
 
     assert result is False
+    assert not auth_file.exists()
     assert not stream_cookies_file.exists()
