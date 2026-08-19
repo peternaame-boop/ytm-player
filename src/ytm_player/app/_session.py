@@ -158,11 +158,10 @@ class SessionMixin(YTMHostBase):
 
         def _start_resolver_warmup() -> None:
             # Warm the resolver in the background, now, while the user is
-            # still looking at the library — pays the cookie-decryption
-            # cost during startup instead of mid-interaction on first
-            # play. Independent of resume_on_launch: that setting controls
-            # whether we *auto-play* on launch, not whether it's worth
-            # warming the resolver.
+            # still looking at the library, instead of mid-interaction on
+            # first play. Independent of resume_on_launch: that setting
+            # controls whether we *auto-play* on launch, not whether it's
+            # worth warming the resolver.
             if self.stream_resolver:
                 self.run_worker(self._warm_stream_resolver(resumed_video_id))
 
@@ -269,30 +268,7 @@ class SessionMixin(YTMHostBase):
         if not self.stream_resolver:
             return
 
-        from ytm_player.services.stream import (
-            REMOTE_COMPONENTS_PROMPT_BODY,
-            claim_cookie_extraction_notification,
-        )
-
-        if claim_cookie_extraction_notification():
-            # This resolve is about to pay a one-time, Keychain-backed
-            # cookie decryption that's taken 5-20s+ in practice with zero
-            # visible feedback otherwise — easy to mistake for the app
-            # being stuck. claim_cookie_extraction_notification() only
-            # returns True for the first caller process-wide, so this
-            # won't also fire from a concurrent play action racing the
-            # same extraction, and won't fire again once it's memoized.
-            #
-            # Textual's notify() has no public way to dismiss a specific
-            # toast early or extend its timeout once shown, so this has to
-            # be a fixed guess rather than "close when actually done". 25s
-            # covers the observed single-extraction range (5-20s) with
-            # margin, sized against contended extraction, not solo — see
-            # stream.py's _stream_cookies_lock comment for why.
-            self.notify(
-                "Setting up playback — decrypting browser cookies, this can take a few seconds...",
-                timeout=25,
-            )
+        from ytm_player.services.stream import REMOTE_COMPONENTS_PROMPT_BODY
 
         await self.stream_resolver.prefetch(video_id)
         if self.stream_resolver.consume_missing_remote_components(video_id):

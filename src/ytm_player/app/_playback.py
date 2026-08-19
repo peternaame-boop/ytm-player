@@ -141,24 +141,6 @@ class PlaybackMixin(YTMHostBase):
 
         # Resolve via yt-dlp if no cache hit.
         if stream_info is None:
-            from ytm_player.services.stream import claim_cookie_extraction_notification
-
-            if claim_cookie_extraction_notification():
-                # Same one-time, Keychain-backed cookie decryption the
-                # startup warmup usually already paid for in the
-                # background — this only fires if the user pressed play
-                # before that warmup got a chance to run (or found no
-                # video_id to warm with at all), so it's still possible
-                # to hit this cold, silent-looking delay from a direct
-                # play action. claim_cookie_extraction_notification()
-                # only returns True for the first caller process-wide, so
-                # if the warmup already claimed it (or is about to, in a
-                # race), this stays quiet instead of duplicating the toast.
-                self.notify(
-                    "Setting up playback — decrypting browser cookies, this can "
-                    "take a few seconds...",
-                    timeout=25,
-                )
             try:
                 stream_info = await self.stream_resolver.resolve(video_id)
             except Exception:
@@ -535,8 +517,7 @@ class PlaybackMixin(YTMHostBase):
             label = f"Radio from {seeds[0].get('title', 'Unknown')}"
         # Fire before play_track(), not after: "Playing: X" means the radio
         # was fetched and queued, not that the first track's audio is
-        # already flowing. play_track() awaits the full stream resolve —
-        # including, in the worst case, a one-time cookie decryption — so
+        # already flowing. play_track() awaits the full stream resolve, so
         # placing this after it delayed the confirmation by however long
         # that took, instead of confirming as soon as it was actually true.
         self.notify(f"Playing: {label}", timeout=4)
