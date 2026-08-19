@@ -684,22 +684,22 @@ def _cookies_from_raw_header(cookie_header_value: str) -> list[Cookie]:
             continue
         cookies.append(
             Cookie(
-                0,
-                name,
-                value,
-                None,
-                False,
-                ".youtube.com",
-                True,
-                True,
-                "/",
-                True,
-                True,
-                expires,
-                False,
-                None,
-                None,
-                {},
+                version=0,
+                name=name,
+                value=value,
+                port=None,
+                port_specified=False,
+                domain=".youtube.com",
+                domain_specified=True,
+                domain_initial_dot=True,
+                path="/",
+                path_specified=True,
+                secure=True,
+                expires=expires,
+                discard=False,
+                comment=None,
+                comment_url=None,
+                rest={},
             )
         )
     return cookies
