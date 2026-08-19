@@ -384,6 +384,25 @@ def test_no_valid_account_skips_stream_cookiejar_write(tmp_path):
 # ── Step 9: _refresh_from_cookies_file backup/restore ────────────────────────
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="O_NOFOLLOW is a POSIX-only defense")
+def test_restore_or_remove_does_not_follow_symlink_at_target(tmp_path):
+    """_restore_or_remove's restore branch must use the same O_NOFOLLOW
+    temp-file-plus-os.replace pattern as the primary writes -- a plain
+    write_bytes() would follow a symlink planted at *path* during the
+    network-bound window between backup and restore (found in
+    quality-gate's Layer 1.5 security review)."""
+    target = tmp_path / "auth.json"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch")
+    target.symlink_to(victim)
+
+    AuthManager._restore_or_remove(target, backup=b'{"cookie": "restored=1"}', label="auth file")
+
+    assert victim.read_text() == "do not touch"
+    assert not target.is_symlink()
+    assert target.read_bytes() == b'{"cookie": "restored=1"}'
+
+
 def test_refresh_from_cookies_file_restores_stream_cookiejar_on_validate_failure(
     tmp_path, monkeypatch
 ):

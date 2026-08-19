@@ -260,16 +260,33 @@ class AuthManager:
     @staticmethod
     def _restore_or_remove(path: Path, backup: bytes | None, label: str) -> None:
         """Undo a failed refresh: restore *path* from *backup*, or remove it
-        if there was no prior backup (the refresh wrote it fresh)."""
+        if there was no prior backup (the refresh wrote it fresh).
+
+        Restores via the same O_NOFOLLOW-temp-file-plus-os.replace pattern
+        used by the primary writes (_save_youtube_cookies, _save_stream_cookiejar)
+        — a plain write_bytes() would follow a symlink planted at *path* during
+        the network-bound window between backup and restore.
+        """
+        tmp_path: Path | None = None
         try:
             if backup is not None:
-                path.write_bytes(backup)
-                secure_chmod(path, SECURE_FILE_MODE)
+                tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+                fd = os.open(
+                    str(tmp_path),
+                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                    SECURE_FILE_MODE,
+                )
+                with os.fdopen(fd, "wb") as f:
+                    f.write(backup)
+                secure_chmod(tmp_path, SECURE_FILE_MODE)
+                os.replace(tmp_path, path)
                 logger.debug("Restored previous %s after cookies file validation failure", label)
             elif path.exists():
                 path.unlink()
         except OSError:
             logger.warning("Failed to restore previous %s", label, exc_info=True)
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
 
     def _refresh_from_cookies_file(self, cookies_file: Path, interactive: bool = False) -> bool:
         """Refresh auth from cookies file without losing working credentials."""
