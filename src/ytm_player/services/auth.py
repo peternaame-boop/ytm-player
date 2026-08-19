@@ -512,8 +512,9 @@ class AuthManager:
     def _save_stream_cookiejar(self, jar: Iterable[Cookie]) -> None:
         """Write a wide youtube.com/google.com cookiejar for stream.py's yt-dlp resolver.
 
-        Builds a fresh jar rather than mutating *jar* in place, since callers
-        still need the original for their own narrower filtering afterward.
+        Builds a fresh jar rather than mutating *jar* in place — callers may
+        own or share that iterable, and this method has no reason to assume
+        it's safe to consume destructively.
         """
         tmp_path: Path | None = None
         try:
