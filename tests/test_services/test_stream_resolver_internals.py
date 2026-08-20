@@ -480,3 +480,99 @@ class TestBuildYdlOptsCookieInjection:
         from ytm_player.services.yt_dlp_options import normalize_cookiefile
 
         assert opts["cookiefile"] == normalize_cookiefile("/home/user/manual_cookies.txt")
+
+
+class TestClientAndFormatSelection:
+    """Regression guard for the client/format values Villoh's PR #136 review
+    validated with real playback data (24/24 success vs. 4/12 for the prior
+    ["default","android"]/bestaudio combination — see CHANGELOG.md). This
+    branch already regressed to the old values once before being corrected
+    (commit 8450505 -> 3efbd66) with nothing to catch it; these tests exist
+    so a future refactor can't silently do the same."""
+
+    def test_player_client_is_cookie_compatible(self, monkeypatch):
+        settings = Settings()
+        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+        with patch("ytm_player.services.stream._detect_stream_cookies", return_value=None):
+            opts = StreamResolver()._build_ydl_opts()
+        assert opts["extractor_args"]["youtube"]["player_client"] == [
+            "web_safari",
+            "web_embedded",
+        ]
+
+    def test_quality_formats_never_select_bestaudio(self):
+        from ytm_player.services.stream import QUALITY_FORMATS
+
+        for tier, format_string in QUALITY_FORMATS.items():
+            assert "bestaudio" not in format_string, f"{tier!r} tier reintroduces bestaudio"
+
+    def test_quality_formats_prioritize_hls_and_cap_video_height(self):
+        from ytm_player.services.stream import QUALITY_FORMATS
+
+        assert QUALITY_FORMATS["high"] == (
+            "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
+            "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
+            "/best[vcodec!=none][acodec!=none]"
+        )
+        assert QUALITY_FORMATS["medium"] == (
+            "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
+            "/best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=128]"
+            "/best[vcodec!=none][acodec!=none][abr<=128]"
+            "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
+            "/best[vcodec!=none][acodec!=none]"
+        )
+        assert QUALITY_FORMATS["low"] == (
+            "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
+            "/best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=64]"
+            "/best[vcodec!=none][acodec!=none][abr<=64]"
+            "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
+            "/best[vcodec!=none][acodec!=none]"
+        )
+
+    def test_height_cap_is_never_combined_with_an_abr_filter(self):
+        """yt-dlp reports abr=None for every combined (muxed) format extracted
+        via web_safari/web_embedded — confirmed empirically against live
+        YouTube responses. A [height<=144][abr<=N] alternative can therefore
+        never match anything: it's permanently dead, and the tier silently
+        falls through to the fully unconstrained catch-all (up to ~28x more
+        data on a video with a legacy HLS itag ladder). The height cap must
+        always appear in its own alternative, never bracketed together with
+        an abr filter, or it stops doing its job."""
+        from ytm_player.services.stream import QUALITY_FORMATS
+
+        for tier, format_string in QUALITY_FORMATS.items():
+            for alternative in format_string.split("/"):
+                if "[height<=144]" in alternative:
+                    assert "[abr<=" not in alternative, (
+                        f"{tier!r} tier combines [height<=144] with an abr filter in "
+                        f"the same alternative ({alternative!r}) — abr is always None "
+                        "on combined formats, so this alternative can never match"
+                    )
+
+    def test_all_tiers_build_correct_opts(self, monkeypatch):
+        from ytm_player.services.stream import QUALITY_FORMATS
+
+        settings = Settings()
+        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+        with patch("ytm_player.services.stream._detect_stream_cookies", return_value=None):
+            for tier in ("high", "medium", "low"):
+                resolver = StreamResolver(quality=tier)
+                opts = resolver._build_ydl_opts()
+                assert opts["format"] == QUALITY_FORMATS[tier]
+
+    def test_quality_formats_are_valid_yt_dlp_selector_syntax(self):
+        """The bug this class's other tests guard against (a stray bracket
+        grouping [height<=144] with [abr<=N]) was a format-selector
+        composition error — yt-dlp accepted it silently at parse time and
+        it only surfaced as a behavioral no-op, not a crash. Parsing each
+        string through yt-dlp's own selector grammar catches a broader
+        class of composition mistakes (unbalanced brackets, bad operators,
+        malformed alternatives) than the bug-specific regression tests
+        above can, at negligible cost — no network I/O, pure syntax check."""
+        import yt_dlp
+
+        from ytm_player.services.stream import QUALITY_FORMATS
+
+        ydl = yt_dlp.YoutubeDL({"quiet": True})
+        for tier, format_string in QUALITY_FORMATS.items():
+            ydl.build_format_selector(format_string)  # raises SyntaxError if malformed

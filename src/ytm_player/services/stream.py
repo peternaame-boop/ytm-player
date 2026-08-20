@@ -173,16 +173,43 @@ class _YtDlpLogger:
 
 
 # Quality presets mapping to yt-dlp format strings.
+#
+# player.py initializes mpv with video=False, and album art comes from a
+# separate thumbnail_url, not this stream — so the video track in every
+# muxed format below is pure bandwidth waste, never rendered. Each tier
+# therefore leads with a [height<=144] alternative on its own — NOT
+# combined with [abr<=N] — because yt-dlp reports abr=None for every
+# combined (muxed) format extracted via the web_safari/web_embedded
+# clients (confirmed empirically against live YouTube responses): an
+# [abr<=N] clause never matches a single combined format, so a
+# [height<=144][abr<=N] alternative is permanently dead and the tier
+# would silently fall through to the fully unconstrained catch-all —
+# up to ~28x more data than the height-capped alternative on videos
+# with a legacy HLS itag ladder. The [abr<=N]-only alternatives below
+# are kept as harmless, currently-inert forward-compat in case yt-dlp
+# ever starts populating abr for combined formats; they are not what
+# makes medium/low effective today. Video resolution has no effect on
+# the audio track's own encoding, so the height cap costs nothing in
+# audio quality. Every alternative after the leading one is prepended
+# to, not a substitute for, the exact chain Villoh's PR #136 testing
+# validated (24/24 success) — a video with no low-res combined+HLS
+# rendition falls through to that identical, already-proven chain.
 QUALITY_FORMATS: dict[str, str] = {
-    "high": "best[vcodec!=none][acodec!=none][protocol^=m3u8]/best[vcodec!=none][acodec!=none]",
+    "high": (
+        "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
+        "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
+        "/best[vcodec!=none][acodec!=none]"
+    ),
     "medium": (
-        "best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=128]"
+        "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
+        "/best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=128]"
         "/best[vcodec!=none][acodec!=none][abr<=128]"
         "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
         "/best[vcodec!=none][acodec!=none]"
     ),
     "low": (
-        "best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=64]"
+        "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
+        "/best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=64]"
         "/best[vcodec!=none][acodec!=none][abr<=64]"
         "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
         "/best[vcodec!=none][acodec!=none]"
@@ -223,16 +250,17 @@ class StreamResolver:
         # instance a resolve is still actively using. See _reset_ydl.
         self._active_resolves = 0
         # Bumped by _reset_ydl(). _get_ydl() snapshots this before its
-        # (slow, unlocked) opts build and re-checks it after — if it
-        # changed, a reset (e.g. accepting the remote_components prompt)
-        # landed while the build was in flight, and the just-built opts
-        # already have stale settings baked in (settings are read at the
-        # START of _build_ydl_opts(), long before its slow cookie-cache
-        # step even runs). Without this check that reset was silently
-        # lost: nothing was cached yet for it to clear, so the stale
-        # instance got cached anyway right after — confirmed in practice
-        # as EVERY subsequent track failing identically, not just one,
-        # until 5 consecutive failures forced an unrelated reset.
+        # unlocked opts build and re-checks it after — if it changed, a
+        # reset (e.g. accepting the remote_components prompt) landed
+        # while the build was in flight, and the just-built opts already
+        # have stale settings baked in (settings are read at the START of
+        # _build_ydl_opts(), before _detect_stream_cookies()'s fast
+        # Path.exists() check even runs). Without this check that reset
+        # was silently lost: nothing was cached yet for it to clear, so
+        # the stale instance got cached anyway right after — confirmed in
+        # practice as EVERY subsequent track failing identically, not
+        # just one, until 5 consecutive failures forced an unrelated
+        # reset.
         self._ydl_generation = 0
         # Set by _YtDlpLogger when yt-dlp reports it skipped downloading its
         # JS challenge-solver script (remote_components unset). Keyed by
