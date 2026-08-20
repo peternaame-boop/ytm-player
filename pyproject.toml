@@ -32,8 +32,8 @@ dependencies = [
     "yt-dlp>=2025.1.0",
     # yt-dlp treats this as optional and falls back to a pure-Python AES
     # implementation without it — fine for occasional use, but browser
-    # cookie extraction (now on the stream-resolution path, see
-    # services/stream.py's _extract_and_cache_cookiefile) decrypts a
+    # cookie extraction (see AuthManager's _extract_and_save and
+    # _extract_and_save_from_cookies_file in services/auth.py) decrypts a
     # whole browser cookie store at once. Measured locally: ~26s with
     # the pure-Python fallback vs ~2.4s with pycryptodomex's native AES
     # for a ~3500-cookie Chromium-based profile.

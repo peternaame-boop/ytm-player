@@ -16,9 +16,10 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
+from typing import IO, Any
 
 import requests.exceptions
 from ytmusicapi import YTMusic
@@ -89,6 +90,44 @@ def _patch_yt_dlp_browsers() -> None:
             "(yt-dlp internals may have changed): %s",
             exc,
         )
+
+
+def _atomic_write(
+    path: Path,
+    mode: str,
+    write: Callable[[IO[Any]], None],
+    encoding: str | None = None,
+) -> None:
+    """Write *path* atomically via an O_NOFOLLOW temp file + os.replace.
+
+    Shared by AuthManager._restore_or_remove and
+    AuthManager._save_stream_cookiejar, the two sites that need
+    atomic-replace semantics for a security-sensitive file: open a
+    PID-suffixed temp file with O_NOFOLLOW (refusing to follow a symlink
+    planted at the temp path), let *write* fill it via the fd opened in
+    *mode* (and *encoding*, for text mode), chmod it to SECURE_FILE_MODE,
+    then os.replace() it into place.
+
+    *write* owns the actual content — a raw bytes write, a cookiejar's
+    .save(), etc. — so this helper stays agnostic to what's being written.
+    On any failure the temp file is removed and the exception re-raised;
+    callers decide what to catch and how to log, since they disagree on
+    which exceptions are recoverable (OSError only vs. broad Exception).
+    """
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    try:
+        fd = os.open(
+            str(tmp_path),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+            SECURE_FILE_MODE,
+        )
+        with os.fdopen(fd, mode, encoding=encoding) as f:
+            write(f)
+        secure_chmod(tmp_path, SECURE_FILE_MODE)
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 class AuthManager:
@@ -262,31 +301,24 @@ class AuthManager:
         """Undo a failed refresh: restore *path* from *backup*, or remove it
         if there was no prior backup (the refresh wrote it fresh).
 
-        Restores via the same O_NOFOLLOW-temp-file-plus-os.replace pattern
-        used by the primary writes (_save_youtube_cookies, _save_stream_cookiejar)
-        — a plain write_bytes() would follow a symlink planted at *path* during
-        the network-bound window between backup and restore.
+        Restores via _atomic_write(), the shared O_NOFOLLOW-temp-file-plus-
+        os.replace helper also used by _save_stream_cookiejar — a plain
+        write_bytes() would follow a symlink planted at *path* during the
+        network-bound window between backup and restore.
         """
-        tmp_path: Path | None = None
         try:
             if backup is not None:
-                tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-                fd = os.open(
-                    str(tmp_path),
-                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
-                    SECURE_FILE_MODE,
-                )
-                with os.fdopen(fd, "wb") as f:
-                    f.write(backup)
-                secure_chmod(tmp_path, SECURE_FILE_MODE)
-                os.replace(tmp_path, path)
+                payload = backup
+
+                def _write(f: IO[Any]) -> None:
+                    f.write(payload)
+
+                _atomic_write(path, "wb", _write)
                 logger.debug("Restored previous %s after cookies file validation failure", label)
             elif path.exists():
                 path.unlink()
         except OSError:
             logger.warning("Failed to restore previous %s", label, exc_info=True)
-            if tmp_path is not None:
-                tmp_path.unlink(missing_ok=True)
 
     def _refresh_from_cookies_file(self, cookies_file: Path, interactive: bool = False) -> bool:
         """Refresh auth from cookies file without losing working credentials."""
@@ -516,7 +548,6 @@ class AuthManager:
         own or share that iterable, and this method has no reason to assume
         it's safe to consume destructively.
         """
-        tmp_path: Path | None = None
         try:
             from yt_dlp.cookies import YoutubeDLCookieJar
 
@@ -532,26 +563,17 @@ class AuthManager:
                     stream_jar.set_cookie(cookie)
 
             self._config_dir.mkdir(parents=True, exist_ok=True)
-            tmp_path = self._stream_cookies_file.with_name(
-                f"{self._stream_cookies_file.name}.tmp-{os.getpid()}"
-            )
-            fd = os.open(
-                str(tmp_path),
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
-                SECURE_FILE_MODE,
-            )
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
+
+            def _write(f: IO[Any]) -> None:
                 # save()'s stub types filename as str | None, but its open()
                 # accepts a file object directly at runtime (non-path-like
                 # branch truncates and reuses it) — verified against yt-dlp
                 # source.
                 stream_jar.save(f, ignore_discard=True, ignore_expires=True)  # type: ignore[arg-type]
-            secure_chmod(tmp_path, SECURE_FILE_MODE)
-            os.replace(tmp_path, self._stream_cookies_file)
+
+            _atomic_write(self._stream_cookies_file, "w", _write, encoding="utf-8")
         except Exception:
             logger.exception("Failed to write stream cookiejar to %s", self._stream_cookies_file)
-            if tmp_path is not None:
-                tmp_path.unlink(missing_ok=True)
 
     # ── Manual header paste (fallback) ───────────────────────────────
 

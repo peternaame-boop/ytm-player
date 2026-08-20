@@ -17,6 +17,7 @@ write to the developer's/CI's actual ~/.config/ytm-player/.
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from http.cookiejar import Cookie, MozillaCookieJar
@@ -26,7 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ytm_player.config.paths import SECURE_FILE_MODE
-from ytm_player.services.auth import AuthManager, _cookies_from_raw_header
+from ytm_player.services.auth import AuthManager, _atomic_write, _cookies_from_raw_header
 
 _PATCH_SAPISID = patch("ytm_player.services.auth.sapisid_from_cookie", return_value="fake_sapisid")
 
@@ -66,6 +67,17 @@ def _read_cookie_names(path: Path) -> set[str]:
     jar = MozillaCookieJar(str(path))
     jar.load(ignore_discard=True, ignore_expires=True)
     return {c.name for c in jar}
+
+
+def _write_str(content: str):
+    """Build a write callback for _atomic_write() matching its declared
+    Callable[[IO[Any]], None] type — f.write() returns int (chars written),
+    which a bare lambda would leak as the callback's inferred return type."""
+
+    def _write(f) -> None:
+        f.write(content)
+
+    return _write
 
 
 def _write_netscape_cookie_file(path: Path, domain: str = ".youtube.com") -> None:
@@ -403,6 +415,48 @@ def test_restore_or_remove_does_not_follow_symlink_at_target(tmp_path):
     assert target.read_bytes() == b'{"cookie": "restored=1"}'
 
 
+def test_restore_or_remove_swallows_oserror_from_the_restore_itself(tmp_path, monkeypatch):
+    """_restore_or_remove's own except OSError: branch — what happens
+    when the restore/remove ITSELF fails (e.g. os.replace fails mid-way
+    through _atomic_write) — was untested; the delegation of temp-file
+    cleanup from this method into _atomic_write (quality-gate Layer 1
+    refactor) needs coverage that the failure is still contained here,
+    not just that the happy path still works."""
+    target = tmp_path / "auth.json"
+
+    monkeypatch.setattr(
+        "ytm_player.services.auth.os.replace",
+        MagicMock(side_effect=OSError("simulated replace failure")),
+    )
+
+    AuthManager._restore_or_remove(target, backup=b'{"cookie": "restored=1"}', label="auth file")
+
+    assert not target.exists()
+    assert list(tmp_path.glob("*.tmp-*")) == []
+
+
+def test_restore_or_remove_swallows_oserror_from_removing_with_no_backup(
+    tmp_path, monkeypatch, caplog
+):
+    """The no-prior-backup branch (elif path.exists(): path.unlink()) has
+    its own OSError failure mode, distinct from the restore-with-backup
+    branch above."""
+    target = tmp_path / "auth.json"
+    target.write_text("stale content that should have been removed")
+
+    monkeypatch.setattr(
+        "ytm_player.services.auth.Path.unlink",
+        MagicMock(side_effect=OSError("simulated unlink failure")),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        AuthManager._restore_or_remove(target, backup=None, label="auth file")
+
+    # No exception escapes (calling the method above would have raised if
+    # one did); the failure is logged instead of silently disappearing.
+    assert "Failed to restore previous auth file" in caplog.text
+
+
 def test_refresh_from_cookies_file_restores_stream_cookiejar_on_validate_failure(
     tmp_path, monkeypatch
 ):
@@ -456,3 +510,82 @@ def test_refresh_from_cookies_file_removes_new_stream_cookiejar_when_no_prior_ba
     assert result is False
     assert not auth_file.exists()
     assert not stream_cookies_file.exists()
+
+
+# ── _atomic_write() direct coverage ──────────────────────────────────────────
+#
+# _restore_or_remove and _save_stream_cookiejar only reach _atomic_write's
+# exception path via failures that occur BEFORE the temp file is created
+# (e.g. a missing parent directory raises in os.open itself) — coverage
+# tools mark the cleanup line as "hit" without ever exercising the actual
+# risk: a real leftover .tmp-<pid> file after a failure that happens AFTER
+# the temp file exists (write() raising, secure_chmod failing, os.replace
+# failing). These tests call _atomic_write directly to close that gap.
+
+
+def test_atomic_write_writes_and_replaces_target(tmp_path):
+    target = tmp_path / "target.txt"
+
+    _atomic_write(target, "w", _write_str("hello"), encoding="utf-8")
+
+    assert target.read_text() == "hello"
+    assert list(tmp_path.glob("*.tmp-*")) == []
+
+
+def test_atomic_write_removes_temp_file_and_reraises_when_write_fails(tmp_path):
+    target = tmp_path / "target.txt"
+
+    def _boom(f):
+        f.write("partial")
+        raise ValueError("write failed mid-flight")
+
+    with pytest.raises(ValueError, match="write failed mid-flight"):
+        _atomic_write(target, "w", _boom, encoding="utf-8")
+
+    assert not target.exists()
+    assert list(tmp_path.glob("*.tmp-*")) == []
+
+
+def test_atomic_write_leaves_preexisting_target_untouched_when_write_fails(tmp_path):
+    target = tmp_path / "target.txt"
+    target.write_text("original content")
+
+    def _boom(f):
+        f.write("should never land")
+        raise ValueError("write failed mid-flight")
+
+    with pytest.raises(ValueError):
+        _atomic_write(target, "w", _boom, encoding="utf-8")
+
+    assert target.read_text() == "original content"
+    assert list(tmp_path.glob("*.tmp-*")) == []
+
+
+def test_atomic_write_removes_temp_file_and_reraises_when_replace_fails(tmp_path, monkeypatch):
+    target = tmp_path / "target.txt"
+
+    def _raise_replace(*_args, **_kwargs):
+        raise OSError("simulated os.replace failure")
+
+    monkeypatch.setattr("ytm_player.services.auth.os.replace", _raise_replace)
+
+    with pytest.raises(OSError, match="simulated os.replace failure"):
+        _atomic_write(target, "w", _write_str("hello"), encoding="utf-8")
+
+    assert not target.exists()
+    assert list(tmp_path.glob("*.tmp-*")) == []
+
+
+def test_atomic_write_removes_temp_file_and_reraises_when_chmod_fails(tmp_path, monkeypatch):
+    target = tmp_path / "target.txt"
+
+    def _raise_chmod(*_args, **_kwargs):
+        raise OSError("simulated secure_chmod failure")
+
+    monkeypatch.setattr("ytm_player.services.auth.secure_chmod", _raise_chmod)
+
+    with pytest.raises(OSError, match="simulated secure_chmod failure"):
+        _atomic_write(target, "w", _write_str("hello"), encoding="utf-8")
+
+    assert not target.exists()
+    assert list(tmp_path.glob("*.tmp-*")) == []
