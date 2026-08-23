@@ -81,8 +81,9 @@ class TestStreamInfoCache:
         """A prefetched-then-skipped-without-playing video's flag is never
         consumed (only play_track()/the resolver-warmup path consume by
         video_id) -- clear_cache() is the natural "start fresh" point that
-        sweeps those stranded entries, since a quality change or accepting
-        the remote_components prompt both make any pending diagnosis moot."""
+        sweeps those stranded entries, since accepting the remote_components
+        prompt or a failure-recovery reset both make any pending diagnosis
+        moot."""
         resolver = StreamResolver()
         resolver._resolving_video_id.value = "stranded_vid"
         resolver._flag_missing_remote_components()
@@ -130,22 +131,6 @@ class TestStreamExpiry:
         )
         resolver._put_cache(info)
         assert resolver.is_expired("ok") is False
-
-
-class TestStreamQuality:
-    def test_default_quality(self):
-        resolver = StreamResolver()
-        assert resolver.quality == "high"
-
-    def test_set_valid_quality(self):
-        resolver = StreamResolver()
-        resolver.quality = "low"
-        assert resolver.quality == "low"
-
-    def test_set_invalid_quality_raises(self):
-        resolver = StreamResolver()
-        with pytest.raises(ValueError):
-            resolver.quality = "ultra"
 
 
 class TestCacheEviction:

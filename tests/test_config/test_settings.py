@@ -17,7 +17,6 @@ class TestDefaultValues:
     def test_defaults(self):
         s = Settings()
         assert s.general.startup_page == "library"
-        assert s.playback.audio_quality == "high"
         assert s.playback.default_volume == 80
         assert s.playback.autoplay is True
         assert s.search.default_mode == "music"
@@ -96,7 +95,7 @@ class TestSaveLoadRoundTrip:
         assert loaded.cache.max_size_mb == 2048
         assert loaded.ui.theme == "textual-dark"
         # Other defaults preserved.
-        assert loaded.playback.audio_quality == "high"
+        assert loaded.playback.gapless is True
         assert loaded.ui.album_art is True
 
     def test_save_creates_file(self, tmp_config_dir):
@@ -114,7 +113,7 @@ class TestPartialToml:
         loaded = Settings.load(path)
         assert loaded.playback.default_volume == 42
         # All other fields should be defaults.
-        assert loaded.playback.audio_quality == "high"
+        assert loaded.playback.gapless is True
         assert loaded.general.startup_page == "library"
 
     def test_missing_file_creates_default(self, tmp_config_dir):

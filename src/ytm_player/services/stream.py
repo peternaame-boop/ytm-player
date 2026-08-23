@@ -172,49 +172,21 @@ class _YtDlpLogger:
         logger.error("yt-dlp: %s", message)
 
 
-# Quality presets mapping to yt-dlp format strings.
-#
-# player.py initializes mpv with video=False, and album art comes from a
-# separate thumbnail_url, not this stream — so the video track in every
-# muxed format below is pure bandwidth waste, never rendered. Each tier
-# therefore leads with a [height<=144] alternative on its own — NOT
-# combined with [abr<=N] — because yt-dlp reports abr=None for every
-# combined (muxed) format extracted via the web_safari/web_embedded
-# clients (confirmed empirically against live YouTube responses): an
-# [abr<=N] clause never matches a single combined format, so a
-# [height<=144][abr<=N] alternative is permanently dead and the tier
-# would silently fall through to the fully unconstrained catch-all —
-# up to ~28x more data than the height-capped alternative on videos
-# with a legacy HLS itag ladder. The [abr<=N]-only alternatives below
-# are kept as harmless, currently-inert forward-compat in case yt-dlp
-# ever starts populating abr for combined formats; they are not what
-# makes medium/low effective today. Video resolution has no effect on
-# the audio track's own encoding, so the height cap costs nothing in
-# audio quality. Every alternative after the leading one is prepended
-# to, not a substitute for, the exact chain Villoh's PR #136 testing
-# validated (24/24 success) — a video with no low-res combined+HLS
-# rendition falls through to that identical, already-proven chain.
-QUALITY_FORMATS: dict[str, str] = {
-    "high": (
-        "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
-        "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
-        "/best[vcodec!=none][acodec!=none]"
-    ),
-    "medium": (
-        "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
-        "/best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=128]"
-        "/best[vcodec!=none][acodec!=none][abr<=128]"
-        "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
-        "/best[vcodec!=none][acodec!=none]"
-    ),
-    "low": (
-        "best[vcodec!=none][acodec!=none][protocol^=m3u8][height<=144]"
-        "/best[vcodec!=none][acodec!=none][protocol^=m3u8][abr<=64]"
-        "/best[vcodec!=none][acodec!=none][abr<=64]"
-        "/best[vcodec!=none][acodec!=none][protocol^=m3u8]"
-        "/best[vcodec!=none][acodec!=none]"
-    ),
-}
+# The one combined (video+audio) format YouTube actually serves that
+# survives real playback: player.py initializes mpv with video=False, so
+# resolution/vcodec are irrelevant — only the audio track matters. The
+# web_safari/web_embedded clients (and the tv_simply/tv_downgraded pair
+# below) never expose more than one non-storyboard combined format per
+# video (confirmed empirically: itag 18, a progressive MP4 with AAC
+# mp4a.40.2 audio — no HLS ladder, no separate audio-only rendition to
+# choose from), so there is nothing left to select between. A prior
+# multi-tier QUALITY_FORMATS dict (high/medium/low) selected on video
+# height and audio bitrate under the assumption that YouTube exposed a
+# richer format ladder than it actually does — every tier converged on
+# this same single format in practice. See CHANGELOG.md for the switch
+# from web_safari/web_embedded (erratic on real playback — see PROJECT.md)
+# to tv_simply/tv_downgraded.
+_FORMAT = "best[vcodec!=none][acodec!=none]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,8 +209,7 @@ class StreamResolver:
     downloading. Caches results in memory with automatic expiry.
     """
 
-    def __init__(self, quality: str = "high") -> None:
-        self._quality = quality
+    def __init__(self) -> None:
         self._cache: dict[str, StreamInfo] = {}
         self._cache_lock = threading.Lock()
         self._pending: dict[str, asyncio.Future[StreamInfo | None]] = {}
@@ -285,23 +256,11 @@ class StreamResolver:
         # video context of its own.
         self._resolving_video_id = threading.local()
 
-    @property
-    def quality(self) -> str:
-        return self._quality
-
-    @quality.setter
-    def quality(self, value: str) -> None:
-        if value not in QUALITY_FORMATS:
-            raise ValueError(f"Unknown quality '{value}'. Choose from: {list(QUALITY_FORMATS)}")
-        if value != self._quality:
-            self._quality = value
-            self._reset_ydl()
-
     def _build_ydl_opts(self) -> dict:
         """Build yt-dlp options for audio extraction."""
         settings = get_settings().yt_dlp
         opts = {
-            "format": QUALITY_FORMATS.get(self._quality, QUALITY_FORMATS["high"]),
+            "format": _FORMAT,
             "quiet": True,
             "no_warnings": True,
             "logger": _YtDlpLogger(self._flag_missing_remote_components),
@@ -312,14 +271,20 @@ class StreamResolver:
             # Avoid writing any files to disk.
             "writeinfojson": False,
             "writethumbnail": False,
-            # web_safari and web_embedded both support cookie-based auth (yt-dlp's
-            # SUPPORTS_COOKIES flag) and aren't silently dropped from the client
-            # list the way android was once cookies were present. Neither carries
-            # yt-dlp's "made for kids" restriction comment (only android_vr does,
-            # per yt_dlp.extractor.youtube._base.INNERTUBE_CLIENTS as installed —
-            # re-verify this if it's ever load-bearing again, since yt-dlp's
-            # client roster changes across releases).
-            "extractor_args": {"youtube": {"player_client": ["web_safari", "web_embedded"]}},
+            # web_safari/web_embedded (yt-dlp's cookie-compatible web clients)
+            # proved erratic on real playback despite resolving formats fine —
+            # GVS rejects HTTP Range requests against their itag-18 URLs with
+            # an immediate 403 (confirmed via direct Range-request testing
+            # against a 25-track sample of real play history: 1/25 succeeded).
+            # tv_downgraded alone fails extraction outright ("The page needs
+            # to be reloaded"); it must be paired with tv_simply, which
+            # contributes no formats of its own but is required for
+            # extraction to succeed. tv_simply+tv_downgraded together
+            # resolved and played back successfully on 25/25 of the same
+            # sample. See CHANGELOG.md and PROJECT.md for the full
+            # investigation (independently validates maintainer @Villoh's
+            # PR #136 review finding and PR #137's fix).
+            "extractor_args": {"youtube": {"player_client": ["tv_simply", "tv_downgraded"]}},
         }
         opts = apply_configured_yt_dlp_options(opts, settings)
         if "cookiefile" not in opts:
@@ -712,8 +677,9 @@ class StreamResolver:
         # consumed (only play_track()/the resolver-warmup path consume by
         # video_id), so entries can otherwise strand here indefinitely.
         # clear_cache() already fires exactly when that staleness stops
-        # mattering — a quality change or accepting the remote_components
-        # prompt both mean any pending diagnosis is moot; the next resolve
+        # mattering — accepting the remote_components prompt, or the
+        # failure-recovery reset after repeated consecutive play failures,
+        # both mean any pending diagnosis is moot; the next resolve
         # re-flags it fresh if the cause recurs.
         with self._missing_remote_components_lock:
             self._missing_remote_components_video_ids.clear()
