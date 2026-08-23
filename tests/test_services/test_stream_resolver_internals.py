@@ -484,7 +484,7 @@ class TestBuildYdlOptsCookieInjection:
 
 class TestClientAndFormatSelection:
     """Regression guard for the client/format values this branch settled on
-    after two rounds of real-playback validation:
+    after three rounds of real-playback validation:
 
     1. Villoh's PR #136 review moved off ["default","android"]/bestaudio
        (4/12 success) to web_safari/web_embedded with a combined-format
@@ -497,7 +497,20 @@ class TestClientAndFormatSelection:
        confirmed it: web_safari/web_embedded resolves formats fine but GVS
        immediately 403s the Range request (1/25 succeeded); tv_downgraded
        needs tv_simply paired ahead of it to extract at all, but together
-       they succeeded 25/25. See CHANGELOG.md and PROJECT.md.
+       they succeeded 25/25.
+    3. tv_simply has SUPPORTS_COOKIES=False, so an authenticated request
+       (real session cookies) gets it silently dropped by yt-dlp, leaving
+       tv_downgraded alone — but this does NOT reproduce the unauthenticated
+       tv_downgraded-alone failure, because yt-dlp auto-appends `web_music`
+       for any authenticated music.youtube.com request. That auto-added
+       client exposes real audio-only formats up to ~280kbps opus, so
+       `bestaudio` was reinstated at the front of the selector — reversing
+       a prior finding that held bestaudio always PO-Token-gated, which had
+       never been tested against web_music specifically. Validated against
+       18 real, distinct tracks from real play history with two Range
+       probes each (immediate and 2MB into the file): 18/18 succeeded,
+       identical reliability to the combined-only selector. See
+       CHANGELOG.md and PROJECT.md for the full investigation.
 
     This branch already regressed once before (commit 8450505 -> 3efbd66)
     with nothing to catch it; these tests exist so a future refactor can't
@@ -513,20 +526,15 @@ class TestClientAndFormatSelection:
             "tv_downgraded",
         ]
 
-    def test_format_never_selects_bestaudio(self):
+    def test_format_prefers_bestaudio_with_a_combined_fallback(self, monkeypatch):
+        """bestaudio is deliberately first: validated as Range-safe for
+        authenticated resolves (web_music auto-append supplies it), and a
+        no-op when unauthenticated (tv_simply/tv_downgraded expose no
+        audio-only format, so this alternative never matches and the
+        combined fallback is used instead)."""
         from ytm_player.services.stream import _FORMAT
 
-        assert "bestaudio" not in _FORMAT
-
-    def test_format_is_the_validated_single_selector(self, monkeypatch):
-        """tv_simply/tv_downgraded never exposes more than one non-storyboard
-        combined format per video (confirmed empirically: itag 18 only, no
-        HLS ladder, no separate audio-only rendition) — there's nothing left
-        to select between, so the format string is a fixed constant, not a
-        per-quality lookup."""
-        from ytm_player.services.stream import _FORMAT
-
-        assert _FORMAT == "best[vcodec!=none][acodec!=none]"
+        assert _FORMAT == "bestaudio/best[vcodec!=none][acodec!=none]"
 
         settings = Settings()
         monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)

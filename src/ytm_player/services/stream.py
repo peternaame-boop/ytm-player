@@ -172,21 +172,29 @@ class _YtDlpLogger:
         logger.error("yt-dlp: %s", message)
 
 
-# The one combined (video+audio) format YouTube actually serves that
-# survives real playback: player.py initializes mpv with video=False, so
-# resolution/vcodec are irrelevant — only the audio track matters. The
-# web_safari/web_embedded clients (and the tv_simply/tv_downgraded pair
-# below) never expose more than one non-storyboard combined format per
-# video (confirmed empirically: itag 18, a progressive MP4 with AAC
-# mp4a.40.2 audio — no HLS ladder, no separate audio-only rendition to
-# choose from), so there is nothing left to select between. A prior
-# multi-tier QUALITY_FORMATS dict (high/medium/low) selected on video
-# height and audio bitrate under the assumption that YouTube exposed a
-# richer format ladder than it actually does — every tier converged on
-# this same single format in practice. See CHANGELOG.md for the switch
-# from web_safari/web_embedded (erratic on real playback — see PROJECT.md)
-# to tv_simply/tv_downgraded.
-_FORMAT = "best[vcodec!=none][acodec!=none]"
+# tv_simply/tv_downgraded never exposes more than one non-storyboard
+# COMBINED format per video (confirmed empirically: itag 18, a progressive
+# MP4 with AAC mp4a.40.2 audio — no HLS ladder). For a request without
+# cookies, that's the only option, so `bestaudio` never matches anything
+# and the selector falls through to it.
+#
+# For an AUTHENTICATED request (real session cookies present), yt-dlp
+# automatically appends `web_music` to the client list for any
+# music.youtube.com URL (its own client-selection logic, not something we
+# configure) — this exposes genuine audio-only DASH formats up to ~280kbps
+# opus (itag 774), a real quality improvement over itag 18's ~128kbps AAC
+# muxed with a never-rendered video track (player.py initializes mpv with
+# video=False). `bestaudio` was previously excluded here entirely — a
+# prior finding (see CHANGELOG.md) held it "PO-Token-gated regardless of
+# client or cookies", based on testing against web_safari/web_embedded/
+# default/android, none of which is `web_music`. Validated here
+# specifically for this codepath (tv_simply/tv_downgraded + auto-appended
+# web_music) against 18 real, distinct tracks from actual play history,
+# probing each resolved URL with two HTTP Range requests (immediately and
+# 2MB into the file, to catch a delayed-failure pattern too, not just an
+# immediate one): 18/18 succeeded, identical reliability to the combined
+# selector alone. See PROJECT.md for full detail.
+_FORMAT = "bestaudio/best[vcodec!=none][acodec!=none]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,13 +285,28 @@ class StreamResolver:
             # an immediate 403 (confirmed via direct Range-request testing
             # against a 25-track sample of real play history: 1/25 succeeded).
             # tv_downgraded alone fails extraction outright ("The page needs
-            # to be reloaded"); it must be paired with tv_simply, which
-            # contributes no formats of its own but is required for
-            # extraction to succeed. tv_simply+tv_downgraded together
-            # resolved and played back successfully on 25/25 of the same
-            # sample. See CHANGELOG.md and PROJECT.md for the full
+            # to be reloaded") when unauthenticated; it must be paired with
+            # tv_simply, which contributes no formats of its own but is
+            # required for extraction to succeed. tv_simply+tv_downgraded
+            # together resolved and played back successfully on 25/25 of the
+            # same sample. See CHANGELOG.md and PROJECT.md for the full
             # investigation (independently validates maintainer @Villoh's
             # PR #136 review finding and PR #137's fix).
+            #
+            # tv_simply has SUPPORTS_COOKIES=False (yt-dlp's own
+            # INNERTUBE_CLIENTS metadata) — for an AUTHENTICATED request
+            # (real session cookies present), yt-dlp's own client-selection
+            # logic silently drops it ("Skipping client tv_simply since it
+            # does not support cookies"), leaving tv_downgraded alone. This
+            # does NOT reproduce the unauthenticated tv_downgraded-alone
+            # failure: authenticated resolution succeeds regardless, because
+            # yt-dlp additionally auto-appends `web_music` for any
+            # authenticated music.youtube.com request (its own logic, not
+            # configured here), which supplies working formats on its own.
+            # Confirmed against a real authenticated session (not a
+            # fabricated one — a synthetic session gets invalidated by
+            # Google's servers before yt-dlp's client filter even runs, so
+            # it can't prove this either way).
             "extractor_args": {"youtube": {"player_client": ["tv_simply", "tv_downgraded"]}},
         }
         opts = apply_configured_yt_dlp_options(opts, settings)
