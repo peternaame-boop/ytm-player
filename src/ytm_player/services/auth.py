@@ -132,7 +132,7 @@ def _atomic_write(
 
 class AuthManager:
     """Manages YouTube Music authentication via browser cookie extraction,
-    and (as of this redesign) the yt-dlp stream cookiejar consumed by stream.py."""
+    and the yt-dlp stream cookiejar consumed by stream.py."""
 
     def __init__(
         self,

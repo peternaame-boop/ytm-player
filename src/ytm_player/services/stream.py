@@ -189,11 +189,16 @@ class _YtDlpLogger:
 # client or cookies", based on testing against web_safari/web_embedded/
 # default/android, none of which is `web_music`. Validated here
 # specifically for this codepath (tv_simply/tv_downgraded + auto-appended
-# web_music) against 18 real, distinct tracks from actual play history,
-# probing each resolved URL with two HTTP Range requests (immediately and
-# 2MB into the file, to catch a delayed-failure pattern too, not just an
-# immediate one): 18/18 succeeded, identical reliability to the combined
-# selector alone. See PROJECT.md for full detail.
+# web_music) against 18 real, distinct tracks from actual play history
+# under a YouTube Music PREMIUM account, probing each resolved URL with
+# two HTTP Range requests (immediately and 2MB into the file, to catch a
+# delayed-failure pattern too, not just an immediate one): 18/18
+# succeeded. Premium accounts are exempt from web_music's PO-Token
+# requirement (yt-dlp's own not_required_for_premium policy flag) —
+# web_music's policy is otherwise identical to web_safari/web_embedded's
+# (the pair proven erratic above), so this validation does NOT cover
+# non-Premium authenticated accounts, which may see the same intermittent
+# GVS-403-after-resolution failures. See CHANGELOG.md for full detail.
 _FORMAT = "bestaudio/best[vcodec!=none][acodec!=none]"
 
 
@@ -289,9 +294,9 @@ class StreamResolver:
             # tv_simply, which contributes no formats of its own but is
             # required for extraction to succeed. tv_simply+tv_downgraded
             # together resolved and played back successfully on 25/25 of the
-            # same sample. See CHANGELOG.md and PROJECT.md for the full
-            # investigation (independently validates maintainer @Villoh's
-            # PR #136 review finding and PR #137's fix).
+            # same sample. See CHANGELOG.md for the full investigation
+            # (independently validates maintainer @Villoh's PR #136 review
+            # finding and PR #137's fix).
             #
             # tv_simply has SUPPORTS_COOKIES=False (yt-dlp's own
             # INNERTUBE_CLIENTS metadata) — for an AUTHENTICATED request
@@ -304,9 +309,10 @@ class StreamResolver:
             # authenticated music.youtube.com request (its own logic, not
             # configured here), which supplies working formats on its own.
             # Confirmed against a real authenticated session (not a
-            # fabricated one — a synthetic session gets invalidated by
-            # Google's servers before yt-dlp's client filter even runs, so
-            # it can't prove this either way).
+            # fabricated one — a fabricated session can't be used to test
+            # this because the actual player-response/format requests
+            # would be rejected by Google using invalid credentials, not
+            # because the local client-selection filter is skipped).
             "extractor_args": {"youtube": {"player_client": ["tv_simply", "tv_downgraded"]}},
         }
         opts = apply_configured_yt_dlp_options(opts, settings)

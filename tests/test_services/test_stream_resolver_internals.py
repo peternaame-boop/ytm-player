@@ -440,8 +440,8 @@ class TestLooksLikeJsSolverReady:
 
 
 class TestBuildYdlOptsCookieInjection:
-    """_build_ydl_opts()'s cookie-injection logic — this PR's headline
-    change — had no direct test; every existing test in this file targets
+    """_build_ydl_opts()'s cookie-injection logic had no direct test
+    before this file; every existing test in this file targets
     _detect_stream_cookies, _YtDlpLogger, or _get_ydl/_reset_ydl in
     isolation, none of them assert what actually ends up in the opts
     dict."""
@@ -483,8 +483,8 @@ class TestBuildYdlOptsCookieInjection:
 
 
 class TestClientAndFormatSelection:
-    """Regression guard for the client/format values this branch settled on
-    after three rounds of real-playback validation:
+    """Regression guard for the client/format values settled on after
+    three rounds of real-playback validation:
 
     1. Villoh's PR #136 review moved off ["default","android"]/bestaudio
        (4/12 success) to web_safari/web_embedded with a combined-format
@@ -508,13 +508,16 @@ class TestClientAndFormatSelection:
        a prior finding that held bestaudio always PO-Token-gated, which had
        never been tested against web_music specifically. Validated against
        18 real, distinct tracks from real play history with two Range
-       probes each (immediate and 2MB into the file): 18/18 succeeded,
-       identical reliability to the combined-only selector. See
-       CHANGELOG.md and PROJECT.md for the full investigation.
+       probes each (immediate and 2MB into the file): 18/18 succeeded —
+       under a YouTube Music Premium account specifically (Premium is
+       exempt from web_music's PO-Token requirement; non-Premium
+       authenticated accounts aren't covered by this validation and may
+       see the same GVS-403 failures as web_safari/web_embedded above).
+       See CHANGELOG.md for the full investigation.
 
-    This branch already regressed once before (commit 8450505 -> 3efbd66)
-    with nothing to catch it; these tests exist so a future refactor can't
-    silently do the same."""
+    This client/format selection already regressed once before (commit
+    8450505 -> 3efbd66) with nothing to catch it; these tests exist so a
+    future refactor can't silently do the same."""
 
     def test_player_client_is_the_validated_pair(self, monkeypatch):
         settings = Settings()
@@ -528,10 +531,12 @@ class TestClientAndFormatSelection:
 
     def test_format_prefers_bestaudio_with_a_combined_fallback(self, monkeypatch):
         """bestaudio is deliberately first: validated as Range-safe for
-        authenticated resolves (web_music auto-append supplies it), and a
-        no-op when unauthenticated (tv_simply/tv_downgraded expose no
-        audio-only format, so this alternative never matches and the
-        combined fallback is used instead)."""
+        authenticated resolves on a Premium account (web_music auto-append
+        supplies it; non-Premium authenticated accounts aren't covered —
+        see class docstring), and a no-op when unauthenticated
+        (tv_simply/tv_downgraded expose no audio-only format, so this
+        alternative never matches and the combined fallback is used
+        instead)."""
         from ytm_player.services.stream import _FORMAT
 
         assert _FORMAT == "bestaudio/best[vcodec!=none][acodec!=none]"
