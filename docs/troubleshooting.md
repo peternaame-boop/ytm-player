@@ -1,5 +1,28 @@
 # Troubleshooting
 
+## Playback fails with "HTTP error 403 Forbidden"
+
+Every track fails and `~/.config/ytm-player/logs/ytm.log` shows
+`mpv[ffmpeg]: https: HTTP error 403 Forbidden`.
+
+YouTube stopped serving streams to yt-dlp's former default client on
+2026-08-17. yt-dlp 2026.08.19 fixed this, and ytm-player now requires it.
+If you still see 403s, the yt-dlp ytm-player actually uses is stale. For
+pipx/uv/pip installs that is the copy inside ytm-player's own environment —
+updating a system-wide `yt-dlp` does not touch it. Upgrade ytm-player itself,
+which pulls the required yt-dlp:
+
+- pipx: `pipx upgrade ytm-player` (or `pipx uninstall ytm-player && pipx install ytm-player`)
+- uv: `uv tool upgrade ytm-player`
+- pip: `pip install -U ytm-player`
+- AUR: `yay -Syu` (yt-dlp is a system package there, so a system update is the fix)
+- Nix, declarative: `nix flake update` on your input, then rebuild
+- Nix, `nix profile`: `nix profile list`, then `nix profile upgrade <name>`
+
+Then restart `ytm` — it keeps its yt-dlp instance and cached stream URLs for
+the whole process lifetime. Also restart after changing networks or
+disconnecting a VPN (stream URLs are bound to the IP that requested them).
+
 ## "mpv not found" or playback doesn't start
 
 Ensure mpv is installed and in your `$PATH`:

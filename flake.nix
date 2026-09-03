@@ -65,6 +65,14 @@
           # it rather than pull the dependency.
           pythonRemoveDeps = [ "eyeD3" ];
 
+          # 2.1.5's [build-system] caps setuptools at <81; nixpkgs now ships
+          # 83 and the build fails its own requires check before compiling
+          # anything. Nothing in the scraper needs the cap, so lift it.
+          postPatch = ''
+            substituteInPlace pyproject.toml \
+              --replace-fail '"setuptools>=65,<81"' '"setuptools>=65"'
+          '';
+
           # Tests require network access.
           doCheck = false;
 
@@ -113,7 +121,7 @@
             # Core dep on Linux so MPRIS works out of the box; Linux-only because
             # it can't import on darwin (socket.CMSG_LEN), matching the pyproject
             # sys_platform marker.
-            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ python.pkgs.dbus-fast ];
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ python.pkgs.dbus-fast ];
 
           optional-dependencies = with python.pkgs; {
             mpris = [ ];  # dbus-fast moved to core deps (Linux-only); kept for compat
@@ -200,7 +208,7 @@
             ])
             # dbus-fast is Linux-only (socket.CMSG_LEN); guard it so `nix develop`
             # still works on darwin.
-            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ python.pkgs.dbus-fast ]
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ python.pkgs.dbus-fast ]
             ++ [
               pkgs.mpv
             ];
