@@ -581,21 +581,14 @@ class YTMusicService:
             return raw if isinstance(raw, list) else []
         return []
 
-    async def get_radio(self, video_ids: str | list[str], limit: int = 500) -> list[dict]:
+    async def get_radio(self, video_ids: str | list[str], limit: int = 25) -> list[dict]:
         """Fetch radio tracks from one or more seeds and return a deduplicated mix.
 
         Fetches all seeds in parallel. Individual seed failures are
         swallowed so a single bad ID doesn't abort the batch.
         Returns the pool normalized, shuffled, and trimmed to *limit*.
-
-        *limit* defaults to 500 rather than a small fixed page size: YT
-        Music radios routinely run into the hundreds of tracks, and
-        ytmusicapi's ``get_watch_playlist`` treats ``limit`` as a floor to
-        page continuations up to (not a hard cap on what actually exists),
-        so a generous default gets close to "the whole radio" without
-        risking an unbounded fetch. ``limit=None`` is not supported here:
-        ytmusicapi's own implementation does ``limit - len(tracks)``
-        internally, which raises on ``None``.
+        *limit* is also forwarded to each seed's ``get_watch_playlist``
+        call; ``None`` is not supported there (ytmusicapi subtracts from it).
         """
         import random
 

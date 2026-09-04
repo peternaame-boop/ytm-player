@@ -106,18 +106,6 @@ class TestGetSeededRadio:
 
         assert seen_kwargs.get("limit") == 200
 
-    async def test_default_limit_is_not_a_small_fixed_page(self, svc):
-        """No more small hardcoded cap: a real, longer radio comes back whole."""
-        with patch.object(
-            svc,
-            "_call",
-            new_callable=AsyncMock,
-            return_value=_watch_result([f"v{i}" for i in range(120)]),
-        ):
-            result = await svc.get_radio(["seed1"])
-
-        assert len(result) == 120
-
     async def test_empty_seeds_returns_empty(self, svc):
         call_count = 0
 
