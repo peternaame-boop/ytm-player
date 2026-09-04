@@ -132,6 +132,7 @@ class LibraryPanel(Widget):
         self._last_click_time: float = 0.0
         self._last_click_index: int | None = None
         self._click_activated: bool = False
+        self._suppress_next_selected: bool = False
 
     def compose(self) -> ComposeResult:
         yield Label(self._title, classes="panel-title")
@@ -358,6 +359,9 @@ class LibraryPanel(Widget):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if self._instant_select:
+            if self._suppress_next_selected:
+                self._suppress_next_selected = False
+                return
             idx = event.list_view.index
             if idx is not None and 0 <= idx < len(self._filtered_items):
                 self.post_message(self.ItemSelected(self._filtered_items[idx], self.id or ""))
@@ -402,10 +406,12 @@ class LibraryPanel(Widget):
                     self._last_click_time = 0.0
                     self._last_click_index = None
                     event.stop()
+                    self._suppress_next_selected = True
                     self.post_message(
                         self.ItemDoubleClicked(self._filtered_items[idx], self.id or "")
                     )
                     return
+                self._suppress_next_selected = False
                 self._last_click_time = now
                 self._last_click_index = idx
             return
