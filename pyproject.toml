@@ -51,7 +51,7 @@ dependencies = [
 [project.optional-dependencies]
 spotify = [
     "spotipy>=2.24.0",
-    "spotifyscraper>=2.0.0",
+    "spotifyscraper>=3.0.0",
     "thefuzz>=0.22.0",
 ]
 mpris = []  # dbus-fast is now a Linux core dependency; kept for backwards compat.

@@ -170,7 +170,7 @@ def extract_spotify_tracks_spotipy(url: str) -> tuple[str, list[dict]]:
 
 
 def extract_spotify_tracks(url: str) -> tuple[str, list[dict]]:
-    """Extract tracks — tries spotipy (full), falls back to spotify_scraper (≤100).
+    """Extract tracks — tries spotipy first, falls back to spotify_scraper.
 
     Returns:
         Tuple of (playlist_name, list of track dicts with name/artist/album/duration_ms).
@@ -182,35 +182,36 @@ def extract_spotify_tracks(url: str) -> tuple[str, list[dict]]:
         except Exception as exc:
             logger.warning("spotipy extraction failed, falling back to scraper: %s", exc)
 
-    # Fallback: spotify_scraper (limited to ~100 tracks).
+    # Fallback: spotify_scraper. max_tracks=None fetches the whole playlist,
+    # not just its first page.
     from spotify_scraper import SpotifyClient  # type: ignore[reportMissingImports]
 
     client = SpotifyClient()
     try:
-        playlist = client.get_playlist_info(url)
+        playlist = client.get_playlist(url, max_tracks=None)
 
-        playlist_name = playlist.get("name", "Imported Playlist")
-        track_count = playlist.get("track_count", 0)
+        playlist_name = playlist.name or "Imported Playlist"
+        track_count = playlist.total_tracks or 0
         tracks = []
 
-        for item in playlist.get("tracks", []):
-            track = item.get("track", item)
-            artist_name = extract_artist(track)
-            album = track.get("album", {})
+        for item in playlist.tracks:
+            track = item.track
+            artist_name = ", ".join(a.name for a in track.artists) or "Unknown"
+            album_name = track.album.name if track.album else ""
 
             tracks.append(
                 {
-                    "name": track.get("name", ""),
+                    "name": track.name,
                     "artist": artist_name,
-                    "album": album.get("name", ""),
-                    "duration_ms": track.get("duration_ms", 0),
+                    "album": album_name,
+                    "duration_ms": track.duration_ms,
                 }
             )
 
-        # Flag truncation so the TUI can warn the user.
+        # Flag the rare case where the scraper's own pagination came up short.
         if track_count and track_count > len(tracks):
             logger.warning(
-                "Playlist has %d tracks but scraper returned %d (limit ~100). "
+                "Playlist has %d tracks but scraper returned %d. "
                 "Configure Spotify API credentials for full import.",
                 track_count,
                 len(tracks),

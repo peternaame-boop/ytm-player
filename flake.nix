@@ -23,55 +23,24 @@
         # spotifyscraper is not in nixpkgs — build from PyPI.
         spotifyscraper = python.pkgs.buildPythonPackage rec {
           pname = "spotifyscraper";
-          version = "2.1.5";
-          # PEP 517 build via setuptools.build_meta. The sdist also ships a
-          # Makefile whose `install` target runs `pip install --upgrade pip`;
-          # with pyproject = false the Python hooks don't engage and stdenv
-          # falls back to `make install`, which fails in the hermetic sandbox
-          # (no pip, no network) — that was issue #93.
+          version = "3.9.2";
+          # PEP 517 build (hatchling). The sdist also ships a Makefile whose
+          # `install` target runs `pip install --upgrade pip`; with
+          # pyproject = false the Python hooks don't engage and stdenv falls
+          # back to `make install`, which fails in the hermetic sandbox (no
+          # pip, no network) — that was issue #93.
           pyproject = true;
 
           src = python.pkgs.fetchPypi {
             inherit pname version;
-            hash = "sha256-QoapRb+L265P3zUX4IHJxf9k4dlB6451p5aI6nZvOto=";
+            hash = "sha256-6ozyx0VjVAbaqBnlUEZ5zUoRGPjS9U/qwnQH0DNPs60=";
           };
 
-          build-system = with python.pkgs; [
-            setuptools
-            wheel
-          ];
+          build-system = with python.pkgs; [ hatchling ];
 
-          dependencies = with python.pkgs; [
-            requests
-            beautifulsoup4
-            lxml
-            pyyaml
-            urllib3
-            cssselect
-            soupsieve
-            filetype
-            fake-useragent
-            certifi
-            packaging
-            tqdm
-            pyparsing
-            deprecation
-            click
-            rich
-          ];
-
-          # Upstream declares eyeD3 (MP3 cover-art embedding), but ytm-player
-          # only uses playlist scraping and eyeD3 is imported lazily, so drop
-          # it rather than pull the dependency.
-          pythonRemoveDeps = [ "eyeD3" ];
-
-          # 2.1.5's [build-system] caps setuptools at <81; nixpkgs now ships
-          # 83 and the build fails its own requires check before compiling
-          # anything. Nothing in the scraper needs the cap, so lift it.
-          postPatch = ''
-            substituteInPlace pyproject.toml \
-              --replace-fail '"setuptools>=65,<81"' '"setuptools>=65"'
-          '';
+          # 3.x's only hard dependency; the CLI/browser/media/mcp extras are
+          # optional and ytm-player uses none of them.
+          dependencies = with python.pkgs; [ httpx ];
 
           # Tests require network access.
           doCheck = false;
