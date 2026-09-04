@@ -432,6 +432,7 @@ class TestPlayPlaylist:
         host.ytmusic = MagicMock()
         host.ytmusic.get_playlist = AsyncMock(return_value=get_playlist_return or {})
         host._replace_queue_and_play = AsyncMock()
+        host.queue.shuffle_enabled = False
         host.notify = MagicMock()
         host.run_worker = MagicMock()
         return host

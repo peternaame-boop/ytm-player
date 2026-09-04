@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 **Fixes**
 
 - **Playback failed with `HTTP error 403 Forbidden` on every track** (#140, #142) — YouTube started rejecting streams from yt-dlp's former default client on 2026-08-17; yt-dlp 2026.08.19 dropped that client. ytm-player now requires `yt-dlp>=2026.8.19`, so upgrading ytm-player pulls in the fix. Per-installer upgrade steps: [Troubleshooting](docs/troubleshooting.md#playback-fails-with-http-error-403-forbidden).
+- **Explicit play inherited last session's shuffle** — double-clicking a playlist (or playing any album, artist, or page selection) kept whatever shuffle state was left over, so the queue showed a shuffled order with no hint why. Explicit play now starts unshuffled unless that collection has a saved shuffle preference; the toast reads `Playing: <name> (shuffled)` when shuffle is on.
 
 ### v2.0.0 (2026-07-04)
 

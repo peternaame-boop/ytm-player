@@ -259,7 +259,9 @@ class TrackActionsMixin(YTMHostBase):
             # saved OFF must clear a currently-ON shuffle, not just force ON.
             if self.queue.shuffle_enabled != saved_pref:
                 self.queue.toggle_shuffle()
-        elif shuffle is False:
+        elif shuffle is None or shuffle is False:
+            # Without a per-collection preference, explicit play starts unshuffled so a
+            # previous session's or collection's global flag cannot leak into the new queue.
             if self.queue.shuffle_enabled:
                 self.queue.toggle_shuffle()
         self.queue.jump_to_real(start_index)
@@ -748,7 +750,8 @@ class TrackActionsMixin(YTMHostBase):
                 self.notify("Playlist is empty", severity="warning")
                 return
             await self._replace_queue_and_play(tracks, entity_id=playlist_id, shuffle=shuffle)
-            self.notify(f"Playing: {name}", timeout=4)
+            suffix = " (shuffled)" if self.queue.shuffle_enabled else ""
+            self.notify(f"Playing: {name}{suffix}", timeout=4)
             total_count = data.get("trackCount") or len(raw_tracks)
             if total_count > len(raw_tracks):
                 self.run_worker(
