@@ -587,6 +587,8 @@ class YTMusicService:
         Fetches all seeds in parallel. Individual seed failures are
         swallowed so a single bad ID doesn't abort the batch.
         Returns the pool normalized, shuffled, and trimmed to *limit*.
+        *limit* is also forwarded to each seed's ``get_watch_playlist``
+        call; ``None`` is not supported there (ytmusicapi subtracts from it).
         """
         import random
 
@@ -600,7 +602,7 @@ class YTMusicService:
         async def _fetch_one(video_id: str) -> list[dict]:
             try:
                 result = await self._call(
-                    self.client.get_watch_playlist, videoId=video_id, radio=True
+                    self.client.get_watch_playlist, videoId=video_id, radio=True, limit=limit
                 )
                 return result.get("tracks", []) if isinstance(result, dict) else []
             except Exception:
