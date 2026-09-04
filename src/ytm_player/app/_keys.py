@@ -116,6 +116,14 @@ class KeyHandlingMixin(YTMHostBase):
         if key.startswith("alt+"):
             return f"M-{key[4:]}"
 
+        # Textual names punctuation symbolically (">" arrives as
+        # "greater_than_sign", "^" as "circumflex_accent") while the keymap
+        # binds the literal character, so prefer the character itself.
+        # Whitespace is excluded so "space" keeps its name.
+        char = event.character
+        if char is not None and len(char) == 1 and event.is_printable and not char.isspace():
+            return char
+
         # Map Textual's special key names to our keymap names.
         key_map = {
             "up": "up",
