@@ -461,6 +461,19 @@ class YTMusicService:
             logger.exception("get_artist failed for %r", artist_id)
             return {}
 
+    async def get_artist_albums(self, channel_id: str, params: str) -> list[dict[str, Any]]:
+        """Return an artist's complete albums or singles list.
+
+        ``get_artist`` only carries the first page of each section; the
+        section's ``browseId`` + ``params`` address its "see all" page.
+        """
+        try:
+            result = await self._call(self.client.get_artist_albums, channel_id, params, limit=None)
+            return result if isinstance(result, list) else []
+        except Exception:
+            logger.exception("get_artist_albums failed for %r", channel_id)
+            return []
+
     _ORDER_PARAMS = {
         "a_to_z": "ggMGKgQIARAA",
         "z_to_a": "ggMGKgQIARAB",

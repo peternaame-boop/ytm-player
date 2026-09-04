@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
@@ -216,6 +217,29 @@ class ContextPage(TrackFilterHost, Widget):
     # First batch size for progressive playlist loading.
     _FIRST_BATCH = 300
 
+    @staticmethod
+    async def _expand_artist_discography(ytmusic: Any, data: dict[str, Any]) -> None:
+        """Swap get_artist's 10-item albums/singles previews for the full lists.
+
+        get_artist returns only the first page of each section; a section
+        that carries ``browseId`` + ``params`` has a "see all" page (#138).
+        Sections without them, and fetches that come back empty, keep the
+        preview.
+        """
+        sections = [
+            s
+            for s in (data.get("albums"), data.get("singles"))
+            if isinstance(s, dict) and s.get("browseId") and s.get("params")
+        ]
+        if not sections:
+            return
+        full_lists = await asyncio.gather(
+            *(ytmusic.get_artist_albums(s["browseId"], s["params"]) for s in sections)
+        )
+        for section, full in zip(sections, full_lists):
+            if full:
+                section["results"] = full
+
     async def _fetch_data(self) -> dict[str, Any]:
         """Fetch data from ytmusic based on context_type.
 
@@ -233,6 +257,7 @@ class ContextPage(TrackFilterHost, Widget):
                     result = await ytmusic.get_album(self.context_id)
                 case "artist":
                     result = await ytmusic.get_artist(self.context_id)
+                    await self._expand_artist_discography(ytmusic, result)
                 case "playlist":
                     result = await ytmusic.get_playlist(self.context_id, limit=self._FIRST_BATCH)
                 case _:
