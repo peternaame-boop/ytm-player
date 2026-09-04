@@ -36,6 +36,7 @@ _BROWSERS = (
     "chromium",
     "brave",
     "firefox",
+    "zen",
     "edge",
     "vivaldi",
     "opera",
@@ -47,6 +48,39 @@ _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
     "helium": ("net.imput.helium", "Chromium"),
 }
 _yt_dlp_patched = False
+
+
+def _zen_profile_roots() -> list[Path]:
+    """Return candidate Zen profile roots for the current platform."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        return [Path(appdata) / "zen"] if appdata else []
+
+    home = Path.home()
+    if sys.platform == "darwin":
+        return [home / "Library" / "Application Support" / "zen"]
+
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    xdg_root = Path(xdg_config_home) if xdg_config_home else home / ".config"
+    return [
+        home / ".zen",
+        xdg_root / "zen",
+        home / ".var" / "app" / "app.zen_browser.zen" / ".zen",
+        home / ".var" / "app" / "app.zen_browser.zen" / "zen",
+    ]
+
+
+def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
+    """Extract cookies from a supported browser, including Zen profiles."""
+    from yt_dlp.cookies import extract_cookies_from_browser
+
+    if browser == "zen":
+        for root in _zen_profile_roots():
+            if root.exists():
+                return extract_cookies_from_browser("firefox", profile=str(root))
+        raise FileNotFoundError("no Zen profile directory found")
+
+    return extract_cookies_from_browser(browser)
 
 
 def _patch_yt_dlp_browsers() -> None:
@@ -212,17 +246,11 @@ class AuthManager:
     @staticmethod
     def _detect_browser() -> tuple[str, list] | None:
         """Find a browser that has YouTube cookies and return both."""
-        try:
-            from yt_dlp.cookies import extract_cookies_from_browser
-        except ImportError:
-            logger.debug("yt-dlp not available for cookie extraction")
-            return None
-
         _patch_yt_dlp_browsers()
 
         for browser in _BROWSERS:
             try:
-                jar = extract_cookies_from_browser(browser)
+                jar = _extract_browser_jar(browser)
                 yt_cookies = [c for c in jar if c.domain == ".youtube.com"]
                 if any(c.name in ("SAPISID", "__Secure-3PAPISID") for c in yt_cookies):
                     return browser, yt_cookies
@@ -302,10 +330,8 @@ class AuthManager:
     def _extract_and_save(self, browser: str, interactive: bool = False) -> bool:
         """Extract YouTube cookies from *browser* and write auth.json."""
         try:
-            from yt_dlp.cookies import extract_cookies_from_browser
-
             _patch_yt_dlp_browsers()
-            jar = extract_cookies_from_browser(browser)
+            jar = _extract_browser_jar(browser)
         except Exception as exc:
             logger.warning("Cookie extraction from %s failed: %s", browser, exc)
             return False
