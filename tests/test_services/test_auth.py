@@ -76,3 +76,73 @@ class TestEdgeCases:
 
     def test_whitespace_only_returns_empty(self):
         assert _normalize_raw_headers("   \n   \n  ") == ""
+
+
+class TestChromeDecodedBlock:
+    """Chrome annotates x-client-data with a multi-line decoded protobuf.
+
+    The block spans an odd number of lines, so before it was stripped it
+    shifted the alternating name/value pairing of every header after it and
+    ``x-goog-authuser`` — required by ytmusicapi — was parsed as a value.
+    """
+
+    # Name, value, then the annotation Chrome appends underneath it.
+    DECODED = (
+        "x-client-data\n"
+        "CIm2yQEIprbJAQipncoBCMiWywEI\n"
+        "Decoded:\n"
+        "message ClientVariations {\n"
+        "  // Active Google-visible variation IDs on this client. These are reported for\n"
+        "  // analysis, but do not directly affect any server-side behavior.\n"
+        "  repeated int32 variation_id = [3300105, 3300134];\n"
+        "  repeated int32 trigger_variation_id = [101003180];\n"
+        "}"
+    )
+
+    def test_authuser_survives_decoded_block(self):
+        raw = f"cookie\nabc=123\n{self.DECODED}\nx-goog-authuser\n0\nx-origin\nhttps://music.youtube.com"
+        result = _normalize_raw_headers(raw)
+        assert "x-goog-authuser: 0" in result
+        assert "cookie: abc=123" in result
+        assert "x-origin: https://music.youtube.com" in result
+
+    def test_decoded_body_not_emitted_as_headers(self):
+        raw = f"cookie\nabc=123\n{self.DECODED}\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "Decoded" not in result
+        assert "ClientVariations" not in result
+        assert "variation_id" not in result
+        assert "x-client-data: CIm2yQEIprbJAQipncoBCMiWywEI" in result
+
+    def test_decoded_block_in_standard_format(self):
+        raw = (
+            "cookie: abc=123\n"
+            "x-client-data: CIm2yQEIprbJAQipncoBCMiWywEI\n"
+            "Decoded:\n"
+            "message ClientVariations {\n"
+            "  repeated int32 variation_id = [3300105];\n"
+            "}\n"
+            "x-goog-authuser: 0"
+        )
+        result = _normalize_raw_headers(raw)
+        assert "x-goog-authuser: 0" in result
+        assert "ClientVariations" not in result
+
+    def test_multiple_decoded_blocks(self):
+        raw = f"cookie\nabc=123\n{self.DECODED}\n{self.DECODED}\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "x-goog-authuser: 0" in result
+        assert "ClientVariations" not in result
+
+    def test_unterminated_block_keeps_following_headers(self):
+        """No closing brace: leave the input alone rather than truncate it."""
+        raw = "cookie\nabc=123\nDecoded:\nmessage ClientVariations {\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "cookie: abc=123" in result
+        assert "0" in result
+
+    def test_lone_closing_brace_is_not_a_block(self):
+        raw = "cookie\nabc=123\n}\nsomething\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "cookie: abc=123" in result
+        assert "x-goog-authuser: 0" in result

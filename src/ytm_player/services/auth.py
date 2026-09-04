@@ -514,6 +514,46 @@ class AuthManager:
 
 _PSEUDO_HEADERS = {":authority", ":method", ":path", ":scheme", ":status"}
 
+# Chrome annotates ``x-client-data`` with a pretty-printed protobuf, opened by
+# a bare ``Decoded:`` line and closed by a bare ``}``.
+_DECODED_OPEN = "Decoded:"
+_DECODED_CLOSE = "}"
+
+
+def _strip_decoded_blocks(lines: list[str]) -> list[str]:
+    """Drop Chrome's decoded-protobuf annotation for ``x-client-data``.
+
+    Chrome DevTools renders that header as its name, its value, then a
+    ``Decoded:`` line followed by a pretty-printed protobuf block ending in
+    ``}``.  Those lines are not headers, and the block spans an odd number of
+    lines, so leaving it in shifts the name/value pairing of every header
+    after it — including ``x-goog-authuser``, which ytmusicapi requires and
+    which sorts after ``x-client-data``.
+
+    A block with no closing ``}`` is left untouched: dropping to end-of-input
+    would discard real headers, and the caller degrades better on a parity
+    shift than on missing lines.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() != _DECODED_OPEN:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        close = next(
+            (j for j in range(i + 1, len(lines)) if lines[j].strip() == _DECODED_CLOSE),
+            None,
+        )
+        if close is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        i = close + 1
+
+    return out
+
 
 def _normalize_raw_headers(raw: str) -> str:
     """Pre-process raw headers into ``Name: Value\\n`` format.
@@ -537,7 +577,7 @@ def _normalize_raw_headers(raw: str) -> str:
             lines.append(f"{name}: {value}")
         return "\n".join(lines)
 
-    raw_lines = [line for line in raw.split("\n") if line.strip()]
+    raw_lines = _strip_decoded_blocks([line for line in raw.split("\n") if line.strip()])
     colon_lines = sum(1 for line in raw_lines if ": " in line)
     is_alternating = len(raw_lines) > 2 and colon_lines < len(raw_lines) * 0.2
 
