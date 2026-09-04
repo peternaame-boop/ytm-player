@@ -536,7 +536,7 @@ class PlaylistSidebar(Widget):
             return
         self._loaded = True
         try:
-            playlists = await ytmusic.get_library_playlists(limit=50)
+            playlists = await ytmusic.get_library_playlists(limit=None)
             panel = self.query_one("#ps-playlists", LibraryPanel)
             if isinstance(playlists, list):
                 # Filter out "Liked Music" — it's already a pinned nav item.

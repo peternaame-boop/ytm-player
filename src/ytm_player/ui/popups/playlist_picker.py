@@ -157,7 +157,7 @@ class PlaylistPicker(BasePopup[str | None]):
         try:
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
-            playlists = await ytmusic.get_library_playlists(limit=50)
+            playlists = await ytmusic.get_library_playlists(limit=None)
             return playlists
         except Exception:
             logger.exception("Failed to fetch library playlists")

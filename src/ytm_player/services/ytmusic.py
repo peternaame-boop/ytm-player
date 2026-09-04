@@ -345,8 +345,8 @@ class YTMusicService:
     # Library
     # ------------------------------------------------------------------
 
-    async def get_library_playlists(self, limit: int = 25) -> list[dict[str, Any]]:
-        """Return the user's library playlists."""
+    async def get_library_playlists(self, limit: int | None = 25) -> list[dict[str, Any]]:
+        """Return the user's library playlists. ``limit=None`` fetches all of them."""
         try:
             return await self._call(self.client.get_library_playlists, limit=limit)
         except Exception:
