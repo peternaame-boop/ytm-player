@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -125,6 +126,19 @@ _MUTATION_TOAST_SUFFIX: dict[MutationResult, str] = {
 }
 
 
+def _is_auth_expired(exc: BaseException) -> bool:
+    if isinstance(exc, YTMusicServerError):
+        return _classify_mutation_failure(exc) == "auth_expired"
+    if isinstance(exc, KeyError):
+        message = str(exc).lower()
+        return (
+            "signinendpoint" in message
+            or "sign in to" in message
+            or ("'logged_in', 'value': '0'" in message)
+        )
+    return False
+
+
 def mutation_failure_suffix(kind: MutationResult) -> str:
     """Return the user-facing suffix text for a non-success MutationResult.
 
@@ -146,15 +160,18 @@ class YTMusicService:
         auth_path: Path = AUTH_FILE,
         auth_manager: AuthManager | None = None,
         user: str | None = None,
+        on_auth_refresh: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._auth_path = auth_path
         self._auth_manager = auth_manager
         self._user = user or None  # normalise "" → None
+        self._on_auth_refresh = on_auth_refresh
         self._ytm: YTMusic | None = None
         self._consecutive_api_failures: int = 0
         # Guards lazy init of self._ytm against concurrent first-access from
         # asyncio.to_thread workers.
         self._client_init_lock = threading.Lock()
+        self._auth_refresh_lock = asyncio.Lock()
         # Serializes get_playlist(order=...) monkey-patches so concurrent
         # calls don't stack patches on client._send_request.
         self._order_lock = asyncio.Lock()
@@ -203,8 +220,16 @@ class YTMusicService:
         await self._no_patch.wait()
         self._inflight += 1
         self._no_inflight.clear()
+        failed_client = getattr(func, "__self__", None)
         try:
-            return await self._run(func, *args, timeout=timeout, **kwargs)
+            try:
+                return await self._run(func, *args, timeout=timeout, **kwargs)
+            except (YTMusicServerError, KeyError) as exc:
+                if self._auth_manager is None or failed_client is None or not _is_auth_expired(exc):
+                    raise
+                return await self._refresh_auth_and_retry(
+                    failed_client, func, args, kwargs, timeout, exc
+                )
         finally:
             # Known limitation: on timeout/cancellation the to_thread worker
             # may still be running when we decrement, so a later patch window
@@ -215,6 +240,39 @@ class YTMusicService:
             self._inflight -= 1
             if self._inflight == 0:
                 self._no_inflight.set()
+
+    async def _refresh_auth_and_retry(
+        self,
+        failed_client: Any,
+        func: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        timeout: int | None,
+        error: BaseException,
+    ) -> Any:
+        auth_manager = self._auth_manager
+        if auth_manager is None:
+            raise error
+        async with self._auth_refresh_lock:
+            if self._ytm is failed_client or self._ytm is None:
+                logger.info("YouTube Music session expired; refreshing browser credentials")
+                if self._on_auth_refresh is not None:
+                    try:
+                        await self._on_auth_refresh()
+                    except Exception:
+                        logger.exception("Authentication refresh notification failed")
+                if not await asyncio.to_thread(auth_manager.try_auto_refresh):
+                    logger.warning("Automatic YouTube Music session refresh failed")
+                    raise error
+                with self._client_init_lock:
+                    self._ytm = None
+                logger.info("YouTube Music session refreshed")
+
+            method_name = getattr(func, "__name__", "")
+            retry_func = getattr(self.client, method_name, None)
+            if not callable(retry_func):
+                raise RuntimeError(f"Cannot retry YTMusic method {method_name!r}")
+            return await self._run(retry_func, *args, timeout=timeout, **kwargs)
 
     async def _run(self, func: Any, *args: Any, timeout: int | None = None, **kwargs: Any) -> Any:
         """``_call`` without the patch-window gate (the ordered call itself uses this)."""

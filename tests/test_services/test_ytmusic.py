@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import requests
@@ -83,6 +83,65 @@ class TestCallNarrowedCatch:
         assert ytmusic_service._consecutive_api_failures == 0, (
             "The failure counter must be reset after a reinit."
         )
+
+
+class TestAuthAutoRefresh:
+    async def test_refreshes_browser_auth_and_retries_401(self):
+        from ytmusicapi.exceptions import YTMusicServerError
+
+        class ExpiredClient:
+            def rate_song(self, *_args):
+                raise YTMusicServerError("Server returned HTTP 401: Unauthorized.\n")
+
+        fresh_client = MagicMock()
+        fresh_client.rate_song.return_value = "ok"
+        auth_manager = MagicMock()
+        auth_manager.try_auto_refresh.return_value = True
+        auth_manager.create_ytmusic_client.return_value = fresh_client
+        on_auth_refresh = AsyncMock()
+        service = make_ytmusic_service(
+            _ytm=ExpiredClient(),
+            _auth_manager=auth_manager,
+            _on_auth_refresh=on_auth_refresh,
+        )
+
+        result = await service._call(service.client.rate_song, "abc", "LIKE")
+
+        assert result == "ok"
+        on_auth_refresh.assert_awaited_once_with()
+        auth_manager.try_auto_refresh.assert_called_once_with()
+        auth_manager.create_ytmusic_client.assert_called_once_with(user=None)
+        fresh_client.rate_song.assert_called_once_with("abc", "LIKE")
+
+    async def test_failed_refresh_preserves_auth_expired_result(self):
+        from ytmusicapi.exceptions import YTMusicServerError
+
+        class ExpiredClient:
+            def rate_song(self, *_args):
+                raise YTMusicServerError("Server returned HTTP 401: Unauthorized.\n")
+
+        auth_manager = MagicMock()
+        auth_manager.try_auto_refresh.return_value = False
+        service = make_ytmusic_service(_ytm=ExpiredClient(), _auth_manager=auth_manager)
+
+        assert await service.rate_song("abc", "LIKE") == "auth_expired"
+
+    async def test_refreshes_auth_shaped_parser_failure(self):
+        class ExpiredClient:
+            def get_liked_songs(self):
+                raise KeyError("response contains signInEndpoint: Sign in to continue")
+
+        fresh_client = MagicMock()
+        fresh_client.get_liked_songs.return_value = {"tracks": []}
+        auth_manager = MagicMock()
+        auth_manager.try_auto_refresh.return_value = True
+        auth_manager.create_ytmusic_client.return_value = fresh_client
+        service = make_ytmusic_service(_ytm=ExpiredClient(), _auth_manager=auth_manager)
+
+        result = await service._call(service.client.get_liked_songs)
+
+        assert result == {"tracks": []}
+        auth_manager.try_auto_refresh.assert_called_once_with()
 
 
 class TestClientThreadSafety:

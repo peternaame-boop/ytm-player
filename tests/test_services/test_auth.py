@@ -1,6 +1,51 @@
-"""Tests for ytm_player.services.auth._normalize_raw_headers."""
+"""Tests for ytm_player.services.auth."""
 
-from ytm_player.services.auth import _normalize_raw_headers
+import json
+from unittest.mock import MagicMock
+
+from ytm_player.services.auth import AuthManager, _normalize_raw_headers
+
+
+class TestAutoRefresh:
+    def test_reuses_cookies_found_during_browser_detection(self, tmp_path, monkeypatch):
+        manager = AuthManager(config_dir=tmp_path, auth_file=tmp_path / "auth.json")
+        cookies = [MagicMock()]
+        detect = MagicMock(return_value=("brave", cookies))
+        save = MagicMock(return_value=True)
+        monkeypatch.setattr(manager, "_detect_browser", detect)
+        monkeypatch.setattr(manager, "_save_youtube_cookies", save)
+
+        assert manager.try_auto_refresh()
+
+        detect.assert_called_once_with()
+        save.assert_called_once_with(cookies, first_valid=True)
+
+    def test_silent_refresh_only_probes_preferred_account(self, tmp_path, monkeypatch, capsys):
+        auth_file = tmp_path / "auth.json"
+        auth_file.write_text(json.dumps({"x-goog-authuser": "2"}))
+        probed: list[int] = []
+
+        class Cookie:
+            name = "__Secure-3PAPISID"
+            value = "test"
+
+        def fake_ytmusic(path):
+            authuser = int(json.loads(open(path).read())["x-goog-authuser"])
+            probed.append(authuser)
+            client = MagicMock()
+            client.get_account_info.return_value = {
+                "accountName": "Test",
+                "channelHandle": "@test",
+            }
+            return client
+
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", fake_ytmusic)
+        manager = AuthManager(config_dir=tmp_path, auth_file=auth_file)
+
+        assert manager._save_youtube_cookies([Cookie()], first_valid=True)
+        assert probed == [2]
+        assert json.loads(auth_file.read_text())["x-goog-authuser"] == "2"
+        assert capsys.readouterr().out == ""
 
 
 class TestStandardFormat:

@@ -22,9 +22,11 @@ def make_ytmusic_service(**overrides):
     svc._auth_path = MagicMock()
     svc._auth_manager = None
     svc._user = None
+    svc._on_auth_refresh = None
     svc._ytm = MagicMock(name="fake-ytm-client")
     svc._consecutive_api_failures = 0
     svc._client_init_lock = threading.Lock()
+    svc._auth_refresh_lock = asyncio.Lock()
     svc._order_lock = asyncio.Lock()
     svc._no_patch = asyncio.Event()
     svc._no_patch.set()

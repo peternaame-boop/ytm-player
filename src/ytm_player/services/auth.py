@@ -147,12 +147,12 @@ class AuthManager:
         if self._cookies_file and self._refresh_from_cookies_file(Path(self._cookies_file)):
             return True
 
-        browser = self._detect_browser()
-        if browser is None:
+        detected = self._detect_browser()
+        if detected is None:
             return False
+        browser, cookies = detected
         try:
-            if self._extract_and_save(browser):
-                return self.validate()
+            return self._save_youtube_cookies(cookies, first_valid=True)
         except Exception:
             logger.debug("Auto-refresh failed", exc_info=True)
         return False
@@ -196,10 +196,11 @@ class AuthManager:
         # Auto-detect browser.
         detected = self._detect_browser()
         if detected:
-            print(f"  Found YouTube cookies in {detected}.")
+            browser, cookies = detected
+            print(f"  Found YouTube cookies in {browser}.")
             print("  Extracting automatically...")
             print()
-            if self._extract_and_save(detected, interactive=True):
+            if self._save_youtube_cookies(cookies, interactive=True):
                 return True
             print("  Auto-extraction failed. Falling back to manual setup.")
             print()
@@ -209,8 +210,8 @@ class AuthManager:
     # ── Browser cookie extraction ────────────────────────────────────
 
     @staticmethod
-    def _detect_browser() -> str | None:
-        """Find a browser that has YouTube cookies."""
+    def _detect_browser() -> tuple[str, list] | None:
+        """Find a browser that has YouTube cookies and return both."""
         try:
             from yt_dlp.cookies import extract_cookies_from_browser
         except ImportError:
@@ -222,12 +223,9 @@ class AuthManager:
         for browser in _BROWSERS:
             try:
                 jar = extract_cookies_from_browser(browser)
-                has_sapisid = any(
-                    c.name in ("SAPISID", "__Secure-3PAPISID") and c.domain == ".youtube.com"
-                    for c in jar
-                )
-                if has_sapisid:
-                    return browser
+                yt_cookies = [c for c in jar if c.domain == ".youtube.com"]
+                if any(c.name in ("SAPISID", "__Secure-3PAPISID") for c in yt_cookies):
+                    return browser, yt_cookies
             except Exception:
                 logger.debug("Browser %s not available", browser, exc_info=True)
                 continue
@@ -296,7 +294,8 @@ class AuthManager:
             return False
 
         if self._save_youtube_cookies(yt_cookies, interactive=interactive):
-            print(f"  Cookies extracted from file and saved: {cookies_file}")
+            if interactive:
+                print(f"  Cookies extracted from file and saved: {cookies_file}")
             return True
         return False
 
@@ -319,11 +318,14 @@ class AuthManager:
             return False
 
         if self._save_youtube_cookies(yt_cookies, interactive=interactive):
-            print(f"  Cookies extracted from {browser} and saved.")
+            if interactive:
+                print(f"  Cookies extracted from {browser} and saved.")
             return True
         return False
 
-    def _save_youtube_cookies(self, cookies: list, interactive: bool = False) -> bool:
+    def _save_youtube_cookies(
+        self, cookies: list, interactive: bool = False, first_valid: bool = False
+    ) -> bool:
         """Persist YouTube cookie headers into auth.json."""
         cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
 
@@ -340,13 +342,7 @@ class AuthManager:
         base_headers["cookie"] = cookie_str
         base_headers["authorization"] = get_authorization(sapisid + " " + origin)
 
-        # Probe x-goog-authuser indices 0–4. The SAPISID cookie is shared across
-        # all Google accounts signed into the browser — x-goog-authuser is a
-        # server-side account selector with no mapping to cookie names.
-        authuser_indices = list(range(5))
-
-        # Probe each account index and collect all valid YouTube Music accounts.
-        # Capture any previously saved account preference before probing overwrites the auth file.
+        # Capture any previously saved account preference before probing.
         preferred_index_before_probe: int | None = None
         if self._auth_file.exists():
             try:
@@ -354,6 +350,14 @@ class AuthManager:
                 preferred_index_before_probe = int(existing.get("x-goog-authuser", 0))
             except (OSError, json.JSONDecodeError, ValueError):
                 pass
+
+        # Auto-refresh only needs the preferred account (or the first valid
+        # fallback), while setup lists every available account.
+        authuser_indices = list(range(5))
+        if first_valid and preferred_index_before_probe in authuser_indices:
+            authuser_indices.remove(preferred_index_before_probe)
+            authuser_indices.insert(0, preferred_index_before_probe)
+
         self._config_dir.mkdir(parents=True, exist_ok=True)
         valid_accounts: list[tuple[int, str, str]] = []  # (authuser_index, accountName, handle)
         for authuser in authuser_indices:
@@ -369,6 +373,8 @@ class AuthManager:
                 handle = account.get("channelHandle") or ""
                 if name:
                     valid_accounts.append((authuser, name, handle))
+                    if first_valid:
+                        break
             except Exception:
                 logger.debug("x-goog-authuser=%d did not work, skipping", authuser)
             finally:
@@ -392,7 +398,7 @@ class AuthManager:
             parts.append(f"browser slot {authuser}")
             return "  ·  ".join(parts)
 
-        if len(valid_accounts) == 1:
+        if interactive and len(valid_accounts) == 1:
             chosen_index, chosen_name, chosen_handle = valid_accounts[0]
             print(f"  Authenticated as: {_label(chosen_index, chosen_name, chosen_handle)}")
         elif interactive:
