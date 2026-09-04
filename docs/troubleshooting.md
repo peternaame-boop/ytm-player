@@ -46,7 +46,7 @@ For Windows-specific libmpv setup, see [docs/installation.md#windows-setup](inst
 ## Authentication fails
 
 - Make sure you're signed in to YouTube Music (free or Premium) in your browser.
-- Try a different browser: `ytm setup` auto-detects Chrome, Firefox, Brave, Edge, Chromium, Vivaldi, Opera, Helium.
+- Try a different browser: `ytm setup` auto-detects Chrome, Firefox, Zen, Brave, Edge, Chromium, Vivaldi, Opera, Helium.
 - If auto-detection fails, use the manual paste method: `ytm setup --manual`.
 - Re-run `ytm setup` to re-authenticate.
 - For multi-account or Brand Account setups: `ytm setup` will detect multiple Google accounts and prompt you to pick. Brand Accounts can also be configured via `[general] brand_account_id` in `config.toml`.
