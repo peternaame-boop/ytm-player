@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from textual.events import Key
+
 from ytm_player.app._keys import _MAX_KEY_COUNT, KeyHandlingMixin
 
 
@@ -39,6 +41,21 @@ class TestNormalizeKey:
 
     def test_question_mark_remap(self):
         assert KeyHandlingMixin._normalize_key(_make_event("question_mark")) == "?"
+
+    def test_symbolic_punctuation_uses_character(self):
+        """Regression for #143: ">" "<" "^" reach the app as symbolic names."""
+        for key, char in [
+            ("greater_than_sign", ">"),
+            ("less_than_sign", "<"),
+            ("circumflex_accent", "^"),
+        ]:
+            assert KeyHandlingMixin._normalize_key(Key(key, char)) == char
+
+    def test_space_keeps_its_name(self):
+        assert KeyHandlingMixin._normalize_key(Key("space", " ")) == "space"
+
+    def test_modifier_wins_over_character(self):
+        assert KeyHandlingMixin._normalize_key(Key("ctrl+r", None)) == "C-r"
 
     def test_unmodified_passthrough(self):
         assert KeyHandlingMixin._normalize_key(_make_event("j")) == "j"
