@@ -161,6 +161,21 @@ class MacOSEventTapService:
             logger.debug("Failed to invalidate macOS event tap", exc_info=True)
 
     def _tap_callback(self, _proxy: Any, event_type: int, event: Any, _refcon: Any) -> Any:
+        if event_type in (
+            Quartz.kCGEventTapDisabledByTimeout,
+            Quartz.kCGEventTapDisabledByUserInput,
+        ):
+            # macOS disables the tap if the callback doesn't return quickly enough
+            # (or on certain user-input floods). Without re-arming here, media keys
+            # silently fall through to Apple Music for the rest of the process's life.
+            if self._tap is not None:
+                try:
+                    Quartz.CGEventTapEnable(self._tap, True)
+                    logger.info("macOS disabled the media key event tap; re-enabled it")
+                except Exception:
+                    logger.debug("Failed to re-enable macOS event tap", exc_info=True)
+            return event
+
         if not self._running or event_type != Quartz.NSSystemDefined:
             return event
 
