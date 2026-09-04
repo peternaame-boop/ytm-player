@@ -684,3 +684,26 @@ class TestAddHistoryItem:
         ytmusic_service._ytm.add_history_item = MagicMock(side_effect=RuntimeError("boom"))
 
         assert await ytmusic_service.add_history_item("vid123") is False
+
+
+class TestGetArtistAlbums:
+    async def test_passes_limit_none_and_returns_list(self):
+        service = make_ytmusic_service()
+        service._ytm.get_artist_albums = MagicMock(return_value=[{"title": "A"}])
+
+        result = await service.get_artist_albums("MPAD_x", "params")
+
+        assert result == [{"title": "A"}]
+        service._ytm.get_artist_albums.assert_called_once_with("MPAD_x", "params", limit=None)
+
+    async def test_non_list_result_becomes_empty(self):
+        service = make_ytmusic_service()
+        service._ytm.get_artist_albums = MagicMock(return_value=None)
+
+        assert await service.get_artist_albums("MPAD_x", "params") == []
+
+    async def test_failure_returns_empty(self):
+        service = make_ytmusic_service()
+        service._ytm.get_artist_albums = MagicMock(side_effect=RuntimeError("boom"))
+
+        assert await service.get_artist_albums("MPAD_x", "params") == []
