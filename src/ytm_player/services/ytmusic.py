@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import threading
+import weakref
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -192,6 +193,13 @@ class YTMusicService:
         # add_playlist_items() call. Lets callers stamp freshly-added rows with
         # the setVideoId they need for later removal, without a reload.
         self.last_added_set_video_ids: dict[str, str] = {}
+        # Channel ID each client this service built was bound to (see
+        # AuthManager.create_bound_client). An expired call is only replayed
+        # on a replacement client carrying the SAME identity; None (no
+        # account record) means no automatic renewal for that client.
+        self._client_identities: weakref.WeakKeyDictionary[Any, str | None] = (
+            weakref.WeakKeyDictionary()
+        )
 
     @property
     def client(self) -> YTMusic:
@@ -205,7 +213,9 @@ class YTMusicService:
                 # between our None check and acquiring the lock.
                 if self._ytm is None:
                     if self._auth_manager is not None:
-                        self._ytm = self._auth_manager.create_ytmusic_client(user=self._user)
+                        client, channel_id = self._auth_manager.create_bound_client(user=self._user)
+                        self._client_identities[client] = channel_id
+                        self._ytm = client
                     else:
                         self._ytm = YTMusic(str(self._auth_path), user=self._user)
         return self._ytm
@@ -253,6 +263,18 @@ class YTMusicService:
         auth_manager = self._auth_manager
         if auth_manager is None:
             raise error
+        method_name = getattr(func, "__name__", "")
+        # The call is bound to the account of the client it failed on. A
+        # replacement client for any other account — `ytm setup` switching
+        # accounts while the call was pending, or between the renewal check
+        # and the rebuild below — must not have the call replayed on it.
+        identity = self._client_identities.get(failed_client)
+        if identity is None:
+            logger.warning(
+                "YouTube Music session expired and this client has no recorded account "
+                "identity; not renewing automatically. Run `ytm setup`."
+            )
+            raise error
         async with self._auth_refresh_lock:
             if self._ytm is failed_client or self._ytm is None:
                 logger.info("YouTube Music session expired; refreshing browser credentials")
@@ -261,15 +283,22 @@ class YTMusicService:
                         await self._on_auth_refresh()
                     except Exception:
                         logger.exception("Authentication refresh notification failed")
-                if not await asyncio.to_thread(auth_manager.try_auto_refresh):
+                if not await asyncio.to_thread(auth_manager.try_auto_refresh, identity):
                     logger.warning("Automatic YouTube Music session refresh failed")
                     raise error
                 with self._client_init_lock:
                     self._ytm = None
                 logger.info("YouTube Music session refreshed")
 
-            method_name = getattr(func, "__name__", "")
-            retry_func = getattr(self.client, method_name, None)
+            client = self.client
+            if self._client_identities.get(client) != identity:
+                logger.warning(
+                    "The renewed YouTube Music session belongs to a different account; "
+                    "not retrying the pending %s",
+                    method_name or "call",
+                )
+                raise error
+            retry_func = getattr(client, method_name, None)
             if not callable(retry_func):
                 raise RuntimeError(f"Cannot retry YTMusic method {method_name!r}")
             return await self._run(retry_func, *args, timeout=timeout, **kwargs)

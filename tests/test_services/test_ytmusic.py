@@ -85,6 +85,9 @@ class TestCallNarrowedCatch:
         )
 
 
+_CHANNEL = "UCa1b2c3d4e5f6g7h8i9j0k1"
+
+
 class TestAuthAutoRefresh:
     async def test_refreshes_browser_auth_and_retries_401(self):
         from ytmusicapi.exceptions import YTMusicServerError
@@ -97,20 +100,22 @@ class TestAuthAutoRefresh:
         fresh_client.rate_song.return_value = "ok"
         auth_manager = MagicMock()
         auth_manager.try_auto_refresh.return_value = True
-        auth_manager.create_ytmusic_client.return_value = fresh_client
+        auth_manager.create_bound_client.return_value = (fresh_client, _CHANNEL)
         on_auth_refresh = AsyncMock()
+        expired = ExpiredClient()
         service = make_ytmusic_service(
-            _ytm=ExpiredClient(),
+            _ytm=expired,
             _auth_manager=auth_manager,
             _on_auth_refresh=on_auth_refresh,
         )
+        service._client_identities[expired] = _CHANNEL
 
         result = await service._call(service.client.rate_song, "abc", "LIKE")
 
         assert result == "ok"
         on_auth_refresh.assert_awaited_once_with()
-        auth_manager.try_auto_refresh.assert_called_once_with()
-        auth_manager.create_ytmusic_client.assert_called_once_with(user=None)
+        auth_manager.try_auto_refresh.assert_called_once_with(_CHANNEL)
+        auth_manager.create_bound_client.assert_called_once_with(user=None)
         fresh_client.rate_song.assert_called_once_with("abc", "LIKE")
 
     async def test_failed_refresh_preserves_auth_expired_result(self):
@@ -122,7 +127,9 @@ class TestAuthAutoRefresh:
 
         auth_manager = MagicMock()
         auth_manager.try_auto_refresh.return_value = False
-        service = make_ytmusic_service(_ytm=ExpiredClient(), _auth_manager=auth_manager)
+        expired = ExpiredClient()
+        service = make_ytmusic_service(_ytm=expired, _auth_manager=auth_manager)
+        service._client_identities[expired] = _CHANNEL
 
         assert await service.rate_song("abc", "LIKE") == "auth_expired"
 
@@ -135,13 +142,15 @@ class TestAuthAutoRefresh:
         fresh_client.get_liked_songs.return_value = {"tracks": []}
         auth_manager = MagicMock()
         auth_manager.try_auto_refresh.return_value = True
-        auth_manager.create_ytmusic_client.return_value = fresh_client
-        service = make_ytmusic_service(_ytm=ExpiredClient(), _auth_manager=auth_manager)
+        auth_manager.create_bound_client.return_value = (fresh_client, _CHANNEL)
+        expired = ExpiredClient()
+        service = make_ytmusic_service(_ytm=expired, _auth_manager=auth_manager)
+        service._client_identities[expired] = _CHANNEL
 
         result = await service._call(service.client.get_liked_songs)
 
         assert result == {"tracks": []}
-        auth_manager.try_auto_refresh.assert_called_once_with()
+        auth_manager.try_auto_refresh.assert_called_once_with(_CHANNEL)
 
 
 class TestClientThreadSafety:

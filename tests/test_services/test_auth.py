@@ -19,7 +19,7 @@ class TestAutoRefresh:
         assert manager.try_auto_refresh()
 
         detect.assert_called_once_with()
-        save.assert_called_once_with(cookies, stream_jar=jar)
+        save.assert_called_once_with(cookies, stream_jar=jar, expected_channel_id=None)
 
     def test_silent_refresh_refuses_without_recorded_identity(self, tmp_path, monkeypatch, capsys):
         """No account.json (a session set up before identities were recorded):

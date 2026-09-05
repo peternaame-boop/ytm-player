@@ -315,6 +315,29 @@ class AuthManager:
         """Create a YTMusic client from the stored auth file."""
         return YTMusic(str(self._auth_file), user=user)
 
+    def create_bound_client(self, user: str | None = None) -> tuple[YTMusic, str | None]:
+        """Create a client from auth.json together with the channel ID that
+        account.json records for exactly those bytes (None without a valid record).
+
+        Read, build, re-read: if auth.json changed underneath (another
+        process ran ``ytm setup``), the client and the identity could
+        describe different sessions, so the build is retried on the new files.
+        """
+        for _ in range(3):
+            try:
+                before = self._auth_file.read_bytes()
+            except OSError:
+                return YTMusic(str(self._auth_file), user=user), None
+            recorded = self._load_recorded_identity(before)
+            client = YTMusic(str(self._auth_file), user=user)
+            try:
+                unchanged = self._auth_file.read_bytes() == before
+            except OSError:
+                unchanged = False
+            if unchanged:
+                return client, recorded.channel_id if recorded is not None else None
+        raise RuntimeError(f"{self._auth_file} kept changing while creating the client")
+
     def validate(self) -> bool:
         """Verify that the auth credentials actually work.
 
@@ -336,13 +359,18 @@ class AuthManager:
 
     # ── Auto-refresh ──────────────────────────────────────────────────
 
-    def try_auto_refresh(self) -> bool:
+    def try_auto_refresh(self, expected_channel_id: str | None = None) -> bool:
         """Attempt to silently refresh auth from cookies/browser.
 
         Called when the app detects an auth failure at runtime. Returns
-        True if fresh cookies were extracted and validation passed.
+        True if fresh cookies were extracted and validation passed. Only the
+        account recorded by the last ``ytm setup`` is accepted; when the
+        caller knows which account its failed client belonged to, pass it
+        as *expected_channel_id* and the recorded account must be that one.
         """
-        if self._cookies_file and self._refresh_from_cookies_file(Path(self._cookies_file)):
+        if self._cookies_file and self._refresh_from_cookies_file(
+            Path(self._cookies_file), expected_channel_id=expected_channel_id
+        ):
             return True
 
         detected = self._detect_browser()
@@ -350,7 +378,9 @@ class AuthManager:
             return False
         browser, cookies, jar = detected
         try:
-            return self._save_youtube_cookies(cookies, stream_jar=jar)
+            return self._save_youtube_cookies(
+                cookies, stream_jar=jar, expected_channel_id=expected_channel_id
+            )
         except Exception:
             logger.debug("Auto-refresh failed", exc_info=True)
         return False
@@ -462,13 +492,20 @@ class AuthManager:
         except OSError:
             logger.warning("Failed to restore previous %s", label, exc_info=True)
 
-    def _refresh_from_cookies_file(self, cookies_file: Path, interactive: bool = False) -> bool:
+    def _refresh_from_cookies_file(
+        self,
+        cookies_file: Path,
+        interactive: bool = False,
+        expected_channel_id: str | None = None,
+    ) -> bool:
         """Refresh auth from cookies file without losing working credentials."""
         backup = self._backup_bytes(self._auth_file, "auth file")
         account_backup = self._backup_bytes(self._account_file, "account file")
         stream_backup = self._backup_bytes(self._stream_cookies_file, "stream cookiejar")
 
-        if not self._extract_and_save_from_cookies_file(cookies_file, interactive=interactive):
+        if not self._extract_and_save_from_cookies_file(
+            cookies_file, interactive=interactive, expected_channel_id=expected_channel_id
+        ):
             return False
 
         try:
@@ -483,7 +520,10 @@ class AuthManager:
         return False
 
     def _extract_and_save_from_cookies_file(
-        self, cookies_file: Path, interactive: bool = False
+        self,
+        cookies_file: Path,
+        interactive: bool = False,
+        expected_channel_id: str | None = None,
     ) -> bool:
         """Extract YouTube cookies from a Netscape cookies.txt file and write auth.json."""
         if not cookies_file.exists():
@@ -517,7 +557,12 @@ class AuthManager:
             logger.warning("No youtube.com cookies found in %s", cookies_file)
             return False
 
-        if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
+        if self._save_youtube_cookies(
+            yt_cookies,
+            interactive=interactive,
+            stream_jar=jar,
+            expected_channel_id=expected_channel_id,
+        ):
             if interactive:
                 print(f"  Cookies extracted from file and saved: {cookies_file}")
             return True
@@ -550,6 +595,7 @@ class AuthManager:
         cookies: list,
         interactive: bool = False,
         stream_jar: Iterable[Cookie] | None = None,
+        expected_channel_id: str | None = None,
     ) -> bool:
         """Persist YouTube cookie headers into auth.json and record the account.
 
@@ -583,7 +629,7 @@ class AuthManager:
         if interactive:
             chosen = self._select_account_interactively(base_headers)
         else:
-            chosen = self._find_recorded_account(base_headers)
+            chosen = self._find_recorded_account(base_headers, expected_channel_id)
         if chosen is None:
             return False
 
@@ -666,13 +712,27 @@ class AuthManager:
             print(_NO_RENEWAL_NOTE)
         return chosen
 
-    def _find_recorded_account(self, base_headers: dict) -> _ProbedAccount | None:
-        """Silent renewal: locate the account recorded by the last setup, or None."""
+    def _find_recorded_account(
+        self, base_headers: dict, expected_channel_id: str | None = None
+    ) -> _ProbedAccount | None:
+        """Silent renewal: locate the account recorded by the last setup, or None.
+
+        With *expected_channel_id* (the account of the client whose call
+        failed), the recorded account must be that one: a ``ytm setup`` for
+        another account that landed in the meantime must not renew on its
+        behalf.
+        """
         recorded = self._load_recorded_identity()
         if recorded is None:
             logger.warning(
                 "Automatic session renewal refused: no account identity is recorded for "
                 "this session. Run `ytm setup` once to enable it."
+            )
+            return None
+        if expected_channel_id is not None and recorded.channel_id != expected_channel_id:
+            logger.warning(
+                "Automatic session renewal refused: the saved session now belongs to a "
+                "different account than the one that failed."
             )
             return None
 
@@ -776,15 +836,17 @@ class AuthManager:
         except OSError:
             logger.warning("Could not remove %s", self._account_file, exc_info=True)
 
-    def _load_recorded_identity(self) -> _RecordedIdentity | None:
+    def _load_recorded_identity(self, auth_bytes: bytes | None = None) -> _RecordedIdentity | None:
         """The identity account.json records for the CURRENT auth.json, or None.
 
         None (renewal refused) when the record is missing, malformed, has
         no channel ID, or was written for different auth.json bytes.
+        *auth_bytes* lets a caller that already read auth.json check the
+        record against exactly that snapshot.
         """
         try:
             data = json.loads(self._account_file.read_text(encoding="utf-8"))
-            current = self._auth_file.read_bytes()
+            current = auth_bytes if auth_bytes is not None else self._auth_file.read_bytes()
         except (OSError, json.JSONDecodeError):
             logger.debug("No usable account record at %s", self._account_file, exc_info=True)
             return None

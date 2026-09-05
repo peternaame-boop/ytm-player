@@ -241,6 +241,23 @@ class _Expired:
         raise EXPIRED
 
 
+def _service_for(auth: AuthManager, channel_id: str | None):
+    """A service whose current client (account *channel_id*) has an expired session."""
+    expired = _Expired()
+    service = make_ytmusic_service(_ytm=expired, _auth_manager=auth)
+    if channel_id is not None:
+        service._client_identities[expired] = channel_id
+    return service
+
+
+def _switch_session_to(auth: AuthManager, slot: str, channel_id: str) -> None:
+    """What `ytm setup` in another process does: new auth.json + matching record."""
+    auth.auth_file.write_bytes(
+        json.dumps({"cookie": "SAPISID=new", "x-goog-authuser": slot}).encode()
+    )
+    _record(auth, slot, channel_id)
+
+
 @pytest.fixture
 def browser(monkeypatch):
     monkeypatch.setattr(
@@ -275,7 +292,7 @@ class TestSilentRenewal:
         auth = _auth(tmp_path, "2")
         calls: dict[int, MagicMock] = {}
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({0: OTHER}, calls))
-        service = make_ytmusic_service(_ytm=_Expired(), _auth_manager=auth)
+        service = _service_for(auth, ME_ID)
 
         assert await service.rate_song("vid", "LIKE") == "auth_expired"
         assert not any(c.rate_song.called for c in calls.values())
@@ -284,7 +301,7 @@ class TestSilentRenewal:
         auth = _auth(tmp_path, "2")
         calls: dict[int, MagicMock] = {}
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({2: ME}, calls))
-        service = make_ytmusic_service(_ytm=_Expired(), _auth_manager=auth)
+        service = _service_for(auth, ME_ID)
 
         assert await service.rate_song("vid", "LIKE") == "success"
         assert _saved_slot(auth) == "2"
@@ -369,6 +386,113 @@ class TestSilentRenewal:
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({2: ME}))
 
         assert auth.try_auto_refresh() is False
+
+
+# ── A pending call is bound to the account of the client it failed on ───────
+
+
+class TestPendingCallAcrossAccountSwitch:
+    async def test_setup_switching_accounts_while_a_call_is_pending_does_not_replay_it(
+        self, tmp_path, browser, monkeypatch
+    ):
+        auth = _auth(tmp_path, "0")  # session + record: account A
+        service = _service_for(auth, ME_ID)  # the client the like is sent from
+        # `ytm setup` for account B lands while A's call is still pending.
+        _switch_session_to(auth, "1", OTHER_ID)
+        calls: dict[int, MagicMock] = {}
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({1: OTHER}, calls))
+
+        assert await service.rate_song("vid", "LIKE") == "auth_expired"
+        assert not any(c.rate_song.called for c in calls.values())
+        assert _saved_slot(auth) == "1"  # B's setup is left alone
+
+    async def test_switch_between_renewal_and_client_rebuild_is_not_replayed(
+        self, tmp_path, browser, monkeypatch
+    ):
+        auth = _auth(tmp_path, "0")
+        service = _service_for(auth, ME_ID)
+        calls: dict[int, MagicMock] = {}
+        monkeypatch.setattr(
+            "ytm_player.services.auth.YTMusic", _fake_ytmusic({0: ME, 1: OTHER}, calls)
+        )
+        real_refresh = auth.try_auto_refresh
+
+        def _refresh_then_setup_switches(expected_channel_id=None):
+            assert real_refresh(expected_channel_id) is True  # A renews fine...
+            _switch_session_to(auth, "1", OTHER_ID)  # ...then setup switches to B
+            return True
+
+        monkeypatch.setattr(auth, "try_auto_refresh", _refresh_then_setup_switches)
+
+        assert await service.rate_song("vid", "LIKE") == "auth_expired"
+        assert not any(c.rate_song.called for c in calls.values())
+
+    async def test_current_client_of_another_account_is_not_used_for_the_retry(
+        self, tmp_path, browser, monkeypatch
+    ):
+        """Another caller already rebuilt the client — for account B."""
+        auth = _auth(tmp_path, "0")
+        expired_a = _Expired()
+        client_b = MagicMock(name="client-b")
+        service = make_ytmusic_service(_ytm=client_b, _auth_manager=auth)
+        service._client_identities[expired_a] = ME_ID
+        service._client_identities[client_b] = OTHER_ID
+        refresh = MagicMock(return_value=True)
+        monkeypatch.setattr(auth, "try_auto_refresh", refresh)
+
+        with pytest.raises(YTMusicServerError):
+            await service._call(expired_a.rate_song, "vid", "LIKE")
+        client_b.rate_song.assert_not_called()
+        refresh.assert_not_called()
+
+    async def test_client_without_recorded_identity_is_not_renewed(
+        self, tmp_path, browser, monkeypatch
+    ):
+        auth = _auth(tmp_path, "0")
+        service = _service_for(auth, None)
+        refresh = MagicMock(return_value=True)
+        monkeypatch.setattr(auth, "try_auto_refresh", refresh)
+
+        assert await service.rate_song("vid", "LIKE") == "auth_expired"
+        refresh.assert_not_called()
+
+    def test_bound_client_carries_the_identity_of_the_bytes_it_was_built_from(
+        self, tmp_path, browser, monkeypatch
+    ):
+        auth = _auth(tmp_path, "0")
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({0: ME}))
+
+        client, channel_id = auth.create_bound_client()
+
+        assert channel_id == ME_ID
+        assert client.get_account_info() == ME_INFO
+
+    def test_bound_client_is_rebuilt_when_auth_changes_during_construction(
+        self, tmp_path, browser, monkeypatch
+    ):
+        auth = _auth(tmp_path, "0")
+        built: list[str] = []
+
+        def _factory(path, user=None):
+            built.append(_saved_slot(auth))
+            if len(built) == 1:
+                _switch_session_to(auth, "1", OTHER_ID)  # setup lands mid-build
+            return MagicMock(name=f"client-{built[-1]}")
+
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _factory)
+
+        _client, channel_id = auth.create_bound_client()
+
+        assert built == ["0", "1"]
+        assert channel_id == OTHER_ID  # identity of the files the client was built from
+
+    def test_bound_client_without_record_has_no_identity(self, tmp_path, browser, monkeypatch):
+        auth = _auth(tmp_path, "0", record=None)
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({0: ME}))
+
+        _client, channel_id = auth.create_bound_client()
+
+        assert channel_id is None
 
 
 # ── Setup paths record the identity ─────────────────────────────────────────
