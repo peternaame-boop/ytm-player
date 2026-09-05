@@ -197,9 +197,16 @@ class TestRenewalCooldown:
         # The KeyError form of an expired session (a sign-in endpoint where
         # data was expected) is the one that also feeds _run's consecutive-
         # failure counter, so a burst of them replaces the client mid-way.
-        expired = _Client(expired=True, error=KeyError("signInEndpoint"))
+        # Clients rebuilt from the same expired files fail the same way;
+        # which client each task binds to depends on task start order,
+        # which asyncio doesn't fix (it differs between 3.10 and 3.14).
+        expired_keyerror = {"expired": True, "error": KeyError("signInEndpoint")}
+        expired = _Client(**expired_keyerror)
         svc, manager, _ = _service(expired, renew=False)
-        manager.create_bound_client.side_effect = lambda user=None: (_Client(expired=True), CHANNEL)
+        manager.create_bound_client.side_effect = lambda user=None: (
+            _Client(**expired_keyerror),
+            CHANNEL,
+        )
         burst = ytmusic_module._MAX_API_FAILURES_BEFORE_REINIT * 3
 
         results = await asyncio.gather(*(svc.rate_song(f"v{i}", "LIKE") for i in range(burst)))
@@ -281,11 +288,22 @@ class TestPatchWindowSafety:
 
         assert [bool(r) for r in results] == [True, True, True, True]
         manager.try_auto_refresh.assert_called_once_with(CHANNEL)
+        # Which client a task bound to depends on task start order; the
+        # invariant is that every request either client saw carried exactly
+        # its own sort params, and each request reached the replacement once.
+        expected = {
+            ("browse", "PL1"): {"browseId": "PL1", "params": RECENTLY_ADDED},
+            ("browse", "PL2"): {"browseId": "PL2"},
+            ("browse", "PL3"): {"browseId": "PL3", "params": A_TO_Z},
+            ("player", "v1"): {"videoId": "v1"},
+        }
         for client in (expired, replacement):
-            assert client.browse_bodies("PL1") == [{"browseId": "PL1", "params": RECENTLY_ADDED}]
-            assert client.browse_bodies("PL2") == [{"browseId": "PL2"}]
-            assert client.browse_bodies("PL3") == [{"browseId": "PL3", "params": A_TO_Z}]
-            assert [b for e, b in client.requests if e == "player"] == [{"videoId": "v1"}]
+            for endpoint, body in client.requests:
+                key = (endpoint, body.get("browseId") or body.get("videoId"))
+                assert body == expected[key], (client is expired, endpoint, body)
+        assert sorted(
+            (e, b.get("browseId") or b.get("videoId")) for e, b in replacement.requests
+        ) == sorted(expected)
         assert _send_is_original(expired) and _send_is_original(replacement)
         assert svc._no_patch.is_set() and not svc._order_lock.locked()
 
