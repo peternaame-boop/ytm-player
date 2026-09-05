@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 import sys
@@ -18,7 +19,6 @@ else:
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
-from textual.theme import Theme
 
 from ytm_player.app._ipc import IPCMixin
 from ytm_player.app._keys import KeyHandlingMixin
@@ -441,9 +441,14 @@ class YTMPlayerApp(
             # ansi-dark/ansi-light base themes (or a custom theme built on
             # ansi_* tokens) into plain named colors here, changing what
             # those tokens actually mean to Textual's ColorSystem.
+            #
+            # Only the colours are overridden. Everything else on the base
+            # theme -- ansi mode, panel, boost, luminosity spread, text
+            # alpha, dark, variables -- also feeds the ColorSystem and must
+            # survive the rebuild.
             toml_colors = _read_theme_toml_cached()
-            updated_theme = Theme(
-                name=t.name,
+            updated_theme = dataclasses.replace(
+                t,
                 primary=toml_colors.get("primary", t.primary),
                 secondary=toml_colors.get("secondary", t.secondary),
                 warning=toml_colors.get("warning", t.warning),
@@ -453,8 +458,6 @@ class YTMPlayerApp(
                 foreground=toml_colors.get("foreground", t.foreground),
                 background=toml_colors.get("background", t.background),
                 surface=toml_colors.get("surface", t.surface),
-                dark=t.dark,
-                variables=t.variables,
             )
             self.register_theme(updated_theme)
             self.call_next(partial(self.refresh_css, animate=False))
