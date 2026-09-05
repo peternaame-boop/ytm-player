@@ -39,10 +39,11 @@ _DOWNLOAD_TIMEOUT = 5
 
 
 def _relative_luminance(hex_color: str) -> float | None:
-    """WCAG relative luminance of an ``#rrggbb`` colour, or None if it isn't one.
+    """WCAG relative luminance of a six-digit hex colour, or None if it isn't one.
 
-    Terminal-dependent colours (``ansi_default``, named colours) have no
-    RGB value the terminal is bound to, so they are not guessed at.
+    Accepts ``#rrggbb`` and ``rrggbb``. Terminal-dependent colours
+    (``ansi_default``, named colours) have no RGB value the terminal is
+    bound to, so they are not guessed at.
     """
     hex_str = hex_color.strip().lstrip("#")
     if len(hex_str) != 6:
@@ -70,8 +71,8 @@ def _readable_on(bg_hex: str, first: str, *others: str) -> str:
     assumed to be the light or the dark one: on a light theme the
     foreground is dark and the background light, the reverse of the
     stock theme. *first* wins ties and is kept whenever the comparison
-    isn't possible, i.e. the background or any candidate is not an
-    ``#rrggbb`` value.
+    isn't possible, i.e. the background or any candidate is not a
+    six-digit hex colour (with or without ``#``).
     """
     background = _relative_luminance(bg_hex)
     candidates = (first, *others)
