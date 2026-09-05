@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from ytm_player.config.settings import get_settings
-from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
+from ytm_player.services.yt_dlp_options import (
+    apply_configured_yt_dlp_options,
+    normalize_cookiefile,
+)
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -50,13 +53,21 @@ def _detect_stream_cookies() -> str | None:
     return str(STREAM_COOKIES_FILE) if STREAM_COOKIES_FILE.exists() else None
 
 
-def _stream_cookiejar_signature() -> tuple[str, int, int] | None:
-    """``(path, mtime_ns, size)`` of the stream cookiejar file, or None if absent.
+def _session_cookiejar_signature() -> tuple[str, int, int] | None:
+    """``(path, mtime_ns, size)`` of the stream cookiejar the resolver should be
+    using right now, or None.
 
-    Compared on every _get_ydl() call so a jar rewritten by ``ytm setup`` or a
-    mid-session auto-refresh is picked up by the next resolve instead of the
-    cached YoutubeDL instance keeping its stale in-memory copy.
+    None unless ``[yt_dlp] use_session_cookies`` is on (streaming is anonymous
+    by default) and no explicit ``[yt_dlp] cookies_file`` is configured (that
+    file is the user's own and goes through yt-dlp's ``cookiefile``), or when
+    the jar file doesn't exist. Compared on every _get_ydl() call so a jar
+    rewritten by ``ytm setup`` or a mid-session auto-refresh is picked up by
+    the next resolve instead of the cached YoutubeDL instance keeping its
+    stale in-memory copy.
     """
+    settings = get_settings().yt_dlp
+    if not settings.use_session_cookies or normalize_cookiefile(settings.cookies_file):
+        return None
     path = _detect_stream_cookies()
     if path is None:
         return None
@@ -148,7 +159,7 @@ class StreamResolver:
         # retried instead of caching a stale instance.
         self._ydl_generation = 0
         # Signature of the stream cookiejar file self._ydl was built against
-        # (see _stream_cookiejar_signature); None when there was no file.
+        # (see _session_cookiejar_signature); None when none was loaded.
         self._ydl_cookiejar_sig: tuple[str, int, int] | None = None
         # YoutubeDL is not thread-safe; a play resolve and a prefetch can run
         # on separate threads against the shared instance, so extract_info()
@@ -192,7 +203,8 @@ class StreamResolver:
         return apply_configured_yt_dlp_options(opts, settings)
 
     def _build_ydl(self, opts: dict) -> tuple[Any, tuple[str, int, int] | None]:
-        """Construct a YoutubeDL instance from *opts* and load the stream cookiejar into it.
+        """Construct a YoutubeDL instance from *opts* and, when
+        ``[yt_dlp] use_session_cookies`` is on, load the stream cookiejar into it.
 
         The jar is loaded into the instance's cookiejar rather than passed as
         ``cookiefile``: YoutubeDL.close() writes ``cookiefile`` back to disk
@@ -210,8 +222,8 @@ class StreamResolver:
         # yt-dlp's _Params TypedDict is internal; the dict we build is a
         # plain options dict that yt-dlp accepts at runtime.
         ydl = yt_dlp.YoutubeDL(opts)  # type: ignore[arg-type]
-        sig = _stream_cookiejar_signature()
-        if sig is not None and "cookiefile" not in opts:
+        sig = _session_cookiejar_signature()
+        if sig is not None:
             try:
                 ydl.cookiejar.load(sig[0], ignore_discard=True, ignore_expires=True)
             except Exception:
@@ -240,7 +252,7 @@ class StreamResolver:
         while True:
             with self._ydl_lock:
                 if self._ydl is not None:
-                    if self._ydl_cookiejar_sig == _stream_cookiejar_signature():
+                    if self._ydl_cookiejar_sig == _session_cookiejar_signature():
                         self._active_resolves += 1
                         return self._ydl
                     # The jar file changed since this instance loaded it
@@ -366,7 +378,7 @@ class StreamResolver:
 
         except yt_dlp.utils.DownloadError as exc:  # type: ignore[attr-defined]
             hint = ""
-            if _detect_stream_cookies() and re.search(
+            if _session_cookiejar_signature() is not None and re.search(
                 r"sign in|login_required|confirm you", str(exc), re.I
             ):
                 hint = " (stream cookiejar may be stale/revoked — try `ytm setup` to refresh it)"

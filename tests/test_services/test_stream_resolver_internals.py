@@ -253,28 +253,49 @@ class TestActiveResolvesCounter:
 
 
 class TestStreamCookiejarLoading:
-    """The stream cookiejar is loaded INTO the YoutubeDL instance, never
-    passed as ``cookiefile``: YoutubeDL.close() writes ``cookiefile`` back
-    from memory, so a discarded instance closing later would overwrite a
-    jar that ``ytm setup`` or an auto-refresh had just replaced."""
+    """The setup-written stream cookiejar is loaded only when
+    ``[yt_dlp] use_session_cookies`` is on (streaming is anonymous by
+    default), and then INTO the YoutubeDL instance, never as ``cookiefile``:
+    YoutubeDL.close() writes ``cookiefile`` back from memory, so a discarded
+    instance closing later would overwrite a jar that ``ytm setup`` or an
+    auto-refresh had just replaced."""
 
     def _jar(self, tmp_path, content="# Netscape HTTP Cookie File\n"):
         jar = tmp_path / "stream_cookies.txt"
         jar.write_text(content, encoding="utf-8")
         return jar
 
-    def test_build_ydl_opts_never_injects_cookiefile(self, tmp_path, monkeypatch):
+    def _settings(self, monkeypatch, *, session=False, cookies_file=""):
         settings = Settings()
+        settings.yt_dlp.use_session_cookies = session
+        settings.yt_dlp.cookies_file = cookies_file
         monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+        return settings
+
+    def test_build_ydl_opts_never_injects_cookiefile(self, tmp_path, monkeypatch):
+        self._settings(monkeypatch, session=True)
         jar = self._jar(tmp_path)
         with patch("ytm_player.services.stream._detect_stream_cookies", return_value=str(jar)):
             opts = StreamResolver()._build_ydl_opts()
         assert "cookiefile" not in opts
         assert "cookiesfrombrowser" not in opts
 
-    def test_get_ydl_loads_jar_into_instance(self, tmp_path, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+    def test_default_is_anonymous_even_when_jar_exists(self, tmp_path, monkeypatch):
+        self._settings(monkeypatch)  # use_session_cookies defaults to False
+        jar = self._jar(tmp_path)
+        fake_class = MagicMock()
+        with (
+            patch("ytm_player.services.stream._detect_stream_cookies", return_value=str(jar)),
+            patch("yt_dlp.YoutubeDL", fake_class),
+        ):
+            resolver = StreamResolver()
+            ydl = resolver._get_ydl()
+        assert "cookiefile" not in fake_class.call_args.args[0]
+        ydl.cookiejar.load.assert_not_called()
+        assert resolver._ydl_cookiejar_sig is None
+
+    def test_opt_in_loads_jar_into_instance(self, tmp_path, monkeypatch):
+        self._settings(monkeypatch, session=True)
         jar = self._jar(tmp_path)
         fake_class = MagicMock()
         with (
@@ -290,9 +311,8 @@ class TestStreamCookiejarLoading:
         assert resolver._ydl_cookiejar_sig is not None
         assert resolver._ydl_cookiejar_sig[0] == str(jar)
 
-    def test_get_ydl_without_jar_loads_nothing(self, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+    def test_opt_in_without_jar_loads_nothing(self, monkeypatch):
+        self._settings(monkeypatch, session=True)
         fake_class = MagicMock()
         with (
             patch("ytm_player.services.stream._detect_stream_cookies", return_value=None),
@@ -303,28 +323,27 @@ class TestStreamCookiejarLoading:
         ydl.cookiejar.load.assert_not_called()
         assert resolver._ydl_cookiejar_sig is None
 
-    def test_user_cookies_file_goes_through_cookiefile_and_skips_jar(self, tmp_path, monkeypatch):
-        settings = Settings()
-        settings.yt_dlp.cookies_file = "/home/user/manual_cookies.txt"
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+    def test_explicit_cookies_file_wins_over_session_jar(self, tmp_path, monkeypatch):
+        self._settings(monkeypatch, session=True, cookies_file="/home/user/manual_cookies.txt")
         jar = self._jar(tmp_path)
         fake_class = MagicMock()
         with (
             patch("ytm_player.services.stream._detect_stream_cookies", return_value=str(jar)),
             patch("yt_dlp.YoutubeDL", fake_class),
         ):
-            ydl = StreamResolver()._get_ydl()
+            resolver = StreamResolver()
+            ydl = resolver._get_ydl()
         from ytm_player.services.yt_dlp_options import normalize_cookiefile
 
         opts = fake_class.call_args.args[0]
         assert opts["cookiefile"] == normalize_cookiefile("/home/user/manual_cookies.txt")
         ydl.cookiejar.load.assert_not_called()
+        assert resolver._ydl_cookiejar_sig is None
 
-    def test_rewritten_jar_rebuilds_instance(self, tmp_path, monkeypatch):
+    def test_rewritten_jar_rebuilds_instance_when_opted_in(self, tmp_path, monkeypatch):
         """ytm setup / auto-refresh writing a new jar mid-session must reach
         the next resolve instead of the cached instance keeping stale cookies."""
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+        self._settings(monkeypatch, session=True)
         jar = self._jar(tmp_path)
         fake_class = MagicMock(side_effect=lambda opts: MagicMock())
         with (
@@ -346,9 +365,22 @@ class TestStreamCookiejarLoading:
             str(jar), ignore_discard=True, ignore_expires=True
         )
 
+    def test_rewritten_jar_is_ignored_when_anonymous(self, tmp_path, monkeypatch):
+        self._settings(monkeypatch)
+        jar = self._jar(tmp_path)
+        fake_class = MagicMock(side_effect=lambda opts: MagicMock())
+        with (
+            patch("ytm_player.services.stream._detect_stream_cookies", return_value=str(jar)),
+            patch("yt_dlp.YoutubeDL", fake_class),
+        ):
+            resolver = StreamResolver()
+            first = resolver._get_ydl()
+            resolver._active_resolves -= 1
+            jar.write_text("# Netscape HTTP Cookie File\n# refreshed\n", encoding="utf-8")
+            assert resolver._get_ydl() is first
+
     def test_jar_load_failure_is_logged_not_raised(self, tmp_path, monkeypatch, caplog):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+        self._settings(monkeypatch, session=True)
         jar = self._jar(tmp_path)
         instance = MagicMock()
         instance.cookiejar.load.side_effect = OSError("unreadable")

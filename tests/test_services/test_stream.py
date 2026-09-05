@@ -267,11 +267,10 @@ class TestClearCacheMidResolve:
 
 class TestStaleCookieDiagnosticHint:
     """_try_resolve()'s DownloadError handler appends a diagnostic hint when
-    a stream cookiejar exists and the error text looks auth-related. These
-    tests call _try_resolve() directly (bypassing resolve_sync()'s retry
-    loop and its real time.sleep() delays) and locally override the
-    module's autouse _no_real_cookie_detection fixture via patch(), since
-    that fixture always stubs _detect_stream_cookies() to return None."""
+    the session cookiejar is in use and the error text looks auth-related.
+    These tests call _try_resolve() directly (bypassing resolve_sync()'s
+    retry loop and its real time.sleep() delays) and patch
+    _session_cookiejar_signature() to model "jar in use" vs not."""
 
     def _resolver_raising(self, message: str) -> StreamResolver:
         import yt_dlp
@@ -282,13 +281,14 @@ class TestStaleCookieDiagnosticHint:
         resolver._get_ydl = MagicMock(return_value=mock_ydl)
         return resolver
 
-    def test_hint_present_when_cookiejar_exists_and_error_is_auth_related(self, caplog):
+    _JAR = ("/fake/config/stream_cookies.txt", 1, 1)
+
+    def test_hint_present_when_session_jar_in_use_and_error_is_auth_related(self, caplog):
         resolver = self._resolver_raising("Sign in to confirm you are not a bot")
 
         with (
             patch(
-                "ytm_player.services.stream._detect_stream_cookies",
-                return_value="/fake/config/stream_cookies.txt",
+                "ytm_player.services.stream._session_cookiejar_signature", return_value=self._JAR
             ),
             caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
         ):
@@ -297,11 +297,11 @@ class TestStaleCookieDiagnosticHint:
         assert result is None
         assert "stream cookiejar may be stale/revoked" in caplog.text
 
-    def test_hint_absent_when_no_cookiejar(self, caplog):
+    def test_hint_absent_when_streaming_anonymously(self, caplog):
         resolver = self._resolver_raising("Sign in to confirm you are not a bot")
 
         with (
-            patch("ytm_player.services.stream._detect_stream_cookies", return_value=None),
+            patch("ytm_player.services.stream._session_cookiejar_signature", return_value=None),
             caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
         ):
             result = resolver._try_resolve("https://example.com/watch", "vid2", 0)
@@ -314,8 +314,7 @@ class TestStaleCookieDiagnosticHint:
 
         with (
             patch(
-                "ytm_player.services.stream._detect_stream_cookies",
-                return_value="/fake/config/stream_cookies.txt",
+                "ytm_player.services.stream._session_cookiejar_signature", return_value=self._JAR
             ),
             caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
         ):
