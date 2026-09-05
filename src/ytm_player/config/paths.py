@@ -43,6 +43,7 @@ else:
 
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 AUTH_FILE = CONFIG_DIR / "auth.json"
+ACCOUNT_FILE = CONFIG_DIR / "account.json"  # identity of the auth.json session
 STREAM_COOKIES_FILE = CONFIG_DIR / "stream_cookies.txt"
 OAUTH_FILE = CONFIG_DIR / "oauth.json"
 OAUTH_CREDS_FILE = CONFIG_DIR / "oauth_creds.json"

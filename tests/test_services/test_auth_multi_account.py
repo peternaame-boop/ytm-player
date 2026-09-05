@@ -1,4 +1,6 @@
-"""Tests for _save_youtube_cookies multi-account selection."""
+"""Tests for _save_youtube_cookies multi-account selection during `ytm setup`.
+
+Silent (non-interactive) renewal is covered in test_auth_identity.py."""
 
 import json
 from pathlib import Path
@@ -36,15 +38,20 @@ def test_single_account_auto_selected(tmp_path):
     auth = _make_auth(tmp_path)
     cookies = [_make_cookie("SAPISID", "secret")]
 
-    mock_ytm = MagicMock()
-    mock_ytm.get_account_info.return_value = _account("Alice")
+    def _ytmusic_factory(path):
+        saved = json.loads(Path(path).read_text())
+        m = MagicMock()
+        m.get_account_info.return_value = (
+            _account("Alice") if saved["x-goog-authuser"] == "0" else {}
+        )
+        return m
 
     with (
         _PATCH_SAPISID,
         _PATCH_AUTH,
-        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+        patch("ytm_player.services.auth.YTMusic", side_effect=_ytmusic_factory),
     ):
-        result = auth._save_youtube_cookies(cookies)
+        result = auth._save_youtube_cookies(cookies, interactive=True)
 
     assert result is True
     saved = json.loads((tmp_path / "headers_auth.json").read_text())
@@ -68,7 +75,7 @@ def test_single_account_at_index_1_is_found(tmp_path):
         _PATCH_AUTH,
         patch("ytm_player.services.auth.YTMusic", side_effect=_ytmusic_factory),
     ):
-        result = auth._save_youtube_cookies(cookies)
+        result = auth._save_youtube_cookies(cookies, interactive=True)
 
     assert result is True
     saved = json.loads((tmp_path / "headers_auth.json").read_text())
@@ -91,7 +98,7 @@ def test_no_valid_accounts_returns_false(tmp_path):
         _PATCH_AUTH,
         patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
     ):
-        result = auth._save_youtube_cookies(cookies)
+        result = auth._save_youtube_cookies(cookies, interactive=True)
 
     assert result is False
 
@@ -109,7 +116,7 @@ def test_account_info_exception_returns_false(tmp_path):
         _PATCH_AUTH,
         patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
     ):
-        result = auth._save_youtube_cookies(cookies)
+        result = auth._save_youtube_cookies(cookies, interactive=True)
 
     assert result is False
 
@@ -226,7 +233,7 @@ def test_always_probes_all_five_indices(tmp_path):
         _PATCH_AUTH,
         patch("ytm_player.services.auth.YTMusic", side_effect=_ytmusic_factory),
     ):
-        result = auth._save_youtube_cookies(cookies)
+        result = auth._save_youtube_cookies(cookies, interactive=True)
 
     assert probed == [0, 1, 2, 3, 4]
     assert result is True
@@ -235,59 +242,3 @@ def test_always_probes_all_five_indices(tmp_path):
 
 
 # ── Non-interactive multi-account (auto-refresh) ──────────────────────────────
-
-
-def test_auto_refresh_preserves_existing_preferred_index(tmp_path):
-    """Auto-refresh with multiple accounts honors the previously saved x-goog-authuser."""
-    auth = _make_auth(tmp_path)
-    cookies = [_make_cookie("SAPISID", "s0"), _make_cookie("SAPISID1", "s1")]
-
-    # Simulate a prior auth file recording that the user chose index 1 (Bob).
-    prior_headers = {"x-goog-authuser": "1", "cookie": "prior-cookie"}
-    (tmp_path / "headers_auth.json").write_text(json.dumps(prior_headers), encoding="utf-8")
-
-    accounts = {0: _account("Alice"), 1: _account("Bob")}
-
-    def _ytmusic_factory(path):
-        saved = json.loads(Path(path).read_text())
-        idx = int(saved["x-goog-authuser"])
-        m = MagicMock()
-        m.get_account_info.return_value = accounts.get(idx, {})
-        return m
-
-    with (
-        _PATCH_SAPISID,
-        _PATCH_AUTH,
-        patch("ytm_player.services.auth.YTMusic", side_effect=_ytmusic_factory),
-    ):
-        result = auth._save_youtube_cookies(cookies)  # non-interactive (default)
-
-    assert result is True
-    saved = json.loads((tmp_path / "headers_auth.json").read_text())
-    assert saved["x-goog-authuser"] == "1"  # Bob preserved
-
-
-def test_auto_refresh_falls_back_to_first_valid_when_no_prior_auth(tmp_path):
-    """Auto-refresh with no prior auth file falls back to the first valid account."""
-    auth = _make_auth(tmp_path)
-    cookies = [_make_cookie("SAPISID", "s0"), _make_cookie("SAPISID1", "s1")]
-
-    accounts = {0: _account("Alice"), 1: _account("Bob")}
-
-    def _ytmusic_factory(path):
-        saved = json.loads(Path(path).read_text())
-        idx = int(saved["x-goog-authuser"])
-        m = MagicMock()
-        m.get_account_info.return_value = accounts.get(idx, {})
-        return m
-
-    with (
-        _PATCH_SAPISID,
-        _PATCH_AUTH,
-        patch("ytm_player.services.auth.YTMusic", side_effect=_ytmusic_factory),
-    ):
-        result = auth._save_youtube_cookies(cookies)  # non-interactive, no prior file
-
-    assert result is True
-    saved = json.loads((tmp_path / "headers_auth.json").read_text())
-    assert saved["x-goog-authuser"] == "0"  # Alice (first valid account)

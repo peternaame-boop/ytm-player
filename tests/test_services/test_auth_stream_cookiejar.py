@@ -17,6 +17,7 @@ write to the developer's/CI's actual ~/.config/ytm-player/.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
@@ -30,6 +31,18 @@ from ytm_player.config.paths import SECURE_FILE_MODE
 from ytm_player.services.auth import AuthManager, _atomic_write, _cookies_from_raw_header
 
 _PATCH_SAPISID = patch("ytm_player.services.auth.sapisid_from_cookie", return_value="fake_sapisid")
+
+
+def _slot_zero_only(mock_ytm):
+    """YTMusic stand-in that is a valid account in browser slot 0 only, so the
+    interactive selection auto-picks it instead of prompting."""
+
+    def factory(path, user=None):
+        if json.loads(Path(path).read_text(encoding="utf-8")).get("x-goog-authuser") != "0":
+            raise Exception("no account in this slot")
+        return mock_ytm
+
+    return factory
 
 
 def _make_auth(tmp_path: Path, **overrides: Path) -> AuthManager:
@@ -188,9 +201,9 @@ def test_extract_and_save_threads_wide_jar_to_stream_cookiejar(tmp_path):
     with (
         _PATCH_SAPISID,
         patch("yt_dlp.cookies.extract_cookies_from_browser", return_value=jar),
-        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
     ):
-        result = auth._extract_and_save("vivaldi")
+        result = auth._extract_and_save("vivaldi", interactive=True)
 
     assert result is True
     assert auth.auth_file.exists()
@@ -224,9 +237,9 @@ def test_extract_and_save_from_cookies_file_threads_wide_jar_to_stream_cookiejar
 
     with (
         _PATCH_SAPISID,
-        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
     ):
-        result = auth._extract_and_save_from_cookies_file(cookies_file)
+        result = auth._extract_and_save_from_cookies_file(cookies_file, interactive=True)
 
     assert result is True
     assert auth.auth_file.exists()
@@ -270,9 +283,9 @@ def test_cookiejar_write_failure_does_not_affect_auth_json(tmp_path):
     with (
         _PATCH_SAPISID,
         patch("yt_dlp.cookies.extract_cookies_from_browser", return_value=jar),
-        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
     ):
-        result = auth._extract_and_save("vivaldi")
+        result = auth._extract_and_save("vivaldi", interactive=True)
 
     assert result is True
     assert auth.auth_file.exists()
@@ -369,7 +382,10 @@ def test_setup_manual_saves_stream_cookiejar_from_pasted_cookie_header(tmp_path,
     def _fake_setup(filepath, headers_raw):
         Path(filepath).write_text('{"cookie": "SAPISID=abc123"}', encoding="utf-8")
 
-    with patch("ytmusicapi.setup", side_effect=_fake_setup):
+    with (
+        patch("ytmusicapi.setup", side_effect=_fake_setup),
+        patch("ytm_player.services.auth.YTMusic", return_value=MagicMock()),
+    ):
         result = auth.setup_interactive(manual=True)
 
     assert result is True
@@ -385,7 +401,10 @@ def test_no_cookie_header_skips_cookiejar_write(tmp_path, monkeypatch):
     def _fake_setup(filepath, headers_raw):
         Path(filepath).write_text('{"cookie": ""}', encoding="utf-8")
 
-    with patch("ytmusicapi.setup", side_effect=_fake_setup):
+    with (
+        patch("ytmusicapi.setup", side_effect=_fake_setup),
+        patch("ytm_player.services.auth.YTMusic", return_value=MagicMock()),
+    ):
         result = auth.setup_interactive(manual=True)
 
     assert result is True
@@ -405,12 +424,12 @@ def test_no_valid_account_skips_stream_cookiejar_write(tmp_path):
 
     with (
         _PATCH_SAPISID,
-        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
         patch.object(
             auth, "_save_stream_cookiejar", wraps=auth._save_stream_cookiejar
         ) as mock_save,
     ):
-        result = auth._save_youtube_cookies(cookies, stream_jar=stream_jar)
+        result = auth._save_youtube_cookies(cookies, interactive=True, stream_jar=stream_jar)
 
     assert result is False
     mock_save.assert_not_called()
@@ -500,9 +519,9 @@ def test_refresh_from_cookies_file_restores_stream_cookiejar_on_validate_failure
 
     with (
         _PATCH_SAPISID,
-        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
     ):
-        result = auth._refresh_from_cookies_file(cookies_file)
+        result = auth._refresh_from_cookies_file(cookies_file, interactive=True)
 
     assert result is False
     assert auth_file.read_text() == '{"cookie": "old=1"}'
@@ -527,9 +546,9 @@ def test_refresh_from_cookies_file_removes_new_stream_cookiejar_when_no_prior_ba
 
     with (
         _PATCH_SAPISID,
-        patch("ytm_player.services.auth.YTMusic", return_value=mock_ytm),
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
     ):
-        result = auth._refresh_from_cookies_file(cookies_file)
+        result = auth._refresh_from_cookies_file(cookies_file, interactive=True)
 
     assert result is False
     assert not auth_file.exists()

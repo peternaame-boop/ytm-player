@@ -1,10 +1,26 @@
 """Tests for AuthManager cookies-file refresh behavior."""
 
+import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import requests.exceptions
 
 from ytm_player.services.auth import AuthManager
+
+_PATCH_SAPISID = patch("ytm_player.services.auth.sapisid_from_cookie", return_value="fake_sapisid")
+
+
+def _slot_zero_only(mock_ytm):
+    """YTMusic stand-in that is a valid account in browser slot 0 only, so the
+    interactive selection auto-picks it instead of prompting."""
+
+    def factory(path, user=None):
+        if json.loads(Path(path).read_text(encoding="utf-8")).get("x-goog-authuser") != "0":
+            raise Exception("no account in this slot")
+        return mock_ytm
+
+    return factory
 
 
 def _write_netscape_cookie_file(path: Path, domain: str = ".youtube.com") -> None:
@@ -43,8 +59,14 @@ def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
     auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
     monkeypatch.setattr(auth, "validate", lambda: False)
+    mock_ytm = MagicMock()
+    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
 
-    assert auth._refresh_from_cookies_file(cookies_file) is False
+    with (
+        _PATCH_SAPISID,
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
+    ):
+        assert auth._refresh_from_cookies_file(cookies_file, interactive=True) is False
     assert auth_file.read_text() == original
 
 
@@ -63,6 +85,12 @@ def test_refresh_from_cookies_file_restores_backup_on_network_error(tmp_path, mo
         raise requests.exceptions.ConnectionError("connection reset")
 
     monkeypatch.setattr(auth, "validate", _raise_network_error)
+    mock_ytm = MagicMock()
+    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
 
-    assert auth._refresh_from_cookies_file(cookies_file) is False
+    with (
+        _PATCH_SAPISID,
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
+    ):
+        assert auth._refresh_from_cookies_file(cookies_file, interactive=True) is False
     assert auth_file.read_text() == original
