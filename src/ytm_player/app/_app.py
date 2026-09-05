@@ -256,9 +256,6 @@ class YTMPlayerApp(
 
         # Consecutive stream failure counter (prevents infinite skip loops).
         self._consecutive_failures: int = 0
-        # One-shot per session: don't re-nag after the user answers the
-        # remote_components prompt once, whichever way they answered.
-        self._remote_components_prompted: bool = False
 
         # Guard against duplicate end-file events advancing twice.
         self._advancing: bool = False

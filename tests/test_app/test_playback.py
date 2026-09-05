@@ -13,7 +13,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from ytm_player.app._playback import PlaybackMixin
-from ytm_player.app._session import SessionMixin
 
 
 def _fresh_playback_host():
@@ -26,7 +25,6 @@ def _fresh_playback_host():
     p.stream_resolver = MagicMock()
     p.stream_resolver.resolve = AsyncMock(return_value=None)
     p.stream_resolver.clear_cache = MagicMock()
-    p.stream_resolver.consume_missing_remote_components = MagicMock(return_value=False)
     p.queue = MagicMock()
     p.queue.next_track = MagicMock(return_value=None)
     p.queue.peek_next = MagicMock(return_value=None)
@@ -43,7 +41,6 @@ def _fresh_playback_host():
     p.call_later = MagicMock()
     p.run_worker = MagicMock()
     p.set_timer = MagicMock()
-    p.push_screen = MagicMock()
     # query_one raises — caught by play_track's try/except around UI updates
     p.query_one = MagicMock(side_effect=Exception("no widget in test"))
     p._last_play_video_id = None
@@ -56,7 +53,6 @@ def _fresh_playback_host():
     p._play_generation = 0
     p._local_history_claim = None
     p._play_lock = asyncio.Lock()
-    p._remote_components_prompted = False
     return p
 
 
@@ -224,166 +220,6 @@ class TestPlayTrackPendingResume:
         assert host._pending_resume_video_id is None
         assert host._pending_resume_position == 0.0
         assert host._track_start_position == 83.0
-
-
-class TestMissingRemoteComponentsHandling:
-    """A resolve failure caused by missing remote_components gets first-class
-    handling instead of the generic 'region-locked' message — see
-    _handle_missing_remote_components_failure and _show_remote_components_prompt."""
-
-    async def test_first_occurrence_shows_prompt_instead_of_generic_error(self):
-        host = _fresh_playback_host()
-        host.stream_resolver.resolve = AsyncMock(return_value=None)
-        host.stream_resolver.consume_missing_remote_components = MagicMock(return_value=True)
-
-        await host.play_track({"video_id": "abc", "title": "Some Track"})
-
-        # The generic "region-locked" message must NOT have been shown.
-        generic_calls = [c for c in host.notify.call_args_list if "region-locked" in c.args[0]]
-        assert generic_calls == []
-        host.push_screen.assert_called_once()
-        assert host._remote_components_prompted is True
-
-    async def test_accepting_prompt_enables_setting_and_retries(self):
-        host = _fresh_playback_host()
-        host.stream_resolver.resolve = AsyncMock(return_value=None)
-        host.stream_resolver.consume_missing_remote_components = MagicMock(return_value=True)
-        host.run_worker = MagicMock()
-
-        def _fake_push_screen(screen, callback):
-            callback(True)  # simulate the user accepting
-
-        host.push_screen = MagicMock(side_effect=_fake_push_screen)
-
-        await host.play_track({"video_id": "abc", "title": "Some Track"})
-
-        assert host.settings.yt_dlp.remote_components == "ejs:github"
-        host.settings.save.assert_called_once()
-        host.stream_resolver.clear_cache.assert_called_once()
-        # Retries the same track via run_worker(play_track(track)). run_worker
-        # is mocked so the coroutine it's handed is never awaited — close it
-        # explicitly rather than leaking an "unawaited coroutine" warning.
-        host.run_worker.assert_called_once()
-        retried_coro = host.run_worker.call_args[0][0]
-        retried_coro.close()
-
-    async def test_declining_prompt_skips_with_accurate_message(self):
-        host = _fresh_playback_host()
-        host.stream_resolver.resolve = AsyncMock(return_value=None)
-        host.stream_resolver.consume_missing_remote_components = MagicMock(return_value=True)
-
-        def _fake_push_screen(screen, callback):
-            callback(False)  # simulate the user declining
-
-        host.push_screen = MagicMock(side_effect=_fake_push_screen)
-
-        await host.play_track({"video_id": "abc", "title": "Some Track"})
-
-        host.settings.save.assert_not_called()
-        host.stream_resolver.clear_cache.assert_not_called()
-        decline_calls = [
-            c for c in host.notify.call_args_list if "JS challenge solver" in c.args[0]
-        ]
-        assert len(decline_calls) == 1
-
-    async def test_second_occurrence_gives_accurate_error_and_skips(self):
-        """Already prompted this session (accepted or declined) — no
-        second popup; the failure message names the real cause."""
-        host = _fresh_playback_host()
-        host.stream_resolver.resolve = AsyncMock(return_value=None)
-        host.stream_resolver.consume_missing_remote_components = MagicMock(return_value=True)
-        host._remote_components_prompted = True
-        host.queue.next_track = MagicMock(return_value=None)
-
-        await host.play_track({"video_id": "abc", "title": "Some Track"})
-
-        host.push_screen.assert_not_called()
-        error_calls = [
-            c
-            for c in host.notify.call_args_list
-            if "remote_components" in c.args[0] and "Skipping" in c.args[0]
-        ]
-        assert len(error_calls) == 1
-
-    async def test_prompt_is_one_shot_across_calls(self):
-        """A second call to _show_remote_components_prompt in the same
-        session is a no-op — regardless of which caller triggers it."""
-        host = _fresh_playback_host()
-        host._remote_components_prompted = True
-
-        host._show_remote_components_prompt(
-            message="test",
-            on_accept=MagicMock(),
-        )
-
-        host.push_screen.assert_not_called()
-
-
-class _SessionAndPlaybackHost(SessionMixin, PlaybackMixin):
-    """Combines both mixins so the _remote_components_prompted guard can be
-    exercised through a real caller from each side on one instance."""
-
-
-def _fresh_combined_host():
-    """Minimal host wiring for the guard shared between SessionMixin's
-    startup-warmup callers and PlaybackMixin's playback-failure caller (see
-    _show_remote_components_prompt's docstring: one flag, regardless of
-    caller). Only stubs what this specific flow reads — unrelated attrs from
-    _fresh_playback_host()/_fresh_session_host() are intentionally omitted.
-    """
-    host = _SessionAndPlaybackHost()
-    host._remote_components_prompted = False
-    host.push_screen = MagicMock()
-    host.settings = MagicMock()
-    host.stream_resolver = MagicMock()
-    host.stream_resolver.clear_cache = MagicMock()
-    host.notify = MagicMock()
-    host.queue = MagicMock()
-    host.queue.next_track = MagicMock(return_value=None)
-    host.call_later = MagicMock()
-    host.run_worker = MagicMock()
-    host._last_play_video_id = ""
-    host._last_play_time = 0.0
-    host._consecutive_failures = 0
-    return host
-
-
-class TestRemoteComponentsPromptSharedAcrossMixins:
-    """_show_remote_components_prompt's one-shot guard lives in PlaybackMixin
-    but is deliberately shared "regardless of caller" with SessionMixin's
-    startup warmup (see its docstring). Prove it end-to-end on a host that
-    actually mixes both, instead of only exercising each caller in isolation
-    against its own stub."""
-
-    def test_session_side_prompt_then_playback_failure_prompts_once(self):
-        host = _fresh_combined_host()
-
-        def _fake_push_screen(screen, callback):
-            callback(True)  # user accepts the first (SessionMixin-side) prompt
-
-        host.push_screen = MagicMock(side_effect=_fake_push_screen)
-
-        # What _restore_session_state / _warm_resolver_and_check_remote_components
-        # (SessionMixin) does on startup when the JS solver isn't ready.
-        host._show_remote_components_prompt(
-            message="Playback needs yt-dlp's JS challenge solver...",
-            on_accept=MagicMock(),
-        )
-        assert host._remote_components_prompted is True
-        assert host.push_screen.call_count == 1
-
-        # A later playback failure (PlaybackMixin) hits the SAME guard and
-        # must not show a second popup — it should fall straight to the
-        # "already asked" error + skip path instead.
-        host._handle_missing_remote_components_failure({"video_id": "abc", "title": "Track"})
-
-        host.push_screen.assert_called_once()
-        error_calls = [
-            c
-            for c in host.notify.call_args_list
-            if "remote_components" in c.args[0] and "Skipping" in c.args[0]
-        ]
-        assert len(error_calls) == 1
 
 
 class TestToggleLikeCurrent:

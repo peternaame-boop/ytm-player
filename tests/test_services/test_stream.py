@@ -77,22 +77,6 @@ class TestStreamInfoCache:
         assert resolver._get_cached("a") is None
         assert resolver._get_cached("b") is None
 
-    def test_clear_cache_also_clears_stranded_missing_remote_components_entries(self):
-        """A prefetched-then-skipped-without-playing video's flag is never
-        consumed (only play_track()/the resolver-warmup path consume by
-        video_id) -- clear_cache() is the natural "start fresh" point that
-        sweeps those stranded entries, since accepting the remote_components
-        prompt or a failure-recovery reset both make any pending diagnosis
-        moot."""
-        resolver = StreamResolver()
-        resolver._resolving_video_id.value = "stranded_vid"
-        resolver._flag_missing_remote_components()
-        assert resolver._peek_missing_remote_components("stranded_vid") is True
-
-        resolver.clear_cache()
-
-        assert resolver._peek_missing_remote_components("stranded_vid") is False
-
 
 class TestStreamExpiry:
     def test_not_cached_is_expired(self):

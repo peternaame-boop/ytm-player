@@ -27,7 +27,7 @@ from ytm_player.app._session import SessionMixin
 from ytm_player.services.queue import RepeatMode
 
 
-def _build_session_host(monkeypatch=None):
+def _build_session_host():
     """Build a SessionMixin host wired with the attribute surface load+save touch.
 
     Mirrors the ``_fresh_session_host`` / ``_save_session_host`` pattern
@@ -82,19 +82,6 @@ def _build_session_host(monkeypatch=None):
     # rather than chasing query_one's MagicMock chain.
     h._get_transliteration_state = lambda: False
 
-    # _restore_session_state() unconditionally checks for a JS solver and
-    # starts the resolver warmup at the end (see app/_session.py). This
-    # integration test is about session save/restore, not that feature —
-    # stub it out so it doesn't need a real stream_resolver/PlaybackMixin.
-    h.stream_resolver = None
-    h._show_remote_components_prompt = MagicMock()
-    h.notify = MagicMock()
-    h.run_worker = MagicMock()
-    h.history = None
-    h.ytmusic = None
-    if monkeypatch is not None:
-        monkeypatch.setattr("ytm_player.services.stream.looks_like_js_solver_ready", lambda: True)
-
     return h
 
 
@@ -109,7 +96,7 @@ async def test_valid_round_trip_persists_and_restores(tmp_path, monkeypatch):
     monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", target, raising=False)
 
     # ---- Save side: configure the host so save serialises a known state. ----
-    saver = _build_session_host(monkeypatch)
+    saver = _build_session_host()
     saver.player.volume = 42
     saver.player.position = 0.0  # < 1.0 so resume is intentionally None
     saver.queue.repeat_mode = RepeatMode.ALL
@@ -130,7 +117,7 @@ async def test_valid_round_trip_persists_and_restores(tmp_path, monkeypatch):
     assert on_disk["shuffle"] is False
 
     # ---- Restore side: a fresh host loads the file we just wrote. -----------
-    loader = _build_session_host(monkeypatch)
+    loader = _build_session_host()
     loader.theme = loader.settings.ui.theme
     await loader._restore_session_state()
 
@@ -153,7 +140,7 @@ async def test_corrupt_json_falls_back_to_defaults_silently(tmp_path, monkeypatc
     bad.write_text("not valid json {{ ", encoding="utf-8")
     monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", bad, raising=False)
 
-    h = _build_session_host(monkeypatch)
+    h = _build_session_host()
     # Should not raise.
     await h._restore_session_state()
 
@@ -182,7 +169,7 @@ def test_save_oserror_surfaces_warning_notify(tmp_path, monkeypatch):
     target = tmp_path / "session.json"
     monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", target, raising=False)
 
-    h = _build_session_host(monkeypatch)
+    h = _build_session_host()
     h.notify = MagicMock()
     # Give the saver something serialisable but trigger the failure via the
     # tmp-file write — same shape as a disk-full / read-only-fs scenario.

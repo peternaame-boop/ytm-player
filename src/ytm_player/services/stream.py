@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from ytm_player.config.settings import get_settings
@@ -52,64 +49,6 @@ def _detect_stream_cookies() -> str | None:
     return str(STREAM_COOKIES_FILE) if STREAM_COOKIES_FILE.exists() else None
 
 
-# Shared wording for the remote_components ("JS challenge solver") prompt
-# shown by _show_remote_components_prompt() (app/_playback.py). Both
-# app/_session.py (startup warmup) and app/_playback.py (mid-playback
-# failure) build a message from this same body text — the only difference
-# between call sites is the lead-in clause naming what needs it ("Playback"
-# vs. the specific track title) — so only that clause is left to each
-# caller as an f-string prefix, and a future wording/URL change only has
-# one place to land instead of three.
-REMOTE_COMPONENTS_PROMPT_BODY = (
-    "needs yt-dlp's JS challenge solver to decode YouTube's "
-    "stream signatures. Download and run it from GitHub "
-    "(yt-dlp/ejs, sandboxed via Deno)?"
-)
-
-
-def looks_like_js_solver_ready() -> bool:
-    """Fast, local-only guess at whether yt-dlp can already solve JS
-    challenges — no cookies, no network, no yt-dlp resolve call at all.
-
-    Whether a JS challenge solver is available is a property of yt-dlp's
-    local environment (config + on-disk cache), not of which YouTube
-    client or cookies end up being used for a given resolve — so this
-    can answer the "will remote_components be needed" question
-    independently of _detect_stream_cookies()'s own (now fast) file check.
-
-    True (skip the prompt) when either:
-    - remote_components is already configured — yt-dlp will fetch/refresh
-      the solver itself; nothing to check locally.
-    - yt-dlp's own on-disk challenge-solver cache already has something
-      in it, from a prior session that already downloaded one.
-
-    False means "probably needs remote_components" — not a certainty (a
-    cached solver could be for a stale player version and still need a
-    fresh fetch), which is why the resolve-based detection in
-    _YtDlpLogger still runs as ground truth. This only short-circuits the
-    common, obvious case so the prompt doesn't wait behind an actual
-    yt-dlp resolve just to tell you something answerable locally.
-    """
-    from ytm_player.services.yt_dlp_options import normalize_remote_components
-
-    settings = get_settings().yt_dlp
-    if normalize_remote_components(settings.remote_components):
-        return True
-
-    try:
-        # Mirrors yt_dlp.cache.Cache._get_root_dir()'s default resolution.
-        # ytm_player never sets a custom 'cachedir' yt-dlp option, so this
-        # matches what yt-dlp itself would compute — reimplemented instead
-        # of instantiating yt_dlp.cache.Cache to avoid depending on that
-        # internal class's constructor (it wants a full ydl-like object).
-        cache_root = Path(os.getenv("XDG_CACHE_HOME", "~/.cache")).expanduser()
-        solver_dir = cache_root / "yt-dlp" / "challenge-solver"
-        return solver_dir.is_dir() and any(solver_dir.iterdir())
-    except Exception:
-        logger.debug("Could not check yt-dlp challenge-solver cache", exc_info=True)
-        return False
-
-
 class _YtDlpLogger:
     """Routes yt-dlp's own diagnostic messages into our logger.
 
@@ -120,9 +59,6 @@ class _YtDlpLogger:
     support cookies" never reached ytm.log. Mirrors the log_handler pattern
     already used for mpv in player.py.
     """
-
-    def __init__(self, on_missing_remote_components: Callable[[], None] | None = None) -> None:
-        self._on_missing_remote_components = on_missing_remote_components
 
     def debug(self, message: str) -> None:
         # yt-dlp routes both normal progress lines ("Downloading webpage")
@@ -137,36 +73,6 @@ class _YtDlpLogger:
 
     def warning(self, message: str, **_kwargs: object) -> None:
         logger.warning("yt-dlp: %s", message)
-        lowered = message.lower()
-        # yt-dlp's own recommended-fix warning ("...You can enable these
-        # downloads with --remote-components ejs:github") is the clearest
-        # signal, but it's NOT re-emitted on every failure — confirmed via
-        # a real run where video A got it and video B, resolved seconds
-        # later in the same process, didn't, despite hitting the identical
-        # missing-solver failure. Only "Signature/n challenge solving
-        # failed" repeats every time, so treat that as an equally valid
-        # trigger — it's yt-dlp's own wording, not something we're
-        # inferring from a generic error.
-        #
-        # This couples us to yt-dlp's exact log wording, with no structured
-        # alternative (exception type/error code) available upstream. Source
-        # of the two strings in yt-dlp's EJS system (introduced 2025.11.12):
-        #   - "remote components ... skipped":
-        #     yt_dlp/extractor/youtube/jsc/_director.py (_director.py's
-        #     "Remote components {...} were skipped" message)
-        #   - "challenge ... solving failed":
-        #     yt_dlp/extractor/youtube/_video.py ("n challenge solving
-        #     failed: Some formats may be missing." message)
-        # yt-dlp's own boosty.py extractor test hardcodes both strings in its
-        # expected_warnings list, so an upstream wording change would break
-        # yt-dlp's own test suite too — a real, if informal, stability
-        # signal. If this stops firing after a yt-dlp upgrade, check those
-        # two files first for wording drift.
-        is_missing_remote_components = (
-            "remote components" in lowered and "skipped" in lowered
-        ) or ("challenge" in lowered and "solving failed" in lowered)
-        if self._on_missing_remote_components is not None and is_missing_remote_components:
-            self._on_missing_remote_components()
 
     def error(self, message: str) -> None:
         logger.error("yt-dlp: %s", message)
@@ -219,39 +125,10 @@ class StreamResolver:
         self._active_resolves = 0
         # Bumped by _reset_ydl(). _get_ydl() snapshots this before its
         # unlocked opts build and re-checks it after — if it changed, a
-        # reset (e.g. accepting the remote_components prompt) landed
-        # while the build was in flight, and the just-built opts already
-        # have stale settings baked in (settings are read at the START of
-        # _build_ydl_opts(), before _detect_stream_cookies()'s fast
-        # Path.exists() check even runs). Without this check that reset
-        # was silently lost: nothing was cached yet for it to clear, so
-        # the stale instance got cached anyway right after — confirmed in
-        # practice as EVERY subsequent track failing identically, not
-        # just one, until 5 consecutive failures forced an unrelated
-        # reset.
+        # reset landed while the build was in flight and the just-built
+        # opts already have stale settings baked in, so the build is
+        # retried instead of caching a stale instance.
         self._ydl_generation = 0
-        # Set by _YtDlpLogger when yt-dlp reports it skipped downloading its
-        # JS challenge-solver script (remote_components unset). Keyed by
-        # video_id rather than a single shared flag: the cached YoutubeDL
-        # instance (and therefore its logger callback) is reused across
-        # every resolve, and two DIFFERENT videos can be resolving
-        # concurrently (e.g. the startup warmup and a direct play action
-        # on another track) — a single boolean can't tell them apart, so
-        # whichever caller drains it first gets the accurate diagnosis and
-        # the other silently falls through to a generic failure message
-        # even though its own resolve hit the identical cause. One-shot
-        # per video_id — read via consume_missing_remote_components(video_id),
-        # which discards that entry, so callers only act on a *fresh*
-        # occurrence for their own video.
-        self._missing_remote_components_lock = threading.Lock()
-        self._missing_remote_components_video_ids: set[str] = set()
-        # Set on the CURRENT thread by _try_resolve() right before calling
-        # extract_info(), so _flag_missing_remote_components() — invoked
-        # synchronously by yt-dlp's logger from inside that same call, on
-        # that same thread — knows which video_id to attribute the
-        # failure to. Needed because the shared logger callback carries no
-        # video context of its own.
-        self._resolving_video_id = threading.local()
 
     @property
     def quality(self) -> str:
@@ -272,7 +149,7 @@ class StreamResolver:
             "format": QUALITY_FORMATS.get(self._quality, QUALITY_FORMATS["high"]),
             "quiet": True,
             "no_warnings": True,
-            "logger": _YtDlpLogger(self._flag_missing_remote_components),
+            "logger": _YtDlpLogger(),
             "extract_flat": False,
             "noplaylist": True,
             # Skip video-related processing.
@@ -291,90 +168,24 @@ class StreamResolver:
                 opts["cookiefile"] = cookiefile
         return opts
 
-    def _flag_missing_remote_components(self) -> None:
-        """Callback for _YtDlpLogger: record that the resolve currently
-        running on this thread needs remote_components.
-
-        Reads the video_id _try_resolve() stashed on this thread just
-        before calling extract_info() — see _resolving_video_id. If that's
-        unset for some reason, there's nothing safe to attribute the flag
-        to, so it's dropped rather than guessed.
-        """
-        video_id = getattr(self._resolving_video_id, "value", None)
-        if video_id is None:
-            return
-        with self._missing_remote_components_lock:
-            self._missing_remote_components_video_ids.add(video_id)
-
-    def consume_missing_remote_components(self, video_id: str) -> bool:
-        """Return and clear whether *video_id*'s last resolve hit the
-        missing-remote-components case.
-
-        One-shot per video_id by design — a caller that acts on ``True``
-        (e.g. prompting the user) should see ``False`` on subsequent calls
-        for that video until it recurs.
-        """
-        with self._missing_remote_components_lock:
-            if video_id in self._missing_remote_components_video_ids:
-                self._missing_remote_components_video_ids.discard(video_id)
-                return True
-            return False
-
-    def _peek_missing_remote_components(self, video_id: str) -> bool:
-        """Non-destructive check of whether *video_id* hit the
-        missing-remote-components case.
-
-        Used by _resolve_sync to short-circuit its own retry loop without
-        stealing the signal consume_missing_remote_components(video_id) later
-        delivers to the caller (e.g. the UI's one-time prompt).
-        """
-        with self._missing_remote_components_lock:
-            return video_id in self._missing_remote_components_video_ids
-
     def _get_ydl(self) -> Any:
         """Return a reusable YoutubeDL instance, creating it lazily, with
         _active_resolves already incremented on the caller's behalf.
 
-        Incrementing _active_resolves here — still inside self._ydl_lock,
-        at every return point — instead of via a separate, later lock
-        acquisition in _try_resolve() closes a TOCTOU gap: previously the
-        lock was released between obtaining the reference and bumping the
-        counter, during which _reset_ydl() could observe
-        _active_resolves == 0 for an instance a caller already held and
-        was about to call extract_info() on, and close it out from under
-        that in-flight call — reintroducing the exact "closing a live
-        instance mid-resolve" bug this counter exists to prevent. Callers
-        must still decrement it in a finally block (see _try_resolve).
+        Incrementing _active_resolves here, still inside self._ydl_lock, at
+        every return point closes a TOCTOU gap: with a separate, later
+        increment, _reset_ydl() could observe _active_resolves == 0 for an
+        instance a caller already held and was about to call extract_info()
+        on, and close it out from under that in-flight call. Callers must
+        decrement in a finally block (see _try_resolve).
 
-        _build_ydl_opts() is called OUTSIDE self._ydl_lock: even though
-        _detect_stream_cookies() is now a fast Path.exists() check rather
-        than a slow browser cookie extraction (that extraction now lives
-        solely in AuthManager, run once at `ytm setup`/try_auto_refresh
-        time — see services/auth.py), there's still no reason to hold a
-        lock whose only job is guarding the (fast, in-memory) YoutubeDL()
-        construction for any longer than that. _reset_ydl() (called from
-        the UI thread — e.g. accepting the remote_components prompt)
-        needs the same lock; the brief double-checked-locking race (two
-        threads both seeing self._ydl is None and both building opts) is
-        harmless — whichever assigns first wins, the loser's opts are
-        simply discarded.
-
-        The generation check below covers a second, worse race the above
-        alone doesn't: _build_ydl_opts() reads settings (e.g.
-        remote_components) in its first line, before it even calls
-        _detect_stream_cookies()'s file check. If a reset lands while
-        self._ydl is still None (nothing built yet to reset), _reset_ydl()
-        has nothing to do and the reset is silently lost — the in-flight
-        build then finishes and caches an instance with the *pre-reset*
-        settings anyway, permanently, since nothing else was going to
-        clear it out again. Confirmed in practice: accepting the
-        remote_components prompt did nothing, and EVERY subsequent track
-        failed identically until 5 consecutive failures forced an
-        unrelated reset. Looping on a generation mismatch instead means a
-        reset that lands mid-build invalidates that build's result, and
-        the retry re-reads current settings — cheap on retry regardless,
-        since _detect_stream_cookies() is now a fast file check rather
-        than something that would need to redo slow work.
+        _build_ydl_opts() runs OUTSIDE self._ydl_lock, so a _reset_ydl()
+        (clear_cache(), the quality setter) can land mid-build. If self._ydl
+        is still None at that point there is nothing to reset and the reset
+        would be silently lost — the in-flight build would then cache an
+        instance with pre-reset settings. The generation check below
+        catches that: a reset landing mid-build invalidates that build's
+        result and the loop re-reads current settings.
         """
         import yt_dlp  # Lazy import
 
@@ -402,26 +213,20 @@ class StreamResolver:
     def _reset_ydl(self) -> None:
         """Discard the cached YoutubeDL instance, closing it only if safe.
 
-        clear_cache() (and therefore this) can now be triggered by the UI
-        thread — e.g. accepting the remote_components prompt — while a
-        background resolve (the startup warmup, or another in-flight
-        play/prefetch) is still mid extract_info() on the SAME instance.
-        YoutubeDL.close() tears down the shared request director's
-        connection pool; closing it out from under a live request left
-        that request hanging until some underlying socket/read timeout
-        eventually gave up (confirmed: a ~30s stall the instant "Enable"
-        was clicked, gone once this stopped closing a live instance).
-        Detaching the reference (self._ydl = None) is enough to make the
-        *next* _get_ydl() build a fresh instance — the in-flight call
-        keeps its own local reference to the old one and finishes
-        normally; with no __del__ on YoutubeDL, skipping close() here
-        just means that specific instance's connection pool is cleaned up
-        by normal garbage collection instead of explicitly, once nothing
-        (including the finishing resolve) references it anymore.
+        clear_cache() (and therefore this) can be triggered from the UI
+        thread while a background resolve (a prefetch or an in-flight play)
+        is still mid extract_info() on the SAME instance. YoutubeDL.close()
+        tears down the shared request director's connection pool; closing
+        it out from under a live request left that request hanging until an
+        underlying socket timeout gave up (a ~30s stall). Detaching the
+        reference is enough: the next _get_ydl() builds a fresh instance,
+        the in-flight call keeps its own local reference to the old one and
+        finishes normally, and that instance's pool is cleaned up by garbage
+        collection once nothing references it.
 
-        Always bumps _ydl_generation, even when self._ydl is already None
-        — that's exactly the case (nothing cached yet to reset) that used
-        to lose the reset silently. See _get_ydl for the other half.
+        Always bumps _ydl_generation, even when self._ydl is already None —
+        that's exactly the case that used to lose the reset silently. See
+        _get_ydl for the other half.
         """
         with self._ydl_lock:
             self._ydl_generation += 1
@@ -451,13 +256,6 @@ class StreamResolver:
             info = self._try_resolve(url, video_id, attempt)
             if info is not None:
                 return info
-            if self._peek_missing_remote_components(video_id):
-                # Deterministic, config-level failure (remote_components
-                # unset) — every remaining attempt would hit yt-dlp's same
-                # unmet prerequisite and fail identically. Retrying only
-                # burns ~4s of network round-trips per attempt for nothing.
-                logger.debug("Stopping retries for %s: missing remote_components", video_id)
-                break
         return None
 
     def _try_resolve(self, url: str, video_id: str, attempt: int) -> StreamInfo | None:
@@ -465,12 +263,6 @@ class StreamResolver:
         import yt_dlp  # Lazy import: needed for exception types
 
         try:
-            # Set before _get_ydl() rather than after: nothing should sit
-            # between the increment _get_ydl() does on our behalf and the
-            # try/finally that guarantees its matching decrement below —
-            # if this attribute-set were ever to raise, doing it first
-            # means _get_ydl() (and its increment) never even runs.
-            self._resolving_video_id.value = video_id
             ydl = self._get_ydl()  # increments _active_resolves; see _get_ydl's docstring
             try:
                 info = ydl.extract_info(url, download=False)
@@ -671,16 +463,6 @@ class StreamResolver:
         with self._cache_lock:
             self._cache.clear()
         self._reset_ydl()
-        # A prefetched-then-skipped-without-playing video's flag is never
-        # consumed (only play_track()/the resolver-warmup path consume by
-        # video_id), so entries can otherwise strand here indefinitely.
-        # clear_cache() already fires exactly when that staleness stops
-        # mattering — accepting the remote_components prompt, or the
-        # failure-recovery reset after repeated consecutive play failures,
-        # both mean any pending diagnosis is moot; the next resolve
-        # re-flags it fresh if the cause recurs.
-        with self._missing_remote_components_lock:
-            self._missing_remote_components_video_ids.clear()
 
     def prune_expired(self) -> int:
         """Remove expired entries from the cache. Returns number removed."""

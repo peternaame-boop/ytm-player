@@ -1,29 +1,20 @@
-"""Tests for stream.py's stream-cookiejar existence check, the
-remote_components missing-solver detection, and the StreamResolver
-concurrency fixes around resetting a live YoutubeDL instance mid-resolve.
+"""Tests for stream.py's stream-cookiejar existence check and the
+StreamResolver concurrency fixes around resetting a live YoutubeDL instance
+mid-resolve.
 
-All of these guard against bugs confirmed in practice during development:
+These guard against bugs confirmed in practice during development:
 - A reset landing while a slow options-build was in flight being silently
   lost, permanently caching a stale YoutubeDL instance.
 - Closing a live YoutubeDL instance out from under an in-flight resolve,
   freezing the UI thread.
-- Missing remote_components being reported as a generic resolve failure
-  instead of a diagnosable, fixable cause.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ytm_player.config.settings import Settings
-from ytm_player.services.stream import (
-    StreamResolver,
-    _detect_stream_cookies,
-    _YtDlpLogger,
-    looks_like_js_solver_ready,
-)
+from ytm_player.services.stream import StreamResolver, _detect_stream_cookies
 
 
 class TestDetectStreamCookies:
@@ -39,109 +30,9 @@ class TestDetectStreamCookies:
         assert _detect_stream_cookies() is None
 
 
-class TestYtDlpLoggerMissingRemoteComponents:
-    def test_remote_components_skipped_message_triggers_callback(self):
-        callback = MagicMock()
-        logger_obj = _YtDlpLogger(callback)
-        logger_obj.warning(
-            "Some remote components have not been downloaded and have been skipped. "
-            "You can enable these downloads with --remote-components ejs:github"
-        )
-        callback.assert_called_once()
-
-    def test_challenge_solving_failed_message_triggers_callback(self):
-        callback = MagicMock()
-        logger_obj = _YtDlpLogger(callback)
-        logger_obj.warning("Signature challenge solving failed for player abc123")
-        callback.assert_called_once()
-
-    def test_unrelated_warning_does_not_trigger_callback(self):
-        callback = MagicMock()
-        logger_obj = _YtDlpLogger(callback)
-        logger_obj.warning('Skipping client "android" since it does not support cookies')
-        callback.assert_not_called()
-
-    def test_no_callback_configured_does_not_raise(self):
-        logger_obj = _YtDlpLogger()
-        # Must not raise even though there's no callback to invoke.
-        logger_obj.warning("remote components have not been downloaded, skipped")
-
-
-class TestMissingRemoteComponentsFlag:
-    def test_flag_starts_false(self):
-        resolver = StreamResolver()
-        assert resolver._peek_missing_remote_components("abc12345678") is False
-
-    def test_flag_callback_sets_it(self):
-        resolver = StreamResolver()
-        resolver._resolving_video_id.value = "abc12345678"
-        resolver._flag_missing_remote_components()
-        assert resolver._peek_missing_remote_components("abc12345678") is True
-
-    def test_consume_returns_and_clears(self):
-        resolver = StreamResolver()
-        resolver._resolving_video_id.value = "abc12345678"
-        resolver._flag_missing_remote_components()
-        assert resolver.consume_missing_remote_components("abc12345678") is True
-        assert resolver.consume_missing_remote_components("abc12345678") is False
-        assert resolver._peek_missing_remote_components("abc12345678") is False
-
-    def test_peek_does_not_clear(self):
-        resolver = StreamResolver()
-        resolver._resolving_video_id.value = "abc12345678"
-        resolver._flag_missing_remote_components()
-        assert resolver._peek_missing_remote_components("abc12345678") is True
-        assert resolver._peek_missing_remote_components("abc12345678") is True  # still true
-
-    def test_different_video_ids_are_independent(self):
-        """The whole point of keying by video_id: a flag raised for one
-        concurrent resolve must not be consumable by, or leak into, a
-        different video's resolve."""
-        resolver = StreamResolver()
-        resolver._resolving_video_id.value = "videoAAAAAA"
-        resolver._flag_missing_remote_components()
-        assert resolver.consume_missing_remote_components("videoBBBBBB") is False
-        assert resolver.consume_missing_remote_components("videoAAAAAA") is True
-
-    def test_flag_dropped_when_resolving_video_id_unset(self):
-        """If the logger callback ever fires on a thread that never went
-        through _try_resolve() (so _resolving_video_id was never set),
-        there's nothing safe to attribute the flag to -- it must be
-        dropped rather than guessed, and definitely not silently attached
-        to some other video_id."""
-        resolver = StreamResolver()
-        # Deliberately not setting resolver._resolving_video_id.value.
-        resolver._flag_missing_remote_components()
-        assert resolver._missing_remote_components_video_ids == set()
-
-
 class TestResolveSyncShortCircuit:
-    def test_stops_retrying_after_missing_remote_components(self, monkeypatch):
-        """All 3 attempts would fail identically once remote_components is
-        unset — retrying burns time for nothing, so the retry loop should
-        stop after the first attempt flags the cause."""
-        resolver = StreamResolver()
-        monkeypatch.setattr("ytm_player.services.stream.time.sleep", lambda _: None)
-
-        call_count = 0
-
-        def fake_try_resolve(url, video_id, attempt):
-            nonlocal call_count
-            call_count += 1
-            resolver._resolving_video_id.value = video_id
-            resolver._flag_missing_remote_components()
-            return None
-
-        resolver._try_resolve = fake_try_resolve
-
-        result = resolver._resolve_sync("abc12345678")
-
-        assert result is None
-        assert call_count == 1
-
     def test_keeps_retrying_for_ordinary_failures(self, monkeypatch):
-        """Ordinary failures (no missing-remote-components signal) still
-        get the full retry budget — this must not regress."""
+        """Ordinary failures get the full retry budget — this must not regress."""
         resolver = StreamResolver()
         monkeypatch.setattr("ytm_player.services.stream.time.sleep", lambda _: None)
 
@@ -223,8 +114,8 @@ class TestGetYdlGenerationRace:
             nonlocal build_calls
             build_calls += 1
             if build_calls == 1:
-                # Simulate a reset (e.g. accepting the remote_components
-                # prompt) landing while this "slow" build was in flight.
+                # Simulate a reset (e.g. clear_cache()) landing while this
+                # "slow" build was in flight.
                 resolver._reset_ydl()
             return {"quiet": True}
 
@@ -342,9 +233,7 @@ class TestActiveResolvesCounter:
         """If _get_ydl() itself raises (opts build or the YoutubeDL()
         constructor failing) -- as opposed to extract_info() raising --
         no increment ever happened, so _try_resolve()'s finally must not
-        attempt a decrement either. This is exactly the ordering
-        _resolving_video_id.value is set before _get_ydl() to protect:
-        nothing between the increment and its guaranteed decrement."""
+        attempt a decrement either."""
         resolver = StreamResolver()
         resolver._get_ydl = MagicMock(side_effect=RuntimeError("boom"))
 
@@ -354,95 +243,10 @@ class TestActiveResolvesCounter:
         assert resolver._active_resolves == 0
 
 
-class TestLooksLikeJsSolverReady:
-    """looks_like_js_solver_ready() is a fast, local-only, no-network
-    check — previously only ever exercised indirectly via
-    monkeypatch.setattr replacements in test_session.py /
-    test_session_round_trip.py. These tests invoke the real
-    implementation directly."""
-
-    def test_true_when_remote_components_already_configured(self, monkeypatch):
-        settings = Settings()
-        settings.yt_dlp.remote_components = "ejs:github"
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        assert looks_like_js_solver_ready() is True
-
-    def test_true_when_solver_cache_dir_present_and_nonempty(self, tmp_path, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-        solver_dir = tmp_path / "yt-dlp" / "challenge-solver"
-        solver_dir.mkdir(parents=True)
-        (solver_dir / "solver.js").write_text("// cached solver\n")
-        assert looks_like_js_solver_ready() is True
-
-    def test_false_when_solver_cache_dir_missing(self, tmp_path, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-        assert looks_like_js_solver_ready() is False
-
-    def test_false_when_solver_cache_dir_empty(self, tmp_path, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-        solver_dir = tmp_path / "yt-dlp" / "challenge-solver"
-        solver_dir.mkdir(parents=True)
-        assert looks_like_js_solver_ready() is False
-
-    def test_false_on_filesystem_error(self, tmp_path, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-
-        def boom(self):
-            raise OSError("permission denied")
-
-        monkeypatch.setattr(Path, "is_dir", boom)
-        assert looks_like_js_solver_ready() is False
-
-    def test_uses_default_cache_home_when_env_var_unset(self, tmp_path, monkeypatch):
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-        fake_home = tmp_path / "fake_home"
-        solver_dir = fake_home / ".cache" / "yt-dlp" / "challenge-solver"
-        solver_dir.mkdir(parents=True)
-        (solver_dir / "solver.js").write_text("// cached\n")
-        if sys.platform == "win32":
-            monkeypatch.setenv("USERPROFILE", str(fake_home))
-        else:
-            monkeypatch.setenv("HOME", str(fake_home))
-        assert looks_like_js_solver_ready() is True
-
-    def test_respects_custom_xdg_cache_home_over_default(self, tmp_path, monkeypatch):
-        """A non-default XDG_CACHE_HOME must be honored. The *default*
-        (~/.cache) home is pointed at an empty directory with no solver
-        cache, so a True result can only be explained by actually reading
-        XDG_CACHE_HOME rather than silently falling back to the default."""
-        settings = Settings()
-        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-
-        fake_home = tmp_path / "fake_home"
-        fake_home.mkdir()
-        if sys.platform == "win32":
-            monkeypatch.setenv("USERPROFILE", str(fake_home))
-        else:
-            monkeypatch.setenv("HOME", str(fake_home))
-
-        custom_cache = tmp_path / "custom_cache"
-        solver_dir = custom_cache / "yt-dlp" / "challenge-solver"
-        solver_dir.mkdir(parents=True)
-        (solver_dir / "solver.js").write_text("// cached\n")
-        monkeypatch.setenv("XDG_CACHE_HOME", str(custom_cache))
-
-        assert looks_like_js_solver_ready() is True
-
-
 class TestBuildYdlOptsCookieInjection:
     """_build_ydl_opts()'s cookie-injection logic had no direct test
     before this file; every existing test in this file targets
-    _detect_stream_cookies, _YtDlpLogger, or _get_ydl/_reset_ydl in
+    _detect_stream_cookies or _get_ydl/_reset_ydl in
     isolation, none of them assert what actually ends up in the opts
     dict."""
 

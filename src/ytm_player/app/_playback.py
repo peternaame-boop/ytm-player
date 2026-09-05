@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -155,12 +154,6 @@ class PlaybackMixin(YTMHostBase):
             return
 
         if stream_info is None:
-            if self.stream_resolver and self.stream_resolver.consume_missing_remote_components(
-                video_id
-            ):
-                self._handle_missing_remote_components_failure(track)
-                return
-
             title = track.get("title", video_id)
             self.notify(
                 f'Couldn\'t play "{title}" — track may be unavailable or region-locked. '
@@ -313,113 +306,6 @@ class PlaybackMixin(YTMHostBase):
                 )
             self.notify(exhausted_message, severity="error", timeout=6)
             self._consecutive_failures = 0
-
-    def _handle_missing_remote_components_failure(self, track: dict) -> None:
-        """First-class handling for a resolve that hit missing remote_components.
-
-        Unlike an ordinary resolve failure (unavailable video, region lock,
-        network blip — all opaque and not worth interrupting the queue
-        over), this cause is both diagnosable and fixable in-app. First
-        occurrence this session: pause here instead of skipping — retrying
-        the *same* track after the fix is the whole point, since nothing
-        was actually wrong with it. Later occurrences (already asked, user
-        either declined or it recurred anyway) fall back to skipping, but
-        say what actually happened instead of guessing "region-locked".
-        """
-        title = track.get("title", "this track")
-
-        if self._remote_components_prompted:
-            self.notify(
-                f"Couldn't play \"{title}\" — yt-dlp's JS challenge solver isn't enabled "
-                f"(remote_components). Skipping...",
-                severity="error",
-                timeout=4,
-            )
-            self._handle_play_failure(
-                exhausted_message="Multiple tracks failed — stream resolver reset. Try playing again.",
-                failure_kind="stream",
-            )
-            return
-
-        def _on_accept() -> None:
-            self.notify(
-                "Enabled yt-dlp's JS challenge solver. Retrying...",
-                timeout=3,
-            )
-            self.run_worker(self.play_track(track))
-
-        def _on_decline() -> None:
-            self.notify(
-                f'Skipped "{title}" — needs yt-dlp\'s JS challenge solver enabled.',
-                severity="warning",
-                timeout=4,
-            )
-            self._handle_play_failure(
-                exhausted_message="Multiple tracks failed — stream resolver reset. Try playing again.",
-                failure_kind="stream",
-            )
-
-        from ytm_player.services.stream import REMOTE_COMPONENTS_PROMPT_BODY
-
-        self._show_remote_components_prompt(
-            message=f'"{title}" {REMOTE_COMPONENTS_PROMPT_BODY}',
-            confirm_label="Enable & Retry",
-            cancel_label="Skip",
-            on_accept=_on_accept,
-            on_decline=_on_decline,
-        )
-
-    def _show_remote_components_prompt(
-        self,
-        *,
-        message: str,
-        confirm_label: str = "Enable",
-        cancel_label: str = "Not now",
-        on_accept: Callable[[], None],
-        on_decline: Callable[[], None] | None = None,
-    ) -> None:
-        """Shared one-time confirm/apply/clear-cache flow for remote_components.
-
-        One-shot per session regardless of caller — used both by an actual
-        playback failure and by the startup warmup (SessionMixin), so both
-        paths share the exact same "already asked" guard rather than each
-        keeping (and possibly disagreeing on) their own.
-        """
-        if self._remote_components_prompted:
-            logger.debug("remote_components prompt suppressed — already shown this session")
-            return
-        self._remote_components_prompted = True
-        logger.info("Showing remote_components prompt")
-
-        from ytm_player.ui.popups.confirm_popup import ConfirmPopup
-
-        def _on_confirm(confirmed: bool | None) -> None:
-            logger.info(
-                "remote_components prompt answered: %s",
-                "accepted" if confirmed else "declined",
-            )
-            if not confirmed:
-                if on_decline is not None:
-                    on_decline()
-                return
-            # "ejs:github" fetches the JS challenge solver from GitHub release
-            # assets under the yt-dlp org, not "ejs:npm" (a live npm-package
-            # fetch — an open community supply-chain concern, yt-dlp#15185,
-            # that does not apply to this path). yt-dlp does not checksum- or
-            # signature-verify the downloaded asset at fetch time; the actual
-            # safety boundary is Deno's default sandbox, which denies the
-            # solver script filesystem and network access (yt-dlp/yt-dlp
-            # wiki: EJS; yt-dlp#15012).
-            self.settings.yt_dlp.remote_components = "ejs:github"
-            self.settings.save()
-            if self.stream_resolver:
-                self.stream_resolver.clear_cache()
-            on_accept()
-
-        self.push_screen(
-            ConfirmPopup(message, confirm_label=confirm_label, cancel_label=cancel_label),
-            _on_confirm,
-        )
 
     async def _toggle_play_pause(self) -> None:
         """Toggle play/pause, starting playback from queue if player is idle."""
