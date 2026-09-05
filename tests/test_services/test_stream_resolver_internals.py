@@ -483,77 +483,46 @@ class TestBuildYdlOptsCookieInjection:
 
 
 class TestClientAndFormatSelection:
-    """Regression guard for the client/format values settled on after
-    three rounds of real-playback validation:
+    """Regression guard for the client list and format selector.
 
-    1. Villoh's PR #136 review moved off ["default","android"]/bestaudio
-       (4/12 success) to web_safari/web_embedded with a combined-format
-       selector (24/24 success at the time).
-    2. Villoh's later, more rigorous testing found web_safari/web_embedded
-       erratic in practice (16/30) versus PR #137's tv_downgraded (30/30).
-       Independent validation here (direct HTTP Range-request probing
-       against a 25-track sample of real play history — the actual access
-       pattern mpv uses, which yt-dlp's own downloader doesn't reproduce)
-       confirmed it: web_safari/web_embedded resolves formats fine but GVS
-       immediately 403s the Range request (1/25 succeeded); tv_downgraded
-       needs tv_simply paired ahead of it to extract at all, but together
-       they succeeded 25/25.
-    3. tv_simply has SUPPORTS_COOKIES=False, so an authenticated request
-       (real session cookies) gets it silently dropped by yt-dlp, leaving
-       tv_downgraded alone — but this does NOT reproduce the unauthenticated
-       tv_downgraded-alone failure, because yt-dlp auto-appends `web_music`
-       for any authenticated music.youtube.com request. That auto-added
-       client exposes real audio-only formats up to ~280kbps opus, so
-       `bestaudio` was reinstated at the front of the selector — reversing
-       a prior finding that held bestaudio always PO-Token-gated, which had
-       never been tested against web_music specifically. Validated against
-       18 real, distinct tracks from real play history with two Range
-       probes each (immediate and 2MB into the file): 18/18 succeeded —
-       under a YouTube Music Premium account specifically (Premium is
-       exempt from web_music's PO-Token requirement; non-Premium
-       authenticated accounts aren't covered by this validation and may
-       see the same GVS-403 failures as web_safari/web_embedded above).
-       See CHANGELOG.md for the full investigation.
+    The client/format selection regressed silently once before (commit
+    8450505 -> 3efbd66); these tests exist so a future refactor can't do
+    the same."""
 
-    This client/format selection already regressed once before (commit
-    8450505 -> 3efbd66) with nothing to catch it; these tests exist so a
-    future refactor can't silently do the same."""
-
-    def test_player_client_is_the_validated_pair(self, monkeypatch):
+    def test_player_client_is_default_and_android(self, monkeypatch):
         settings = Settings()
         monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
         with patch("ytm_player.services.stream._detect_stream_cookies", return_value=None):
             opts = StreamResolver()._build_ydl_opts()
-        assert opts["extractor_args"]["youtube"]["player_client"] == [
-            "tv_simply",
-            "tv_downgraded",
-        ]
+        assert opts["extractor_args"]["youtube"]["player_client"] == ["default", "android"]
 
-    def test_format_prefers_bestaudio_with_a_combined_fallback(self, monkeypatch):
-        """bestaudio is deliberately first: validated as Range-safe for
-        authenticated resolves on a Premium account (web_music auto-append
-        supplies it; non-Premium authenticated accounts aren't covered —
-        see class docstring), and a no-op when unauthenticated
-        (tv_simply/tv_downgraded expose no audio-only format, so this
-        alternative never matches and the combined fallback is used
-        instead)."""
-        from ytm_player.services.stream import _FORMAT
+    def test_every_tier_prefers_bestaudio_with_a_combined_fallback(self, monkeypatch):
+        """bestaudio first (real audio-only formats on authenticated
+        resolves), then a combined audio+video format so clients that expose
+        no audio-only stream still resolve to something playable."""
+        from ytm_player.services.stream import QUALITY_FORMATS
 
-        assert _FORMAT == "bestaudio/best[vcodec!=none][acodec!=none]"
+        assert QUALITY_FORMATS == {
+            "high": "bestaudio/best[vcodec!=none][acodec!=none]",
+            "medium": "bestaudio[abr<=128]/bestaudio/best[vcodec!=none][acodec!=none]",
+            "low": "bestaudio[abr<=64]/bestaudio/best[vcodec!=none][acodec!=none]",
+        }
 
         settings = Settings()
         monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
-        with patch("ytm_player.services.stream._detect_stream_cookies", return_value=None):
-            opts = StreamResolver()._build_ydl_opts()
-        assert opts["format"] == _FORMAT
+        for tier, selector in QUALITY_FORMATS.items():
+            with patch("ytm_player.services.stream._detect_stream_cookies", return_value=None):
+                opts = StreamResolver(tier)._build_ydl_opts()
+            assert opts["format"] == selector
 
-    def test_format_is_valid_yt_dlp_selector_syntax(self):
+    def test_formats_are_valid_yt_dlp_selector_syntax(self):
         """Parsing through yt-dlp's own selector grammar catches composition
         mistakes (unbalanced brackets, bad operators) at negligible cost —
         no network I/O, pure syntax check."""
         import yt_dlp
 
-        from ytm_player.services.stream import _FORMAT
+        from ytm_player.services.stream import QUALITY_FORMATS
 
         ydl = yt_dlp.YoutubeDL({"quiet": True})
-        ydl.build_format_selector(_FORMAT)  # raises SyntaxError if malformed
+        for selector in QUALITY_FORMATS.values():
+            ydl.build_format_selector(selector)  # raises SyntaxError if malformed

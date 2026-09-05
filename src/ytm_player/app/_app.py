@@ -644,7 +644,7 @@ class YTMPlayerApp(
             )
             self.player = Player()
             self.player.set_event_loop(asyncio.get_running_loop())
-            self.stream_resolver = StreamResolver()
+            self.stream_resolver = StreamResolver(self.settings.playback.audio_quality)
             self.history = HistoryManager()
             await self.history.init()
             self.cache = CacheManager()

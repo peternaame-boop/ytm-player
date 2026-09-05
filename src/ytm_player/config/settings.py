@@ -39,6 +39,7 @@ class GeneralSettings:
 
 @dataclass
 class PlaybackSettings:
+    audio_quality: str = "high"
     autoplay: bool = True
     prefer_audio: bool = True
     default_volume: int = 80

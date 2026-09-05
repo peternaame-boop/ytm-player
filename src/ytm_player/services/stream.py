@@ -172,34 +172,17 @@ class _YtDlpLogger:
         logger.error("yt-dlp: %s", message)
 
 
-# tv_simply/tv_downgraded never exposes more than one non-storyboard
-# COMBINED format per video (confirmed empirically: itag 18, a progressive
-# MP4 with AAC mp4a.40.2 audio — no HLS ladder). For a request without
-# cookies, that's the only option, so `bestaudio` never matches anything
-# and the selector falls through to it.
-#
-# For an AUTHENTICATED request (real session cookies present), yt-dlp
-# automatically appends `web_music` to the client list for any
-# music.youtube.com URL (its own client-selection logic, not something we
-# configure) — this exposes genuine audio-only DASH formats up to ~280kbps
-# opus (itag 774), a real quality improvement over itag 18's ~128kbps AAC
-# muxed with a never-rendered video track (player.py initializes mpv with
-# video=False). `bestaudio` was previously excluded here entirely — a
-# prior finding (see CHANGELOG.md) held it "PO-Token-gated regardless of
-# client or cookies", based on testing against web_safari/web_embedded/
-# default/android, none of which is `web_music`. Validated here
-# specifically for this codepath (tv_simply/tv_downgraded + auto-appended
-# web_music) against 18 real, distinct tracks from actual play history
-# under a YouTube Music PREMIUM account, probing each resolved URL with
-# two HTTP Range requests (immediately and 2MB into the file, to catch a
-# delayed-failure pattern too, not just an immediate one): 18/18
-# succeeded. Premium accounts are exempt from web_music's PO-Token
-# requirement (yt-dlp's own not_required_for_premium policy flag) —
-# web_music's policy is otherwise identical to web_safari/web_embedded's
-# (the pair proven erratic above), so this validation does NOT cover
-# non-Premium authenticated accounts, which may see the same intermittent
-# GVS-403-after-resolution failures. See CHANGELOG.md for full detail.
-_FORMAT = "bestaudio/best[vcodec!=none][acodec!=none]"
+# bestaudio first (real audio-only DASH formats when the resolve is
+# authenticated), then a combined audio+video format as the fallback for
+# clients that expose no audio-only stream. mpv runs with video=False, so
+# the video track of a combined format is never rendered.
+_COMBINED_FALLBACK = "best[vcodec!=none][acodec!=none]"
+
+QUALITY_FORMATS = {
+    "high": f"bestaudio/{_COMBINED_FALLBACK}",
+    "medium": f"bestaudio[abr<=128]/bestaudio/{_COMBINED_FALLBACK}",
+    "low": f"bestaudio[abr<=64]/bestaudio/{_COMBINED_FALLBACK}",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,7 +205,8 @@ class StreamResolver:
     downloading. Caches results in memory with automatic expiry.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, quality: str = "high") -> None:
+        self._quality = quality
         self._cache: dict[str, StreamInfo] = {}
         self._cache_lock = threading.Lock()
         self._pending: dict[str, asyncio.Future[StreamInfo | None]] = {}
@@ -269,11 +253,23 @@ class StreamResolver:
         # video context of its own.
         self._resolving_video_id = threading.local()
 
+    @property
+    def quality(self) -> str:
+        return self._quality
+
+    @quality.setter
+    def quality(self, value: str) -> None:
+        if value not in QUALITY_FORMATS:
+            raise ValueError(f"Unknown quality '{value}'. Choose from: {list(QUALITY_FORMATS)}")
+        if value != self._quality:
+            self._quality = value
+            self._reset_ydl()
+
     def _build_ydl_opts(self) -> dict:
         """Build yt-dlp options for audio extraction."""
         settings = get_settings().yt_dlp
         opts = {
-            "format": _FORMAT,
+            "format": QUALITY_FORMATS.get(self._quality, QUALITY_FORMATS["high"]),
             "quiet": True,
             "no_warnings": True,
             "logger": _YtDlpLogger(self._flag_missing_remote_components),
@@ -284,36 +280,9 @@ class StreamResolver:
             # Avoid writing any files to disk.
             "writeinfojson": False,
             "writethumbnail": False,
-            # web_safari/web_embedded (yt-dlp's cookie-compatible web clients)
-            # proved erratic on real playback despite resolving formats fine —
-            # GVS rejects HTTP Range requests against their itag-18 URLs with
-            # an immediate 403 (confirmed via direct Range-request testing
-            # against a 25-track sample of real play history: 1/25 succeeded).
-            # tv_downgraded alone fails extraction outright ("The page needs
-            # to be reloaded") when unauthenticated; it must be paired with
-            # tv_simply, which contributes no formats of its own but is
-            # required for extraction to succeed. tv_simply+tv_downgraded
-            # together resolved and played back successfully on 25/25 of the
-            # same sample. See CHANGELOG.md for the full investigation
-            # (independently validates maintainer @Villoh's PR #136 review
-            # finding and PR #137's fix).
-            #
-            # tv_simply has SUPPORTS_COOKIES=False (yt-dlp's own
-            # INNERTUBE_CLIENTS metadata) — for an AUTHENTICATED request
-            # (real session cookies present), yt-dlp's own client-selection
-            # logic silently drops it ("Skipping client tv_simply since it
-            # does not support cookies"), leaving tv_downgraded alone. This
-            # does NOT reproduce the unauthenticated tv_downgraded-alone
-            # failure: authenticated resolution succeeds regardless, because
-            # yt-dlp additionally auto-appends `web_music` for any
-            # authenticated music.youtube.com request (its own logic, not
-            # configured here), which supplies working formats on its own.
-            # Confirmed against a real authenticated session (not a
-            # fabricated one — a fabricated session can't be used to test
-            # this because the actual player-response/format requests
-            # would be rejected by Google using invalid credentials, not
-            # because the local client-selection filter is skipped).
-            "extractor_args": {"youtube": {"player_client": ["tv_simply", "tv_downgraded"]}},
+            # Android client provides a non-PoT fallback path (legacy format 18)
+            # that unblocks madeForKids content which the default web client refuses.
+            "extractor_args": {"youtube": {"player_client": ["default", "android"]}},
         }
         opts = apply_configured_yt_dlp_options(opts, settings)
         if "cookiefile" not in opts:

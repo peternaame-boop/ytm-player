@@ -133,6 +133,22 @@ class TestStreamExpiry:
         assert resolver.is_expired("ok") is False
 
 
+class TestStreamQuality:
+    def test_default_quality(self):
+        resolver = StreamResolver()
+        assert resolver.quality == "high"
+
+    def test_set_valid_quality(self):
+        resolver = StreamResolver()
+        resolver.quality = "low"
+        assert resolver.quality == "low"
+
+    def test_set_invalid_quality_raises(self):
+        resolver = StreamResolver()
+        with pytest.raises(ValueError):
+            resolver.quality = "ultra"
+
+
 class TestCacheEviction:
     def test_prune_expired(self):
         resolver = StreamResolver()

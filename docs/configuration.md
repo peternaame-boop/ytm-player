@@ -33,6 +33,7 @@ check_for_updates = true     # check PyPI once per 24h, surface a one-time toast
 
 ```toml
 [playback]
+audio_quality = "high"       # high, medium, low
 prefer_audio = true          # prefer audio-only streams over video (audio uses less bandwidth)
 default_volume = 80          # 0-100
 autoplay = true              # auto-play next on track end
