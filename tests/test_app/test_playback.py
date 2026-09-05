@@ -945,6 +945,51 @@ class TestPlayerErrorRecovery:
         # One reset per track's first failure, plus the escalation's.
         assert host.stream_resolver.clear_cache.call_count == len(tracks) + 1
 
+    async def _fail_twice_and_schedule_advance(self, host):
+        """Initial play and its recovery both fail; the policy defers the queue advance."""
+        host.queue.next_track = MagicMock(return_value=_OTHER)
+        await host.play_track(_TRACK)
+        await host._on_player_error(_stream_error(1, _TRACK))
+        await host._on_player_error(_stream_error(2, _TRACK))
+        host.call_later.assert_called_once()
+        return host.call_later.call_args.args[0]
+
+    async def _run_deferred(self, host, deferred):
+        """What Textual does later: run the callback, then the worker it starts."""
+        deferred()
+        await host.run_worker.call_args.args[0]
+
+    async def test_deferred_advance_plays_the_next_track_when_not_superseded(self):
+        host = _recovery_host()
+        deferred = await self._fail_twice_and_schedule_advance(host)
+
+        await self._run_deferred(host, deferred)
+
+        assert [c.args[1] for c in host.player.play.await_args_list] == [_TRACK, _TRACK, _OTHER]
+        assert host._play_generation == 3
+
+    async def test_deferred_advance_after_stop_does_not_resume_playback(self):
+        host = _recovery_host()
+        host.player.stop = AsyncMock()
+        deferred = await self._fail_twice_and_schedule_advance(host)
+
+        await MPRISMixin._mpris_stop(host)
+        await self._run_deferred(host, deferred)
+
+        assert _attempts(host) == [1, 2]
+        assert host._play_generation == 3
+
+    async def test_deferred_advance_after_a_newer_play_is_dropped(self):
+        host = _recovery_host()
+        deferred = await self._fail_twice_and_schedule_advance(host)
+        chosen = {"video_id": "usr00000001", "title": "Chosen"}
+        await host.play_track(chosen)
+
+        await self._run_deferred(host, deferred)
+
+        assert [c.args[1] for c in host.player.play.await_args_list] == [_TRACK, _TRACK, chosen]
+        assert host._play_generation == 3
+
     def test_audio_progress_resets_failure_state(self):
         host = _recovery_host()
         host._consecutive_failures = 3

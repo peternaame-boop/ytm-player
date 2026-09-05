@@ -290,7 +290,19 @@ class PlaybackMixin(YTMHostBase):
         if self._consecutive_failures < _MAX_CONSECUTIVE_FAILURES:
             next_track = self.queue.next_track()
             if next_track:
-                self.call_later(lambda: self.run_worker(self.play_track(next_track)))
+                # The advance runs later; a stop or a newer play landing
+                # before it does supersedes it, and the check has to happen
+                # inside the worker — the generation at scheduling time
+                # says nothing about what arrived in between.
+                scheduled_for = self._play_generation
+
+                async def _advance() -> None:
+                    if scheduled_for != self._play_generation:
+                        logger.debug("Deferred queue advance superseded; not playing")
+                        return
+                    await self.play_track(next_track)
+
+                self.call_later(lambda: self.run_worker(_advance()))
         else:
             if failure_kind is not None and self.stream_resolver:
                 # Likely a systemic issue (stale session, network) — reset
