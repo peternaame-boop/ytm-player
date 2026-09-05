@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import threading
+import time
 import weakref
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 # After this many consecutive API failures, re-create the YTMusic client
 # in case the session has gone stale (expired cookies, broken connection).
 _MAX_API_FAILURES_BEFORE_REINIT = 3
+# After a failed automatic session renewal, expired calls in this window fail
+# without repeating the browser cookie extraction and account probes.
+_RENEWAL_COOLDOWN_SECONDS = 60.0
 
 # Exception types that count as "expected API/network failure" — these increment
 # the failure counter and may trigger a client reinit. Programming-error
@@ -173,6 +177,11 @@ class YTMusicService:
         # asyncio.to_thread workers.
         self._client_init_lock = threading.Lock()
         self._auth_refresh_lock = asyncio.Lock()
+        # time.monotonic() before which no renewal is attempted (set by a
+        # failed attempt, cleared by a successful one). Read and written
+        # under _auth_refresh_lock; deliberately not tied to the client
+        # object, which the consecutive-failure reinit in _run replaces.
+        self._renewal_retry_after: float = 0.0
         # Serializes get_playlist(order=...) monkey-patches so concurrent
         # calls don't stack patches on client._send_request.
         self._order_lock = asyncio.Lock()
@@ -237,9 +246,12 @@ class YTMusicService:
             except (YTMusicServerError, KeyError) as exc:
                 if self._auth_manager is None or failed_client is None or not _is_auth_expired(exc):
                     raise
-                return await self._refresh_auth_and_retry(
-                    failed_client, func, args, kwargs, timeout, exc
-                )
+                method_name = getattr(func, "__name__", "")
+                client = await self._renewed_client_for(failed_client, exc, method_name)
+                retry_func = getattr(client, method_name, None)
+                if not callable(retry_func):
+                    raise RuntimeError(f"Cannot retry YTMusic method {method_name!r}")
+                return await self._run(retry_func, *args, timeout=timeout, **kwargs)
         finally:
             # Known limitation: on timeout/cancellation the to_thread worker
             # may still be running when we decrement, so a later patch window
@@ -251,23 +263,21 @@ class YTMusicService:
             if self._inflight == 0:
                 self._no_inflight.set()
 
-    async def _refresh_auth_and_retry(
-        self,
-        failed_client: Any,
-        func: Any,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        timeout: int | None,
-        error: BaseException,
+    async def _renewed_client_for(
+        self, failed_client: Any, error: BaseException, method_name: str = ""
     ) -> Any:
+        """Renew the expired session of *failed_client*; return the client to retry on.
+
+        The retry is bound to the account of the client the call failed on.
+        A replacement client for any other account — `ytm setup` switching
+        accounts while the call was pending, or between the renewal check
+        and the rebuild below — must not have the call replayed on it.
+        Raises *error* when renewal is refused, fails, or a recent attempt
+        failed and the cooldown has not elapsed.
+        """
         auth_manager = self._auth_manager
         if auth_manager is None:
             raise error
-        method_name = getattr(func, "__name__", "")
-        # The call is bound to the account of the client it failed on. A
-        # replacement client for any other account — `ytm setup` switching
-        # accounts while the call was pending, or between the renewal check
-        # and the rebuild below — must not have the call replayed on it.
         identity = self._client_identities.get(failed_client)
         if identity is None:
             logger.warning(
@@ -277,6 +287,14 @@ class YTMusicService:
             raise error
         async with self._auth_refresh_lock:
             if self._ytm is failed_client or self._ytm is None:
+                remaining = self._renewal_retry_after - time.monotonic()
+                if remaining > 0:
+                    logger.warning(
+                        "YouTube Music session expired; the last automatic renewal failed, "
+                        "not trying again for another %.0fs",
+                        remaining,
+                    )
+                    raise error
                 logger.info("YouTube Music session expired; refreshing browser credentials")
                 if self._on_auth_refresh is not None:
                     try:
@@ -284,8 +302,10 @@ class YTMusicService:
                     except Exception:
                         logger.exception("Authentication refresh notification failed")
                 if not await asyncio.to_thread(auth_manager.try_auto_refresh, identity):
+                    self._renewal_retry_after = time.monotonic() + _RENEWAL_COOLDOWN_SECONDS
                     logger.warning("Automatic YouTube Music session refresh failed")
                     raise error
+                self._renewal_retry_after = 0.0
                 with self._client_init_lock:
                     self._ytm = None
                 logger.info("YouTube Music session refreshed")
@@ -298,10 +318,7 @@ class YTMusicService:
                     method_name or "call",
                 )
                 raise error
-            retry_func = getattr(client, method_name, None)
-            if not callable(retry_func):
-                raise RuntimeError(f"Cannot retry YTMusic method {method_name!r}")
-            return await self._run(retry_func, *args, timeout=timeout, **kwargs)
+            return client
 
     async def _run(self, func: Any, *args: Any, timeout: int | None = None, **kwargs: Any) -> Any:
         """``_call`` without the patch-window gate (the ordered call itself uses this)."""
@@ -532,40 +549,70 @@ class YTMusicService:
         try:
             params = self._ORDER_PARAMS.get(order or "")
             if params:
-                # Temporarily inject sort params into the browse request.
-                # Serialize this section so two concurrent get_playlist(order=...)
-                # calls don't stack patches on client._send_request and leak.
-                async with self._order_lock:
-                    # Open the patch window: stop new normal calls, then wait
-                    # for in-flight ones to drain before touching the shared
-                    # client._send_request.
-                    self._no_patch.clear()
-                    try:
-                        await self._no_inflight.wait()
-                        client = self.client
-                        original_send = client._send_request
-
-                        def _patched_send(endpoint: str, body: dict, *a: Any, **kw: Any) -> Any:
-                            if endpoint == "browse" and isinstance(body, dict):
-                                body["params"] = params
-                            return original_send(endpoint, body, *a, **kw)
-
-                        try:
-                            client._send_request = _patched_send
-                            # _run, not _call: the gate is closed for the window.
-                            return await self._run(
-                                client.get_playlist, playlist_id, timeout=timeout, limit=limit
-                            )
-                        finally:
-                            client._send_request = original_send
-                    finally:
-                        self._no_patch.set()
+                client = self.client
+                try:
+                    return await self._get_playlist_ordered(
+                        client, playlist_id, params, limit=limit, timeout=timeout
+                    )
+                except (YTMusicServerError, KeyError) as exc:
+                    if self._auth_manager is None or not _is_auth_expired(exc):
+                        raise
+                    # The window above is closed again by now: renewal runs
+                    # with client._send_request restored and the gate open,
+                    # then the sorted fetch is retried once in a fresh window
+                    # on the verified replacement client.
+                    renewed = await self._renewed_client_for(client, exc, "get_playlist")
+                    return await self._get_playlist_ordered(
+                        renewed, playlist_id, params, limit=limit, timeout=timeout
+                    )
             return await self._call(
                 self.client.get_playlist, playlist_id, timeout=timeout, limit=limit
             )
         except Exception:
             logger.exception("get_playlist failed for %r", playlist_id)
             return {}
+
+    async def _get_playlist_ordered(
+        self,
+        client: Any,
+        playlist_id: str,
+        params: str,
+        *,
+        limit: int | None,
+        timeout: int | None,
+    ) -> dict[str, Any]:
+        """One ``get_playlist`` on *client* with sort *params* injected into its browse request.
+
+        Temporarily patches ``client._send_request`` inside a patch window:
+        ``_order_lock`` serializes windows so two ordered calls don't stack
+        patches, and the gate keeps every other client call out — a
+        concurrent "browse" request would otherwise get the sort params
+        too. The patch is restored and the gate reopened on any exit,
+        including cancellation.
+        """
+        async with self._order_lock:
+            # Open the window: stop new normal calls, then wait for in-flight
+            # ones to drain before touching the shared client._send_request.
+            self._no_patch.clear()
+            try:
+                await self._no_inflight.wait()
+                original_send = client._send_request
+
+                def _patched_send(endpoint: str, body: dict, *a: Any, **kw: Any) -> Any:
+                    if endpoint == "browse" and isinstance(body, dict):
+                        body["params"] = params
+                    return original_send(endpoint, body, *a, **kw)
+
+                client._send_request = _patched_send
+                try:
+                    # _run, not _call: the gate is closed for the window.
+                    return await self._run(
+                        client.get_playlist, playlist_id, timeout=timeout, limit=limit
+                    )
+                finally:
+                    client._send_request = original_send
+            finally:
+                self._no_patch.set()
 
     async def get_playlist_remaining(
         self, playlist_id: str, already_have: int, order: str | None = None
