@@ -19,9 +19,12 @@ class TestAutoRefresh:
         assert manager.try_auto_refresh()
 
         detect.assert_called_once_with()
-        save.assert_called_once_with(cookies, first_valid=True, stream_jar=jar)
+        save.assert_called_once_with(cookies, stream_jar=jar, expected_channel_id=None)
 
-    def test_silent_refresh_only_probes_preferred_account(self, tmp_path, monkeypatch, capsys):
+    def test_silent_refresh_refuses_without_recorded_identity(self, tmp_path, monkeypatch, capsys):
+        """No account.json (a session set up before identities were recorded):
+        renewal is refused before any account is probed — see
+        test_auth_identity.py for the full matrix."""
         auth_file = tmp_path / "auth.json"
         auth_file.write_text(json.dumps({"x-goog-authuser": "2"}))
         probed: list[int] = []
@@ -31,20 +34,14 @@ class TestAutoRefresh:
             value = "test"
 
         def fake_ytmusic(path):
-            authuser = int(json.loads(open(path).read())["x-goog-authuser"])
-            probed.append(authuser)
-            client = MagicMock()
-            client.get_account_info.return_value = {
-                "accountName": "Test",
-                "channelHandle": "@test",
-            }
-            return client
+            probed.append(int(json.loads(open(path).read())["x-goog-authuser"]))
+            return MagicMock()
 
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", fake_ytmusic)
         manager = AuthManager(config_dir=tmp_path, auth_file=auth_file)
 
-        assert manager._save_youtube_cookies([Cookie()], first_valid=True)
-        assert probed == [2]
+        assert manager._save_youtube_cookies([Cookie()]) is False
+        assert probed == []
         assert json.loads(auth_file.read_text())["x-goog-authuser"] == "2"
         assert capsys.readouterr().out == ""
 

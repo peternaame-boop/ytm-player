@@ -10,13 +10,16 @@ consumed by stream.py's yt-dlp resolver — see _save_stream_cookiejar().
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
 from typing import IO, Any
@@ -164,6 +167,112 @@ def _atomic_write(
         raise
 
 
+_ACCOUNT_SCHEMA_VERSION = 1
+
+# A YouTube channel ID: "UC" + 22 URL-safe base64 characters.
+_CHANNEL_ID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}")
+
+_NO_RENEWAL_NOTE = (
+    "  Note: automatic session renewal is not available for this account; "
+    "re-run `ytm setup` when the session expires."
+)
+
+
+@dataclass(frozen=True)
+class _ProbedAccount:
+    """What YouTube Music reported for one browser account slot."""
+
+    slot: int
+    name: str
+    handle: str
+    channel_id: str | None
+
+    def label(self) -> str:
+        parts = [self.name]
+        if self.handle:
+            parts.append(self.handle)
+        parts.append(f"browser slot {self.slot}")
+        return "  ·  ".join(parts)
+
+
+@dataclass(frozen=True)
+class _RecordedIdentity:
+    slot: int
+    channel_id: str
+
+
+def _channel_id_from_account_menu(response: Any) -> str | None:
+    """Extract the signed-in account's channel ID from an ``account/account_menu``
+    response, or None when the response doesn't have the expected shape.
+
+    Reads only the active account's own menu (``activeAccountHeaderRenderer``
+    must be present) and accepts exactly one "Your channel" link: the
+    ``ACCOUNT_BOX`` entry whose browse endpoint is a ``UC…`` id for a
+    ``MUSIC_PAGE_TYPE_USER_CHANNEL`` page. Anything else — missing header,
+    no such link, two of them, a non-channel id — is None, so the caller
+    fails closed rather than trusting an arbitrary id found elsewhere.
+    """
+    try:
+        menu = response["actions"][0]["openPopupAction"]["popup"]["multiPageMenuRenderer"]
+        if not isinstance(menu, dict) or "activeAccountHeaderRenderer" not in menu["header"]:
+            return None
+        items = menu["sections"][0]["multiPageMenuSectionRenderer"]["items"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if not isinstance(items, list):
+        return None
+
+    found: list[str] = []
+    for item in items:
+        link = item.get("compactLinkRenderer") if isinstance(item, dict) else None
+        if not isinstance(link, dict):
+            continue
+        icon = link.get("icon")
+        if not isinstance(icon, dict) or icon.get("iconType") != "ACCOUNT_BOX":
+            continue
+        endpoint = link.get("navigationEndpoint")
+        browse = endpoint.get("browseEndpoint") if isinstance(endpoint, dict) else None
+        if not isinstance(browse, dict):
+            continue
+        browse_id = browse.get("browseId")
+        page_type = (
+            (browse.get("browseEndpointContextSupportedConfigs") or {})
+            .get("browseEndpointContextMusicConfig", {})
+            .get("pageType")
+        )
+        if (
+            isinstance(browse_id, str)
+            and _CHANNEL_ID_RE.fullmatch(browse_id)
+            and page_type == "MUSIC_PAGE_TYPE_USER_CHANNEL"
+        ):
+            found.append(browse_id)
+    if len(found) != 1:
+        return None
+    return found[0]
+
+
+def _probe_account(auth_path: str, slot: int) -> _ProbedAccount | None:
+    """Ask YouTube Music who the session in *auth_path* is.
+
+    Raises whatever ytmusicapi raises for an invalid session; returns None
+    when the account has no name. The channel ID comes from the same
+    account-menu endpoint ``get_account_info`` reads, requested again in
+    raw form because ytmusicapi only parses the display fields out of it.
+    """
+    ytm = YTMusic(auth_path)
+    account = ytm.get_account_info()
+    name = account.get("accountName")
+    if not name:
+        return None
+    handle = account.get("channelHandle") or ""
+    channel_id: str | None = None
+    try:
+        channel_id = _channel_id_from_account_menu(ytm._send_request("account/account_menu", {}))
+    except Exception:
+        logger.debug("Could not read the account menu for a channel ID", exc_info=True)
+    return _ProbedAccount(slot=slot, name=str(name), handle=str(handle), channel_id=channel_id)
+
+
 class AuthManager:
     """Manages YouTube Music authentication via browser cookie extraction,
     and the yt-dlp stream cookiejar consumed by stream.py."""
@@ -174,11 +283,18 @@ class AuthManager:
         auth_file: Path = AUTH_FILE,
         cookies_file: str | None = None,
         stream_cookies_file: Path = STREAM_COOKIES_FILE,
+        account_file: Path | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._auth_file = auth_file
         self._cookies_file = normalize_cookiefile(cookies_file)
         self._stream_cookies_file = stream_cookies_file
+        # Identity of the session in auth.json (see _write_account_file).
+        # Lives next to auth.json (ACCOUNT_FILE for the default location) so
+        # tests pointing auth_file at a temp dir never touch the real one.
+        self._account_file = (
+            account_file if account_file is not None else auth_file.with_name("account.json")
+        )
 
     @property
     def auth_file(self) -> Path:
@@ -198,6 +314,26 @@ class AuthManager:
     def create_ytmusic_client(self, user: str | None = None) -> YTMusic:
         """Create a YTMusic client from the stored auth file."""
         return YTMusic(str(self._auth_file), user=user)
+
+    def create_bound_client(self, user: str | None = None) -> tuple[YTMusic, str | None]:
+        """Create a client from ONE snapshot of auth.json, together with the
+        channel ID account.json records for exactly that snapshot (None
+        without a matching record).
+
+        The client is built from the snapshot's parsed headers, never from
+        the path: a constructor re-reading the file could load a different
+        session than the one the record was checked against (another
+        process's ``ytm setup`` landing and rolling back in between), and a
+        client tagged with the wrong identity would defeat the retry guard
+        in YTMusicService.
+        """
+        try:
+            payload = self._auth_file.read_bytes()
+        except OSError:
+            return YTMusic(str(self._auth_file), user=user), None
+        recorded = self._load_recorded_identity(payload)
+        client = YTMusic(json.loads(payload), user=user)
+        return client, recorded.channel_id if recorded is not None else None
 
     def validate(self) -> bool:
         """Verify that the auth credentials actually work.
@@ -220,13 +356,18 @@ class AuthManager:
 
     # ── Auto-refresh ──────────────────────────────────────────────────
 
-    def try_auto_refresh(self) -> bool:
+    def try_auto_refresh(self, expected_channel_id: str | None = None) -> bool:
         """Attempt to silently refresh auth from cookies/browser.
 
         Called when the app detects an auth failure at runtime. Returns
-        True if fresh cookies were extracted and validation passed.
+        True if fresh cookies were extracted and validation passed. Only the
+        account recorded by the last ``ytm setup`` is accepted; when the
+        caller knows which account its failed client belonged to, pass it
+        as *expected_channel_id* and the recorded account must be that one.
         """
-        if self._cookies_file and self._refresh_from_cookies_file(Path(self._cookies_file)):
+        if self._cookies_file and self._refresh_from_cookies_file(
+            Path(self._cookies_file), expected_channel_id=expected_channel_id
+        ):
             return True
 
         detected = self._detect_browser()
@@ -234,7 +375,9 @@ class AuthManager:
             return False
         browser, cookies, jar = detected
         try:
-            return self._save_youtube_cookies(cookies, first_valid=True, stream_jar=jar)
+            return self._save_youtube_cookies(
+                cookies, stream_jar=jar, expected_channel_id=expected_channel_id
+            )
         except Exception:
             logger.debug("Auto-refresh failed", exc_info=True)
         return False
@@ -346,12 +489,20 @@ class AuthManager:
         except OSError:
             logger.warning("Failed to restore previous %s", label, exc_info=True)
 
-    def _refresh_from_cookies_file(self, cookies_file: Path, interactive: bool = False) -> bool:
+    def _refresh_from_cookies_file(
+        self,
+        cookies_file: Path,
+        interactive: bool = False,
+        expected_channel_id: str | None = None,
+    ) -> bool:
         """Refresh auth from cookies file without losing working credentials."""
         backup = self._backup_bytes(self._auth_file, "auth file")
+        account_backup = self._backup_bytes(self._account_file, "account file")
         stream_backup = self._backup_bytes(self._stream_cookies_file, "stream cookiejar")
 
-        if not self._extract_and_save_from_cookies_file(cookies_file, interactive=interactive):
+        if not self._extract_and_save_from_cookies_file(
+            cookies_file, interactive=interactive, expected_channel_id=expected_channel_id
+        ):
             return False
 
         try:
@@ -361,11 +512,15 @@ class AuthManager:
             logger.warning("Network error during cookies-file validation; restoring backup")
 
         self._restore_or_remove(self._auth_file, backup, "auth file")
+        self._restore_or_remove(self._account_file, account_backup, "account file")
         self._restore_or_remove(self._stream_cookies_file, stream_backup, "stream cookiejar")
         return False
 
     def _extract_and_save_from_cookies_file(
-        self, cookies_file: Path, interactive: bool = False
+        self,
+        cookies_file: Path,
+        interactive: bool = False,
+        expected_channel_id: str | None = None,
     ) -> bool:
         """Extract YouTube cookies from a Netscape cookies.txt file and write auth.json."""
         if not cookies_file.exists():
@@ -399,7 +554,12 @@ class AuthManager:
             logger.warning("No youtube.com cookies found in %s", cookies_file)
             return False
 
-        if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
+        if self._save_youtube_cookies(
+            yt_cookies,
+            interactive=interactive,
+            stream_jar=jar,
+            expected_channel_id=expected_channel_id,
+        ):
             if interactive:
                 print(f"  Cookies extracted from file and saved: {cookies_file}")
             return True
@@ -431,10 +591,21 @@ class AuthManager:
         self,
         cookies: list,
         interactive: bool = False,
-        first_valid: bool = False,
         stream_jar: Iterable[Cookie] | None = None,
+        expected_channel_id: str | None = None,
     ) -> bool:
-        """Persist YouTube cookie headers into auth.json."""
+        """Persist YouTube cookie headers into auth.json and record the account.
+
+        Interactive (``ytm setup``): probe every browser slot, let the user
+        pick, and record the chosen account's identity in account.json.
+
+        Silent (automatic renewal): only replace the session with the SAME
+        account. The channel ID recorded by the last setup must be found,
+        in the saved slot or — if the browser re-ordered its accounts — in
+        exactly one other slot. No recorded identity, no channel ID, no
+        match, or an ambiguous match refuses the renewal; the caller then
+        treats the session as expired and the user runs ``ytm setup`` once.
+        """
         cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
 
         # Verify we have the critical SAPISID cookie.
@@ -450,67 +621,63 @@ class AuthManager:
         base_headers["cookie"] = cookie_str
         base_headers["authorization"] = get_authorization(sapisid + " " + origin)
 
-        # Capture any previously saved account preference before probing.
-        preferred_index_before_probe: int | None = None
-        if self._auth_file.exists():
-            try:
-                existing = json.loads(self._auth_file.read_text(encoding="utf-8"))
-                preferred_index_before_probe = int(existing.get("x-goog-authuser", 0))
-            except (OSError, json.JSONDecodeError, ValueError):
-                pass
-
-        # Auto-refresh only needs the preferred account (or the first valid
-        # fallback), while setup lists every available account.
-        authuser_indices = list(range(5))
-        if first_valid and preferred_index_before_probe in authuser_indices:
-            authuser_indices.remove(preferred_index_before_probe)
-            authuser_indices.insert(0, preferred_index_before_probe)
-
         self._config_dir.mkdir(parents=True, exist_ok=True)
-        valid_accounts: list[tuple[int, str, str]] = []  # (authuser_index, accountName, handle)
-        for authuser in authuser_indices:
-            headers = {**base_headers, "x-goog-authuser": str(authuser)}
-            tmp_path: str | None = None
-            try:
-                fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=str(self._config_dir))
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
-                ytm = YTMusic(tmp_path)
-                account = ytm.get_account_info()
-                name = account.get("accountName")
-                handle = account.get("channelHandle") or ""
-                if name:
-                    valid_accounts.append((authuser, name, handle))
-                    if first_valid:
-                        break
-            except Exception:
-                logger.debug("x-goog-authuser=%d did not work, skipping", authuser)
-            finally:
-                if tmp_path is not None:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
 
+        if interactive:
+            chosen = self._select_account_interactively(base_headers)
+        else:
+            chosen = self._find_recorded_account(base_headers, expected_channel_id)
+        if chosen is None:
+            return False
+
+        headers = {**base_headers, "x-goog-authuser": str(chosen.slot)}
+        if not self._write_session(headers, chosen):
+            return False
+
+        if stream_jar is not None:
+            self._save_stream_cookiejar(stream_jar)
+        return True
+
+    # ── Account probing / selection ──────────────────────────────────
+
+    def _probe_slot(self, base_headers: dict, slot: int) -> _ProbedAccount | None:
+        """Ask YouTube Music who ``x-goog-authuser=slot`` is, or None."""
+        headers = {**base_headers, "x-goog-authuser": str(slot)}
+        tmp_path: str | None = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=str(self._config_dir))
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
+            return _probe_account(tmp_path, slot)
+        except Exception:
+            logger.debug("x-goog-authuser=%d did not work, skipping", slot)
+            return None
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    def _select_account_interactively(self, base_headers: dict) -> _ProbedAccount | None:
+        """``ytm setup``: list every account the browser is signed in to and pick one."""
+        valid_accounts = [
+            account
+            for slot in range(5)
+            if (account := self._probe_slot(base_headers, slot)) is not None
+        ]
         if not valid_accounts:
             logger.warning(
                 "No valid YouTube Music account found in extracted cookies (tried indices %s)",
-                authuser_indices,
+                list(range(5)),
             )
-            return False
+            return None
 
-        def _label(authuser: int, name: str, handle: str) -> str:
-            parts = [name]
-            if handle:
-                parts.append(handle)
-            parts.append(f"browser slot {authuser}")
-            return "  ·  ".join(parts)
-
-        if interactive and len(valid_accounts) == 1:
-            chosen_index, chosen_name, chosen_handle = valid_accounts[0]
-            print(f"  Authenticated as: {_label(chosen_index, chosen_name, chosen_handle)}")
-        elif interactive:
-            # Interactive setup — let the user pick (e.g. to select a Premium account).
+        if len(valid_accounts) == 1:
+            chosen = valid_accounts[0]
+            print(f"  Authenticated as: {chosen.label()}")
+        else:
+            # Let the user pick (e.g. to select a Premium account).
             print()
             print("  Multiple Google accounts found. Select your YouTube Music account.")
             print("  If you have YouTube Music Premium, pick that account.")
@@ -520,8 +687,8 @@ class AuthManager:
             print("  slot 1 the second, and so on. To check, click your profile picture")
             print("  in Chrome/Firefox: accounts are listed in the same order.")
             print()
-            for i, (authuser, name, handle) in enumerate(valid_accounts):
-                print(f"  [{i + 1}] {_label(authuser, name, handle)}")
+            for i, account in enumerate(valid_accounts):
+                print(f"  [{i + 1}] {account.label()}")
             print()
             while True:
                 try:
@@ -533,44 +700,186 @@ class AuthManager:
                     pass
                 except (EOFError, KeyboardInterrupt):
                     print("\n  Cancelled.")
-                    return False
+                    return None
                 print(f"  Please enter a number between 1 and {len(valid_accounts)}.")
-            chosen_index, chosen_name, chosen_handle = valid_accounts[choice]
-            print(f"  Selected: {_label(chosen_index, chosen_name, chosen_handle)}")
-        else:
-            # Silent auto-refresh: preserve the previously chosen account index.
-            # Fall back to the first valid account if no preference is recorded.
-            preferred = next(
-                (a for a in valid_accounts if a[0] == preferred_index_before_probe),
-                valid_accounts[0],
-            )
-            chosen_index, chosen_name, chosen_handle = preferred
-            logger.debug(
-                "Auto-refresh: using account index %d (%s)",
-                chosen_index,
-                _label(chosen_index, chosen_name, chosen_handle),
-            )
+            chosen = valid_accounts[choice]
+            print(f"  Selected: {chosen.label()}")
 
-        # Write the final auth file for the chosen account.
+        if chosen.channel_id is None:
+            print(_NO_RENEWAL_NOTE)
+        return chosen
+
+    def _find_recorded_account(
+        self, base_headers: dict, expected_channel_id: str | None = None
+    ) -> _ProbedAccount | None:
+        """Silent renewal: locate the account recorded by the last setup, or None.
+
+        With *expected_channel_id* (the account of the client whose call
+        failed), the recorded account must be that one: a ``ytm setup`` for
+        another account that landed in the meantime must not renew on its
+        behalf.
+        """
+        recorded = self._load_recorded_identity()
+        if recorded is None:
+            logger.warning(
+                "Automatic session renewal refused: no account identity is recorded for "
+                "this session. Run `ytm setup` once to enable it."
+            )
+            return None
+        if expected_channel_id is not None and recorded.channel_id != expected_channel_id:
+            logger.warning(
+                "Automatic session renewal refused: the saved session now belongs to a "
+                "different account than the one that failed."
+            )
+            return None
+
+        # The saved slot first; the rest only if the browser re-ordered its accounts.
+        probed = self._probe_slot(base_headers, recorded.slot)
+        if probed is not None and probed.channel_id == recorded.channel_id:
+            return probed
+
+        matches = [
+            account
+            for slot in range(5)
+            if slot != recorded.slot
+            and (account := self._probe_slot(base_headers, slot)) is not None
+            and account.channel_id == recorded.channel_id
+        ]
+        if len(matches) == 1:
+            logger.info(
+                "Automatic session renewal: account moved from browser slot %d to %d",
+                recorded.slot,
+                matches[0].slot,
+            )
+            return matches[0]
+
+        logger.warning(
+            "Automatic session renewal refused: the browser's accounts %s the one this "
+            "session was set up with. Run `ytm setup` to sign in again.",
+            "no longer include" if not matches else "ambiguously match",
+        )
+        return None
+
+    # ── Session + account record persistence ─────────────────────────
+
+    def _write_session(self, headers: dict, account: _ProbedAccount) -> bool:
+        """Write auth.json for *account*, then account.json describing it.
+
+        The previous account record is dropped first: if the auth write
+        fails part-way, stale metadata must never vouch for whatever is
+        left in auth.json. A failed account.json write only disables
+        automatic renewal (the session itself works), never the setup.
+        """
+        self._remove_account_file()
+        payload = json.dumps(headers, ensure_ascii=True, indent=4, sort_keys=True).encode("utf-8")
         # O_NOFOLLOW (POSIX-only; getattr fallback for Windows) refuses to
         # follow a symlink at the target path — defense-in-depth against
         # a malicious local user planting a symlink in CONFIG_DIR.
-        headers = {**base_headers, "x-goog-authuser": str(chosen_index)}
         try:
             fd = os.open(
                 str(self._auth_file),
                 os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
                 SECURE_FILE_MODE,
             )
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
+            with os.fdopen(fd, "wb") as f:
+                f.write(payload)
         except OSError:
             logger.exception("Failed to write auth file %s", self._auth_file)
             return False
 
-        if stream_jar is not None:
-            self._save_stream_cookiejar(stream_jar)
+        self._write_account_file(account, payload)
         return True
+
+    def _write_account_file(self, account: _ProbedAccount, auth_payload: bytes) -> bool:
+        """Record *account* as the identity of the auth.json whose bytes are *auth_payload*.
+
+        The record carries a hash of those bytes so metadata that no longer
+        matches auth.json (a partial write, an auth.json replaced by hand)
+        is ignored by _load_recorded_identity instead of authorising a
+        renewal.
+        """
+        record = {
+            "schema_version": _ACCOUNT_SCHEMA_VERSION,
+            "x-goog-authuser": str(account.slot),
+            "channel_id": account.channel_id,
+            "name": account.name,
+            "handle": account.handle or None,
+            "auth_sha256": hashlib.sha256(auth_payload).hexdigest(),
+        }
+
+        def _write(f: IO[Any]) -> None:
+            json.dump(record, f, ensure_ascii=True, indent=4, sort_keys=True)
+
+        try:
+            _atomic_write(self._account_file, "w", _write, encoding="utf-8")
+        except Exception:
+            logger.exception(
+                "Failed to write %s; automatic session renewal is disabled until the next "
+                "`ytm setup`",
+                self._account_file,
+            )
+            self._remove_account_file()
+            return False
+        if account.channel_id is None:
+            logger.warning(
+                "No channel ID for this account; automatic session renewal is disabled until "
+                "the next `ytm setup`"
+            )
+        return True
+
+    def _remove_account_file(self) -> None:
+        try:
+            self._account_file.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove %s", self._account_file, exc_info=True)
+
+    def _load_recorded_identity(self, auth_bytes: bytes | None = None) -> _RecordedIdentity | None:
+        """The identity account.json records for the CURRENT auth.json, or None.
+
+        None (renewal refused) when the record is missing, malformed, has
+        no channel ID, or was written for different auth.json bytes.
+        *auth_bytes* lets a caller that already read auth.json check the
+        record against exactly that snapshot.
+        """
+        try:
+            data = json.loads(self._account_file.read_text(encoding="utf-8"))
+            current = auth_bytes if auth_bytes is not None else self._auth_file.read_bytes()
+        except (OSError, json.JSONDecodeError):
+            logger.debug("No usable account record at %s", self._account_file, exc_info=True)
+            return None
+        if not isinstance(data, dict) or data.get("schema_version") != _ACCOUNT_SCHEMA_VERSION:
+            return None
+        channel_id = data.get("channel_id")
+        slot = data.get("x-goog-authuser")
+        if not (isinstance(channel_id, str) and _CHANNEL_ID_RE.fullmatch(channel_id)):
+            return None
+        if not (isinstance(slot, str) and slot.isdigit()):
+            return None
+        if data.get("auth_sha256") != hashlib.sha256(current).hexdigest():
+            logger.warning(
+                "%s does not describe the current %s; ignoring it",
+                self._account_file.name,
+                self._auth_file.name,
+            )
+            return None
+        return _RecordedIdentity(slot=int(slot), channel_id=channel_id)
+
+    def _record_manual_identity(self) -> None:
+        """After a manual header paste, probe the pasted session for its identity."""
+        try:
+            saved = json.loads(self._auth_file.read_text(encoding="utf-8"))
+            slot = int(saved.get("x-goog-authuser", 0))
+            probed = _probe_account(str(self._auth_file), slot)
+        except Exception:
+            logger.debug("Could not probe the pasted session's account", exc_info=True)
+            probed = None
+        recorded = (
+            probed is not None
+            and self._write_account_file(probed, self._auth_file.read_bytes())
+            and probed.channel_id is not None
+        )
+        if not recorded:
+            print(_NO_RENEWAL_NOTE)
 
     def _save_stream_cookiejar(self, jar: Iterable[Cookie]) -> bool:
         """Write a wide youtube.com/google.com cookiejar for stream.py's yt-dlp resolver.
@@ -667,11 +976,15 @@ class AuthManager:
             print()
 
         self._config_dir.mkdir(parents=True, exist_ok=True)
+        # The pasted headers are a new session: the previous account record
+        # must not survive to describe it.
+        self._remove_account_file()
         try:
             import ytmusicapi
 
             ytmusicapi.setup(filepath=str(self._auth_file), headers_raw=normalized)
             secure_chmod(self._auth_file, SECURE_FILE_MODE)
+            self._record_manual_identity()
             if cookie_value is not None:
                 self._save_stream_cookiejar(_cookies_from_raw_header(cookie_value))
             print()
