@@ -183,8 +183,9 @@ def _cookie() -> Cookie:
 def _fake_ytmusic(slots: dict[int, Any], calls: dict[int, MagicMock] | None = None):
     """YTMusic stand-in: the probe result depends on the file's x-goog-authuser."""
 
-    def factory(path, user=None):
-        slot = int(json.loads(Path(path).read_text(encoding="utf-8"))["x-goog-authuser"])
+    def factory(auth, user=None):
+        headers = auth if isinstance(auth, dict) else json.loads(Path(auth).read_text("utf-8"))
+        slot = int(headers["x-goog-authuser"])
         client = MagicMock(name=f"client-slot-{slot}")
         spec = slots.get(slot, EXPIRED)
         if isinstance(spec, Exception):
@@ -467,24 +468,31 @@ class TestPendingCallAcrossAccountSwitch:
         assert channel_id == ME_ID
         assert client.get_account_info() == ME_INFO
 
-    def test_bound_client_is_rebuilt_when_auth_changes_during_construction(
+    def test_rollback_during_construction_cannot_tag_b_client_with_a_identity(
         self, tmp_path, browser, monkeypatch
     ):
-        auth = _auth(tmp_path, "0")
-        built: list[str] = []
+        """A -> B -> A while the client is being built: `ytm setup` for B
+        lands, then a failed setup rolls the files back to A. The client's
+        credentials and the returned identity must both come from the same
+        snapshot, whatever the files do in between."""
+        auth = _auth(tmp_path, "0")  # A
+        a_auth = auth.auth_file.read_bytes()
+        a_record = auth._account_file.read_bytes()
+        built_from: list[dict] = []
 
-        def _factory(path, user=None):
-            built.append(_saved_slot(auth))
-            if len(built) == 1:
-                _switch_session_to(auth, "1", OTHER_ID)  # setup lands mid-build
-            return MagicMock(name=f"client-{built[-1]}")
+        def _factory(headers, user=None):
+            built_from.append(headers)
+            _switch_session_to(auth, "1", OTHER_ID)  # B lands mid-construction...
+            auth.auth_file.write_bytes(a_auth)  # ...and is rolled back to A
+            auth._account_file.write_bytes(a_record)
+            return MagicMock(name="client")
 
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _factory)
 
         _client, channel_id = auth.create_bound_client()
 
-        assert built == ["0", "1"]
-        assert channel_id == OTHER_ID  # identity of the files the client was built from
+        assert built_from == [json.loads(a_auth)]  # built from A's snapshot, not the path
+        assert channel_id == ME_ID
 
     def test_bound_client_without_record_has_no_identity(self, tmp_path, browser, monkeypatch):
         auth = _auth(tmp_path, "0", record=None)

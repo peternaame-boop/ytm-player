@@ -316,27 +316,24 @@ class AuthManager:
         return YTMusic(str(self._auth_file), user=user)
 
     def create_bound_client(self, user: str | None = None) -> tuple[YTMusic, str | None]:
-        """Create a client from auth.json together with the channel ID that
-        account.json records for exactly those bytes (None without a valid record).
+        """Create a client from ONE snapshot of auth.json, together with the
+        channel ID account.json records for exactly that snapshot (None
+        without a matching record).
 
-        Read, build, re-read: if auth.json changed underneath (another
-        process ran ``ytm setup``), the client and the identity could
-        describe different sessions, so the build is retried on the new files.
+        The client is built from the snapshot's parsed headers, never from
+        the path: a constructor re-reading the file could load a different
+        session than the one the record was checked against (another
+        process's ``ytm setup`` landing and rolling back in between), and a
+        client tagged with the wrong identity would defeat the retry guard
+        in YTMusicService.
         """
-        for _ in range(3):
-            try:
-                before = self._auth_file.read_bytes()
-            except OSError:
-                return YTMusic(str(self._auth_file), user=user), None
-            recorded = self._load_recorded_identity(before)
-            client = YTMusic(str(self._auth_file), user=user)
-            try:
-                unchanged = self._auth_file.read_bytes() == before
-            except OSError:
-                unchanged = False
-            if unchanged:
-                return client, recorded.channel_id if recorded is not None else None
-        raise RuntimeError(f"{self._auth_file} kept changing while creating the client")
+        try:
+            payload = self._auth_file.read_bytes()
+        except OSError:
+            return YTMusic(str(self._auth_file), user=user), None
+        recorded = self._load_recorded_identity(payload)
+        client = YTMusic(json.loads(payload), user=user)
+        return client, recorded.channel_id if recorded is not None else None
 
     def validate(self) -> bool:
         """Verify that the auth credentials actually work.
