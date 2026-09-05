@@ -634,7 +634,10 @@ class TestEndFileSkipCounting:
         on_end_file(_end_file_event(4))
 
         assert player._current_track is None
-        player._dispatch.assert_called_once_with(PlayerEvent.ERROR, "stream error")
+        player._dispatch.assert_called_once_with(
+            PlayerEvent.ERROR,
+            {"reason": 4, "error": None, "track": {"video_id": "abc"}, "attempt": None},
+        )
 
     def test_aborted_reason_clears_track_without_dispatch(self, player_with_end_file):
         player, on_end_file = player_with_end_file
@@ -779,3 +782,53 @@ class TestTransportOpsShutdownGuard:
         # seek already guards ShutdownError — asserted here for contrast/coverage.
         player._mpv = _dead_mpv()
         await player.seek(5.0)  # must not raise
+
+
+class TestErrorPayload:
+    """ERROR payloads carry the failed attempt's track and token (#135)."""
+
+    def test_end_file_error_carries_track_and_attempt(self, player_with_end_file):
+        from ytm_player.services.player import PlayerEvent
+
+        player, on_end_file = player_with_end_file
+        player._end_file_skip = 0
+        player._current_track = {"video_id": "abc"}
+        player._current_attempt = 7
+        player._dispatch = MagicMock()
+
+        on_end_file(SimpleNamespace(data=SimpleNamespace(reason=4, error=-1)))
+
+        player._dispatch.assert_called_once_with(
+            PlayerEvent.ERROR,
+            {"reason": 4, "error": -1, "track": {"video_id": "abc"}, "attempt": 7},
+        )
+        assert (player._current_track, player._current_attempt) == (None, None)
+
+    async def test_play_records_the_attempt(self, player):
+        track = {"video_id": "abc"}
+
+        await player.play("http://stream", track, attempt=3)
+
+        assert (player._current_track, player._current_attempt) == (track, 3)
+
+    async def test_load_failure_is_reported_once_and_not_raised(self, player):
+        from ytm_player.services.player import PlayerEvent
+
+        errors: list = []
+        player.on(PlayerEvent.ERROR, lambda payload: errors.append(payload))
+        track = {"video_id": "abc"}
+        boom = RuntimeError("boom")
+
+        with patch.object(player, "_play_sync", side_effect=boom):
+            await player.play("http://stream", track, attempt=3)
+
+        assert errors == [{"reason": "load", "error": boom, "track": track, "attempt": 3}]
+        assert (player._current_track, player._current_attempt) == (None, None)
+
+    async def test_stop_clears_the_attempt(self, player):
+        player._current_track = {"video_id": "abc"}
+        player._current_attempt = 5
+
+        await player.stop()
+
+        assert player._current_attempt is None

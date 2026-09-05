@@ -38,6 +38,9 @@ class MPRISMixin(YTMHostBase):
 
     async def _mpris_stop(self) -> None:
         if self.player:
+            # Stop supersedes the current play attempt: a stream error
+            # arriving for it afterwards must not restart playback.
+            self._play_generation += 1
             await self.player.stop()
 
     async def _mpris_next(self) -> None:

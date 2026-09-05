@@ -20,8 +20,10 @@ which pulls the required yt-dlp:
 - Nix, `nix profile`: `nix profile list`, then `nix profile upgrade <name>`
 
 Then restart `ytm` — it keeps its yt-dlp instance and cached stream URLs for
-the whole process lifetime. Also restart after changing networks or
-disconnecting a VPN (stream URLs are bound to the IP that requested them).
+the whole process lifetime. After changing networks or disconnecting a VPN
+(stream URLs are bound to the IP that requested them) no restart is needed:
+a stream that fails to open drops the cached URLs and the yt-dlp instance and
+the track is retried once; restart only if that retry fails too.
 
 ## "mpv not found" or playback doesn't start
 

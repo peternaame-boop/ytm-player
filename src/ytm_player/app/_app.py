@@ -265,6 +265,10 @@ class YTMPlayerApp(
         # Cross-track supersede counter: each committed play_track call
         # bumps it; older in-flight calls abort at their next check.
         self._play_generation: int = 0
+        # Generation of the one retry a failed play attempt gets, and the
+        # highest attempt whose ERROR was handled (see _on_player_error).
+        self._recovery_generation: int | None = None
+        self._handled_error_attempt: int = 0
         # Play generation already reported to the YT Music account history,
         # so each play is reported at most once. -1 = nothing reported yet.
         self._ytm_reported_generation: int = -1
@@ -740,6 +744,7 @@ class YTMPlayerApp(
         self.player.on(PlayerEvent.VOLUME_CHANGE, self._on_volume_change)
         self.player.on(PlayerEvent.PAUSE_CHANGE, self._on_pause_change)
         self.player.on(PlayerEvent.SEEK, self._on_seek)
+        self.player.on(PlayerEvent.ERROR, self._on_player_error)
 
         # Poll playback position on a timer (avoids cross-thread issues).
         self._poll_timer = self.set_interval(_POSITION_POLL_INTERVAL, self._poll_position)
