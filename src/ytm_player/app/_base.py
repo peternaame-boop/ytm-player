@@ -109,6 +109,8 @@ if TYPE_CHECKING:
         _last_play_video_id: str
         _last_play_time: float
         _play_generation: int
+        _recovery_generation: int | None
+        _handled_error_attempt: int
         _ytm_reported_generation: int
         _local_history_claim: _LocalHistoryClaim | None
         _ytm_history: list[dict] | None

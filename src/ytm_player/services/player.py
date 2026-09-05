@@ -174,6 +174,10 @@ class Player:
         self._initialized = True
 
         self._current_track: dict | None = None
+        # Token of the play attempt that loaded _current_track (play()'s
+        # ``attempt``), echoed in ERROR payloads so the app can tell a
+        # failure of its current attempt from a late one.
+        self._current_attempt: int | None = None
         self._callbacks: dict[PlayerEvent, list[PlayerCallback]] = {
             event: [] for event in PlayerEvent
         }
@@ -284,14 +288,24 @@ class Player:
                 # Capture track info before clearing — the app needs it
                 # for history logging and autoplay decisions.
                 ended_track = self._current_track
+                ended_attempt = self._current_attempt
                 # Clear so play() won't increment _end_file_skip for
                 # an already-idle mpv.
                 self._current_track = None
+                self._current_attempt = None
             # Only auto-advance on natural EOF (0).  Errors (4) are
             # dispatched separately.  Everything else (stop, redirect,
             # quit, restart) is intentional — ignore.
             if reason == 4:  # ERROR
-                self._dispatch(PlayerEvent.ERROR, "stream error")
+                self._dispatch(
+                    PlayerEvent.ERROR,
+                    {
+                        "reason": reason,
+                        "error": getattr(data, "error", None),
+                        "track": ended_track,
+                        "attempt": ended_attempt,
+                    },
+                )
             elif reason is None or reason == 0:  # EOF
                 self._dispatch(PlayerEvent.TRACK_END, {"reason": reason, "track": ended_track})
 
@@ -461,8 +475,14 @@ class Player:
 
     # ── Playback control ────────────────────────────────────────────
 
-    async def play(self, url: str, track_info: dict) -> None:
-        """Play a stream URL with associated track metadata."""
+    async def play(self, url: str, track_info: dict, attempt: int | None = None) -> None:
+        """Play a stream URL with associated track metadata.
+
+        ``attempt`` identifies this play request. Failures are never
+        raised: a load failure here and a stream failure mpv reports
+        later via end-file are each reported exactly once as an ERROR
+        event whose payload carries the request's track and ``attempt``.
+        """
         with self._skip_lock:
             # A track is still playing — mpv will fire end-file for it
             # when we load the new URL.  Tell the callback to ignore it.
@@ -470,6 +490,7 @@ class Player:
             if skip_armed:
                 self._end_file_skip += 1
             self._current_track = track_info
+            self._current_attempt = attempt
         try:
             await asyncio.to_thread(self._play_sync, url)
             self._dispatch(PlayerEvent.TRACK_CHANGE, track_info)
@@ -486,8 +507,12 @@ class Player:
                     if skip_armed and self._end_file_skip > 0:
                         self._end_file_skip -= 1
                     self._current_track = None
+                    self._current_attempt = None
             logger.error("Failed to play %s: %s", track_info.get("video_id", "?"), exc)
-            self._dispatch(PlayerEvent.ERROR, exc)
+            self._dispatch(
+                PlayerEvent.ERROR,
+                {"reason": "load", "error": exc, "track": track_info, "attempt": attempt},
+            )
 
     def _play_sync(self, url: str) -> None:
         """Synchronous mpv play call."""
@@ -525,6 +550,7 @@ class Player:
             if self._current_track is not None:
                 self._end_file_skip += 1
             self._current_track = None
+            self._current_attempt = None
         try:
             self._mpv.stop()
         except mpv.ShutdownError:

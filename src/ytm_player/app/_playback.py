@@ -54,13 +54,15 @@ class _LocalHistoryClaim:
 class PlaybackMixin(YTMHostBase):
     """Playback coordination, player event callbacks, history logging, download."""
 
-    async def play_track(self, track: dict | None) -> None:
+    async def play_track(self, track: dict | None, *, recovery_of: int | None = None) -> None:
         """Resolve a stream URL and start playback for a track.
 
         This is the main entry point for initiating playback from any
         page or action.  ``track`` may be ``None`` when callers pass
         ``QueueManager.current_track`` on an empty queue — in that case
-        we simply no-op.
+        we simply no-op.  ``recovery_of`` is the attempt this call is
+        the one retry of (see ``_on_player_error``); the retry itself
+        gets no retry.
         """
         if track is None:
             return
@@ -97,6 +99,9 @@ class PlaybackMixin(YTMHostBase):
         # stealing playback back or pushing stale metadata.
         self._play_generation += 1
         generation = self._play_generation
+        # The single retry a failed attempt gets. Any other committed play
+        # is a new request and starts without one in flight.
+        self._recovery_generation = generation if recovery_of is not None else None
 
         # Log listen time for the previous track.
         await self._log_current_listen()
@@ -175,28 +180,20 @@ class PlaybackMixin(YTMHostBase):
             if generation != self._play_generation:
                 logger.debug("play_track for %s superseded before play()", video_id)
                 return
-            self._consecutive_failures = 0
-            try:
-                await self.player.play(stream_info.url, track)
-            except Exception:
-                logger.debug("player.play() failed for %s", video_id, exc_info=True)
-                # A newer call may have superseded us while play() awaited.
-                if generation != self._play_generation:
-                    return
-                self._handle_play_failure(
-                    exhausted_message="Multiple tracks failed — stream resolver reset. "
-                    "Try playing again.",
-                    failure_kind="play",
-                )
-                return
+            # Load and stream failures are not raised here: player.play()
+            # reports each exactly once as an ERROR event carrying this
+            # attempt, and _on_player_error applies recovery and the
+            # failure policy. The consecutive-failure counter is reset
+            # only once audio is actually advancing (_poll_position).
+            await self.player.play(stream_info.url, track, attempt=generation)
         self._track_start_position = 0.0
 
         if generation != self._play_generation:
             return
 
         # Only arm history reporting when the load actually started: play()
-        # swallows load failures (clears current_track, dispatches ERROR with
-        # no app-side handler), so reaching here doesn't mean playback is on.
+        # swallows load failures (clears current_track and reports an ERROR
+        # event), so reaching here doesn't mean playback is on.
         if self.player.current_track is not None:
             self._schedule_local_history_log(track, video_id, generation)
             self._schedule_ytm_history_report(track, video_id, generation)
@@ -306,6 +303,61 @@ class PlaybackMixin(YTMHostBase):
                 )
             self.notify(exhausted_message, severity="error", timeout=6)
             self._consecutive_failures = 0
+
+    async def _on_player_error(self, event: Any = None) -> None:
+        """Recover once from a play attempt whose stream failed to open or died.
+
+        ``event`` is the Player's ERROR payload: the failed attempt's
+        token and track. Only the current attempt is acted on — a late
+        error for an attempt that a newer play, a stop, or a replay has
+        superseded is dropped, and so is a duplicate for one already
+        handled. The first failure of a request drops every cached
+        stream URL and the yt-dlp instance (stream URLs are bound to the
+        IP that fetched them, so after a network change none of them
+        open) and replays the track once; if that replay fails too, the
+        request goes through the failure policy.
+        """
+        if not isinstance(event, dict):
+            return
+        attempt = event.get("attempt")
+        track = event.get("track")
+        if not isinstance(attempt, int) or not isinstance(track, dict):
+            return
+        if attempt != self._play_generation or attempt <= self._handled_error_attempt:
+            logger.debug("Ignoring stream error for superseded or handled attempt %d", attempt)
+            return
+        self._handled_error_attempt = attempt
+        video_id = get_video_id(track)
+        title = track.get("title", video_id)
+        if attempt == self._recovery_generation:
+            self._recovery_generation = None
+            logger.warning(
+                "Stream for %s failed again after a resolver reset (%s); skipping",
+                video_id,
+                event.get("error"),
+            )
+            self.notify(
+                f'Couldn\'t play "{title}" — stream failed twice. Skipping...',
+                severity="error",
+                timeout=4,
+            )
+            self._handle_play_failure(
+                exhausted_message="Multiple tracks failed — stream resolver reset. Try playing again.",
+                failure_kind="stream",
+            )
+            return
+        if not self.stream_resolver:
+            return
+        logger.warning(
+            "Stream for %s failed to open (%s) — resetting the resolver and retrying once",
+            video_id,
+            event.get("error"),
+        )
+        self.stream_resolver.clear_cache()
+        # The retry lands inside play_track's same-track debounce window.
+        self._last_play_video_id = ""
+        self._last_play_time = 0.0
+        await self.play_track(track, recovery_of=attempt)
 
     async def _toggle_play_pause(self) -> None:
         """Toggle play/pause, starting playback from queue if player is idle."""
@@ -455,6 +507,7 @@ class PlaybackMixin(YTMHostBase):
         """Timer callback: poll the player position and update the bar."""
         if not self.player:
             return
+        pos = 0.0
         try:
             pos = self.player.position
             dur = self.player.duration
@@ -462,6 +515,17 @@ class PlaybackMixin(YTMHostBase):
             bar.update_position(pos, dur)
         except Exception:
             logger.debug("Failed to poll playback position", exc_info=True)
+
+        # Audio actually advancing is the only proof a play attempt
+        # succeeded (TRACK_CHANGE fires before mpv has opened the stream),
+        # so failure state is reset here and nowhere earlier.
+        if (
+            pos > 0
+            and (self._consecutive_failures or self._recovery_generation is not None)
+            and self.player.is_playing
+        ):
+            self._consecutive_failures = 0
+            self._recovery_generation = None
 
         if self.mpris and self.player.is_playing:
             try:

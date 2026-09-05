@@ -10,9 +10,11 @@ Three bug classes guarded against:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from ytm_player.app._playback import PlaybackMixin
+from ytm_player.app._mpris import MPRISMixin
+from ytm_player.app._playback import _MAX_CONSECUTIVE_FAILURES, PlaybackMixin
 
 
 def _fresh_playback_host():
@@ -51,6 +53,8 @@ def _fresh_playback_host():
     p._pending_resume_video_id = None
     p._pending_resume_position = 0.0
     p._play_generation = 0
+    p._recovery_generation = None
+    p._handled_error_attempt = 0
     p._local_history_claim = None
     p._play_lock = asyncio.Lock()
     return p
@@ -672,7 +676,7 @@ class TestDiscordRecoveryFanout:
         host.discord.update = AsyncMock()
         track = {"video_id": "abc", "title": "Song", "artist": "Artist"}
 
-        async def _play(url, t):
+        async def _play(url, t, attempt=None):
             host.player.current_track = t
 
         host.player.play = AsyncMock(side_effect=_play)
@@ -757,7 +761,7 @@ class TestHistoryArming:
         host.stream_resolver.resolve = AsyncMock(return_value=self._stream_info())
         track = {"video_id": "abc", "title": "X"}
 
-        async def _play(url, t):
+        async def _play(url, t, attempt=None):
             host.player.current_track = t
 
         host.player.play = AsyncMock(side_effect=_play)
@@ -765,3 +769,199 @@ class TestHistoryArming:
 
         host.set_timer.assert_called_once()
         assert host._local_history_claim is not None
+
+
+# ── Stream error recovery (#135) ────────────────────────────────────────────
+
+_TRACK = {"video_id": "abc12345678", "title": "Song"}
+_OTHER = {"video_id": "zyx98765432", "title": "Other"}
+
+
+def _recovery_host():
+    host = _fresh_playback_host()
+    host.stream_resolver.resolve = AsyncMock(
+        side_effect=lambda vid: SimpleNamespace(url=f"http://stream/{vid}", duration=1)
+    )
+    return host
+
+
+def _stream_error(attempt, track, error=-1):
+    """What Player dispatches when mpv's end-file reports an error for *attempt*."""
+    return {"reason": 4, "error": error, "track": track, "attempt": attempt}
+
+
+def _attempts(host):
+    return [c.kwargs["attempt"] for c in host.player.play.await_args_list]
+
+
+class TestPlayerErrorRecovery:
+    async def test_first_failure_resets_resolver_and_replays_with_a_fresh_url(self):
+        host = _recovery_host()
+        host.stream_resolver.resolve = AsyncMock(
+            side_effect=[SimpleNamespace(url="http://stale"), SimpleNamespace(url="http://fresh")]
+        )
+        await host.play_track(_TRACK)
+        assert _attempts(host) == [1]
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+
+        host.stream_resolver.clear_cache.assert_called_once()
+        assert [c.args[0] for c in host.player.play.await_args_list] == [
+            "http://stale",
+            "http://fresh",
+        ]
+        assert host.player.play.await_args.args[1] is _TRACK
+        assert _attempts(host) == [1, 2]
+        assert host._recovery_generation == 2
+        host.notify.assert_not_called()
+        assert host._consecutive_failures == 0
+
+    async def test_failed_recovery_applies_the_failure_policy_once(self):
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        await host.play_track(_TRACK)
+        await host._on_player_error(_stream_error(1, _TRACK))
+        host.stream_resolver.clear_cache.reset_mock()
+
+        await host._on_player_error(_stream_error(2, _TRACK))
+
+        host._handle_play_failure.assert_called_once()
+        assert host._handle_play_failure.call_args.kwargs["failure_kind"] == "stream"
+        host.notify.assert_called_once()
+        assert host.notify.call_args.kwargs["severity"] == "error"
+        host.stream_resolver.clear_cache.assert_not_called()
+        assert _attempts(host) == [1, 2]  # the retry gets no retry of its own
+        assert host._recovery_generation is None
+
+    async def test_duplicate_errors_are_ignored(self):
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        await host.play_track(_TRACK)
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+        await host._on_player_error(_stream_error(1, _TRACK))
+        assert _attempts(host) == [1, 2]
+        host.stream_resolver.clear_cache.assert_called_once()
+
+        await host._on_player_error(_stream_error(2, _TRACK))
+        await host._on_player_error(_stream_error(2, _TRACK))
+        host._handle_play_failure.assert_called_once()
+        assert _attempts(host) == [1, 2]
+
+    async def test_late_error_after_a_newer_play_is_ignored(self):
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        await host.play_track(_TRACK)
+        await host.play_track(_OTHER)
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+
+        host.stream_resolver.clear_cache.assert_not_called()
+        host._handle_play_failure.assert_not_called()
+        host.notify.assert_not_called()
+        assert _attempts(host) == [1, 2]
+
+    async def test_late_error_after_stop_is_ignored(self):
+        host = _recovery_host()
+        host.player.stop = AsyncMock()
+        await host.play_track(_TRACK)
+
+        await MPRISMixin._mpris_stop(host)
+        await host._on_player_error(_stream_error(1, _TRACK))
+
+        host.player.stop.assert_awaited_once()
+        host.stream_resolver.clear_cache.assert_not_called()
+        assert _attempts(host) == [1]
+
+    async def test_same_song_replay_ignores_the_old_error_and_gets_its_own_retry(self):
+        host = _recovery_host()
+        await host.play_track(_TRACK)
+        host._last_play_video_id = ""  # the user replays after the debounce window
+        await host.play_track(_TRACK)
+        assert _attempts(host) == [1, 2]
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+        host.stream_resolver.clear_cache.assert_not_called()
+        assert _attempts(host) == [1, 2]
+
+        await host._on_player_error(_stream_error(2, _TRACK))
+        host.stream_resolver.clear_cache.assert_called_once()
+        assert _attempts(host) == [1, 2, 3]
+        assert host._recovery_generation == 3
+
+    async def test_synchronous_load_failure_is_handled_once(self):
+        """player.play() swallows a load failure and reports it as an ERROR
+        event; play_track must not apply the failure policy on top."""
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        errors: list[dict] = []
+
+        async def _play(url, track, attempt=None):
+            errors.append(
+                {
+                    "reason": "load",
+                    "error": RuntimeError("boom"),
+                    "track": track,
+                    "attempt": attempt,
+                }
+            )
+
+        host.player.play = AsyncMock(side_effect=_play)
+
+        await host.play_track(_TRACK)
+        host._handle_play_failure.assert_not_called()
+        assert host._consecutive_failures == 0
+        assert [e["attempt"] for e in errors] == [1]
+
+        await host._on_player_error(errors[0])
+        host.stream_resolver.clear_cache.assert_called_once()
+        assert [e["attempt"] for e in errors] == [1, 2]
+
+        await host._on_player_error(errors[1])
+        host._handle_play_failure.assert_called_once()
+        assert [e["attempt"] for e in errors] == [1, 2]
+
+    async def test_repeated_unplayable_tracks_reach_the_failure_limit(self):
+        host = _recovery_host()
+        tracks = [
+            {"video_id": f"vid{i:08d}", "title": f"t{i}"} for i in range(_MAX_CONSECUTIVE_FAILURES)
+        ]
+        host.queue.next_track = MagicMock(side_effect=tracks[1:] + [None])
+        await host.play_track(tracks[0])
+
+        for i, track in enumerate(tracks):
+            attempt = host._play_generation
+            await host._on_player_error(_stream_error(attempt, track))
+            # A play that never produced audio must not reset the counter.
+            assert host._consecutive_failures == i
+            await host._on_player_error(_stream_error(attempt + 1, track))
+            if i < len(tracks) - 1:
+                await host.play_track(tracks[i + 1])  # what the policy's call_later runs
+
+        exhausted = [c for c in host.notify.call_args_list if "Multiple tracks failed" in c.args[0]]
+        assert len(exhausted) == 1
+        assert exhausted[0].kwargs["severity"] == "error"
+        assert host._consecutive_failures == 0
+        # One reset per track's first failure, plus the escalation's.
+        assert host.stream_resolver.clear_cache.call_count == len(tracks) + 1
+
+    def test_audio_progress_resets_failure_state(self):
+        host = _recovery_host()
+        host._consecutive_failures = 3
+        host._recovery_generation = 4
+        host.player.is_playing = True
+        host.player.position = 12.5
+
+        host._poll_position()
+
+        assert (host._consecutive_failures, host._recovery_generation) == (0, None)
+
+    def test_loaded_but_not_advancing_does_not_reset_failure_state(self):
+        host = _recovery_host()
+        host._consecutive_failures = 3
+        host.player.is_playing = True
+        host.player.position = 0.0
+
+        host._poll_position()
+
+        assert host._consecutive_failures == 3
