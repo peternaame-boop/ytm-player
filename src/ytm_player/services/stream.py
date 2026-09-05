@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
@@ -47,6 +48,23 @@ def _detect_stream_cookies() -> str | None:
     from ytm_player.config.paths import STREAM_COOKIES_FILE
 
     return str(STREAM_COOKIES_FILE) if STREAM_COOKIES_FILE.exists() else None
+
+
+def _stream_cookiejar_signature() -> tuple[str, int, int] | None:
+    """``(path, mtime_ns, size)`` of the stream cookiejar file, or None if absent.
+
+    Compared on every _get_ydl() call so a jar rewritten by ``ytm setup`` or a
+    mid-session auto-refresh is picked up by the next resolve instead of the
+    cached YoutubeDL instance keeping its stale in-memory copy.
+    """
+    path = _detect_stream_cookies()
+    if path is None:
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (path, st.st_mtime_ns, st.st_size)
 
 
 class _YtDlpLogger:
@@ -129,6 +147,16 @@ class StreamResolver:
         # opts already have stale settings baked in, so the build is
         # retried instead of caching a stale instance.
         self._ydl_generation = 0
+        # Signature of the stream cookiejar file self._ydl was built against
+        # (see _stream_cookiejar_signature); None when there was no file.
+        self._ydl_cookiejar_sig: tuple[str, int, int] | None = None
+        # YoutubeDL is not thread-safe; a play resolve and a prefetch can run
+        # on separate threads against the shared instance, so extract_info()
+        # calls are serialized. Only the network call is held under it.
+        self._extract_lock = threading.Lock()
+        # Bumped by clear_cache(). A resolve that started before the clear
+        # must not put its (pre-clear) result back into the emptied cache.
+        self._cache_generation = 0
 
     @property
     def quality(self) -> str:
@@ -161,12 +189,34 @@ class StreamResolver:
             # that unblocks madeForKids content which the default web client refuses.
             "extractor_args": {"youtube": {"player_client": ["default", "android"]}},
         }
-        opts = apply_configured_yt_dlp_options(opts, settings)
-        if "cookiefile" not in opts:
-            cookiefile = _detect_stream_cookies()
-            if cookiefile:
-                opts["cookiefile"] = cookiefile
-        return opts
+        return apply_configured_yt_dlp_options(opts, settings)
+
+    def _build_ydl(self, opts: dict) -> tuple[Any, tuple[str, int, int] | None]:
+        """Construct a YoutubeDL instance from *opts* and load the stream cookiejar into it.
+
+        The jar is loaded into the instance's cookiejar rather than passed as
+        ``cookiefile``: YoutubeDL.close() writes ``cookiefile`` back to disk
+        from memory, so a discarded instance closing later (quality change,
+        failure reset) would overwrite a jar that ``ytm setup`` or a session
+        refresh had just replaced. Loaded this way the file is read-only to
+        yt-dlp. A user-configured ``[yt_dlp] cookies_file`` still goes
+        through ``cookiefile`` — that file is theirs, and write-back is
+        yt-dlp's normal behaviour for it.
+
+        Returns the instance and the jar signature it was built against.
+        """
+        import yt_dlp  # Lazy import
+
+        # yt-dlp's _Params TypedDict is internal; the dict we build is a
+        # plain options dict that yt-dlp accepts at runtime.
+        ydl = yt_dlp.YoutubeDL(opts)  # type: ignore[arg-type]
+        sig = _stream_cookiejar_signature()
+        if sig is not None and "cookiefile" not in opts:
+            try:
+                ydl.cookiejar.load(sig[0], ignore_discard=True, ignore_expires=True)
+            except Exception:
+                logger.warning("Could not load stream cookiejar %s", sig[0], exc_info=True)
+        return ydl, sig
 
     def _get_ydl(self) -> Any:
         """Return a reusable YoutubeDL instance, creating it lazily, with
@@ -187,17 +237,18 @@ class StreamResolver:
         catches that: a reset landing mid-build invalidates that build's
         result and the loop re-reads current settings.
         """
-        import yt_dlp  # Lazy import
-
         while True:
             with self._ydl_lock:
                 if self._ydl is not None:
-                    self._active_resolves += 1
-                    return self._ydl
+                    if self._ydl_cookiejar_sig == _stream_cookiejar_signature():
+                        self._active_resolves += 1
+                        return self._ydl
+                    # The jar file changed since this instance loaded it
+                    # (ytm setup / auto-refresh wrote a new one): drop the
+                    # instance so the rebuild below loads the new cookies.
+                    self._discard_ydl_locked()
                 generation = self._ydl_generation
 
-            # yt-dlp's _Params TypedDict is internal; the dict we build is
-            # a plain options dict that yt-dlp accepts at runtime.
             opts = self._build_ydl_opts()
 
             with self._ydl_lock:
@@ -206,7 +257,7 @@ class StreamResolver:
                     return self._ydl
                 if self._ydl_generation != generation:
                     continue  # reset landed mid-build; opts are stale, retry
-                self._ydl = yt_dlp.YoutubeDL(opts)  # type: ignore[arg-type]
+                self._ydl, self._ydl_cookiejar_sig = self._build_ydl(opts)
                 self._active_resolves += 1
                 return self._ydl
 
@@ -230,16 +281,19 @@ class StreamResolver:
         """
         with self._ydl_lock:
             self._ydl_generation += 1
-            if self._ydl is None:
-                return
-            if self._active_resolves > 0:
-                self._ydl = None
-                return
-            try:
-                self._ydl.close()  # type: ignore[union-attr]
-            except Exception:
-                pass
-            self._ydl = None
+            self._discard_ydl_locked()
+
+    def _discard_ydl_locked(self) -> None:
+        """Detach self._ydl (caller holds _ydl_lock), closing it only when no
+        resolve is still using it — see _reset_ydl."""
+        ydl, self._ydl = self._ydl, None
+        self._ydl_cookiejar_sig = None
+        if ydl is None or self._active_resolves > 0:
+            return
+        try:
+            ydl.close()
+        except Exception:
+            pass
 
     def _resolve_sync(self, video_id: str) -> StreamInfo | None:
         """Synchronous stream resolution (runs in a thread) with retry."""
@@ -265,7 +319,8 @@ class StreamResolver:
         try:
             ydl = self._get_ydl()  # increments _active_resolves; see _get_ydl's docstring
             try:
-                info = ydl.extract_info(url, download=False)
+                with self._extract_lock:
+                    info = ydl.extract_info(url, download=False)
             finally:
                 with self._ydl_lock:
                     self._active_resolves -= 1
@@ -343,9 +398,20 @@ class StreamResolver:
                 return None
             return cached
 
-    def _put_cache(self, info: StreamInfo) -> None:
-        """Store a StreamInfo in the cache, evicting stale/excess entries."""
+    def _put_cache(self, info: StreamInfo, generation: int | None = None) -> None:
+        """Store a StreamInfo in the cache, evicting stale/excess entries.
+
+        *generation* is the _cache_generation the caller read before it
+        started resolving; if clear_cache() ran in between, the result is
+        from the old resolver setup and is dropped instead of repopulating
+        the cache that was just cleared.
+        """
         with self._cache_lock:
+            if generation is not None and generation != self._cache_generation:
+                logger.debug(
+                    "Dropping resolve result for %s: cache cleared mid-resolve", info.video_id
+                )
+                return
             self._cache[info.video_id] = info
 
             # Prune expired entries on every write to prevent unbounded growth.
@@ -372,9 +438,10 @@ class StreamResolver:
             return cached
 
         logger.debug("Cache miss for video_id=%s, resolving via yt-dlp", video_id)
+        generation = self._cache_generation
         info = self._resolve_sync(video_id)
         if info is not None:
-            self._put_cache(info)
+            self._put_cache(info, generation)
         return info
 
     def is_expired(self, video_id: str) -> bool:
@@ -410,10 +477,11 @@ class StreamResolver:
         logger.debug("Cache miss for video_id=%s, resolving via yt-dlp", video_id)
         future: asyncio.Future[StreamInfo | None] = asyncio.get_running_loop().create_future()
         self._pending[video_id] = future
+        generation = self._cache_generation
         try:
             info = await asyncio.to_thread(self._resolve_sync, video_id)
             if info is not None:
-                self._put_cache(info)
+                self._put_cache(info, generation)
             if not future.done():
                 future.set_result(info)
             return info
@@ -462,6 +530,7 @@ class StreamResolver:
         """Remove all entries from the cache and reset the yt-dlp instance."""
         with self._cache_lock:
             self._cache.clear()
+            self._cache_generation += 1
         self._reset_ydl()
 
     def prune_expired(self) -> int:

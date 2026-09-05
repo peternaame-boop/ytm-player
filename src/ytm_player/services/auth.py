@@ -572,12 +572,15 @@ class AuthManager:
             self._save_stream_cookiejar(stream_jar)
         return True
 
-    def _save_stream_cookiejar(self, jar: Iterable[Cookie]) -> None:
+    def _save_stream_cookiejar(self, jar: Iterable[Cookie]) -> bool:
         """Write a wide youtube.com/google.com cookiejar for stream.py's yt-dlp resolver.
 
         Builds a fresh jar rather than mutating *jar* in place — callers may
         own or share that iterable, and this method has no reason to assume
         it's safe to consume destructively.
+
+        On failure any existing jar is removed: auth.json now belongs to
+        this session, and streaming must not keep using the previous one.
         """
         try:
             from yt_dlp.cookies import YoutubeDLCookieJar
@@ -605,6 +608,16 @@ class AuthManager:
             _atomic_write(self._stream_cookies_file, "w", _write, encoding="utf-8")
         except Exception:
             logger.exception("Failed to write stream cookiejar to %s", self._stream_cookies_file)
+            try:
+                self._stream_cookies_file.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Could not remove stale stream cookiejar %s",
+                    self._stream_cookies_file,
+                    exc_info=True,
+                )
+            return False
+        return True
 
     # ── Manual header paste (fallback) ───────────────────────────────
 

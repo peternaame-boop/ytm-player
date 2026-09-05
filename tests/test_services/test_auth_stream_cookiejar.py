@@ -109,7 +109,7 @@ def test_symlink_target_is_not_followed(tmp_path):
 
     result = auth._save_stream_cookiejar([_cookie(".youtube.com")])
 
-    assert result is None
+    assert result is True
     assert victim.read_text() == "do not touch"
 
 
@@ -278,6 +278,30 @@ def test_cookiejar_write_failure_does_not_affect_auth_json(tmp_path):
     assert auth.auth_file.exists()
     assert not (tmp_path / "missing_subdir" / "stream_cookies.txt").exists()
     assert not (tmp_path / "missing_subdir").exists()
+
+
+def test_cookiejar_write_failure_removes_previous_jar(tmp_path):
+    """A failed write must not leave the previous session's jar behind:
+    auth.json now belongs to the new session, and streaming would otherwise
+    keep using the old account's cookies."""
+    auth = _make_auth(tmp_path)
+    auth._stream_cookies_file.write_text("# old account\n", encoding="utf-8")
+    jar = [_cookie(".youtube.com", name="SAPISID", value="secret")]
+
+    with patch(
+        "ytm_player.services.auth._atomic_write", side_effect=OSError("simulated write failure")
+    ):
+        result = auth._save_stream_cookiejar(jar)
+
+    assert result is False
+    assert not auth._stream_cookies_file.exists()
+
+
+def test_cookiejar_write_success_returns_true(tmp_path):
+    auth = _make_auth(tmp_path)
+
+    assert auth._save_stream_cookiejar([_cookie(".youtube.com")]) is True
+    assert auth._stream_cookies_file.exists()
 
 
 # ── Step 5: empty / no-matching-cookies ──────────────────────────────────────

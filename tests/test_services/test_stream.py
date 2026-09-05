@@ -224,6 +224,47 @@ class TestResolveSync:
         assert result is None
 
 
+class TestClearCacheMidResolve:
+    """A resolve that started before clear_cache() must not put its result
+    back into the cache that was just cleared — the result came from the
+    pre-reset resolver setup (old cookies, old quality)."""
+
+    def test_resolve_sync_result_not_cached_after_clear(self):
+        resolver = StreamResolver()
+        info = _make_info("mid01")
+
+        def _resolve_then_clear(video_id):
+            resolver.clear_cache()
+            return info
+
+        resolver._resolve_sync = _resolve_then_clear
+
+        assert resolver.resolve_sync("mid01") is info  # caller still gets the result
+        assert resolver._get_cached("mid01") is None
+
+    async def test_resolve_result_not_cached_after_clear(self):
+        resolver = StreamResolver()
+        info = _make_info("mid02")
+
+        def _resolve_then_clear(video_id):
+            resolver.clear_cache()
+            return info
+
+        resolver._resolve_sync = _resolve_then_clear
+
+        assert await resolver.resolve("mid02") is info
+        assert resolver._get_cached("mid02") is None
+
+    def test_result_cached_when_no_clear_happened(self):
+        resolver = StreamResolver()
+        info = _make_info("mid03")
+        resolver._resolve_sync = lambda video_id: info
+
+        resolver.resolve_sync("mid03")
+
+        assert resolver._get_cached("mid03") is info
+
+
 class TestStaleCookieDiagnosticHint:
     """_try_resolve()'s DownloadError handler appends a diagnostic hint when
     a stream cookiejar exists and the error text looks auth-related. These

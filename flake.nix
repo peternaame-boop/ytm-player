@@ -85,6 +85,7 @@
               click
               pillow         # album art (moved from optional to core in v1.3.1)
               packaging
+              pycryptodomex  # native AES for yt-dlp's browser cookie decryption in `ytm setup`
             ])
             # dbus-fast powers Linux MPRIS (playerctl / media keys / now-playing).
             # Core dep on Linux so MPRIS works out of the box; Linux-only because
