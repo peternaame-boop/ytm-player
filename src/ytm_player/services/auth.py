@@ -3,6 +3,9 @@
 Extracts cookies automatically from the user's browser (Chrome, Firefox,
 Brave, Helium, etc.) using yt-dlp's cookie extraction. Falls back to manual
 header paste if auto-extraction fails.
+
+Also writes a separate, wider-scoped (youtube.com+google.com) cookiejar file
+consumed by stream.py's yt-dlp resolver — see _save_stream_cookiejar().
 """
 
 from __future__ import annotations
@@ -12,8 +15,11 @@ import logging
 import os
 import sys
 import tempfile
-from http.cookiejar import MozillaCookieJar
+import time
+from collections.abc import Callable, Iterable
+from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
+from typing import IO, Any
 
 import requests.exceptions
 from ytmusicapi import YTMusic
@@ -23,6 +29,7 @@ from ytm_player.config.paths import (
     AUTH_FILE,
     CONFIG_DIR,
     SECURE_FILE_MODE,
+    STREAM_COOKIES_FILE,
     secure_chmod,
 )
 from ytm_player.services.yt_dlp_options import normalize_cookiefile
@@ -119,18 +126,59 @@ def _patch_yt_dlp_browsers() -> None:
         )
 
 
+def _atomic_write(
+    path: Path,
+    mode: str,
+    write: Callable[[IO[Any]], None],
+    encoding: str | None = None,
+) -> None:
+    """Write *path* atomically via an O_NOFOLLOW temp file + os.replace.
+
+    Shared by AuthManager._restore_or_remove and
+    AuthManager._save_stream_cookiejar, the two sites that need
+    atomic-replace semantics for a security-sensitive file: open a
+    PID-suffixed temp file with O_NOFOLLOW (refusing to follow a symlink
+    planted at the temp path), let *write* fill it via the fd opened in
+    *mode* (and *encoding*, for text mode), chmod it to SECURE_FILE_MODE,
+    then os.replace() it into place.
+
+    *write* owns the actual content — a raw bytes write, a cookiejar's
+    .save(), etc. — so this helper stays agnostic to what's being written.
+    On any failure the temp file is removed and the exception re-raised;
+    callers decide what to catch and how to log, since they disagree on
+    which exceptions are recoverable (OSError only vs. broad Exception).
+    """
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    try:
+        fd = os.open(
+            str(tmp_path),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+            SECURE_FILE_MODE,
+        )
+        with os.fdopen(fd, mode, encoding=encoding) as f:
+            write(f)
+        secure_chmod(tmp_path, SECURE_FILE_MODE)
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 class AuthManager:
-    """Manages YouTube Music authentication via browser cookie extraction."""
+    """Manages YouTube Music authentication via browser cookie extraction,
+    and the yt-dlp stream cookiejar consumed by stream.py."""
 
     def __init__(
         self,
         config_dir: Path = CONFIG_DIR,
         auth_file: Path = AUTH_FILE,
         cookies_file: str | None = None,
+        stream_cookies_file: Path = STREAM_COOKIES_FILE,
     ) -> None:
         self._config_dir = config_dir
         self._auth_file = auth_file
         self._cookies_file = normalize_cookiefile(cookies_file)
+        self._stream_cookies_file = stream_cookies_file
 
     @property
     def auth_file(self) -> Path:
@@ -184,9 +232,9 @@ class AuthManager:
         detected = self._detect_browser()
         if detected is None:
             return False
-        browser, cookies = detected
+        browser, cookies, jar = detected
         try:
-            return self._save_youtube_cookies(cookies, first_valid=True)
+            return self._save_youtube_cookies(cookies, first_valid=True, stream_jar=jar)
         except Exception:
             logger.debug("Auto-refresh failed", exc_info=True)
         return False
@@ -230,11 +278,11 @@ class AuthManager:
         # Auto-detect browser.
         detected = self._detect_browser()
         if detected:
-            browser, cookies = detected
+            browser, cookies, jar = detected
             print(f"  Found YouTube cookies in {browser}.")
             print("  Extracting automatically...")
             print()
-            if self._save_youtube_cookies(cookies, interactive=True):
+            if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar):
                 return True
             print("  Auto-extraction failed. Falling back to manual setup.")
             print()
@@ -244,8 +292,12 @@ class AuthManager:
     # ── Browser cookie extraction ────────────────────────────────────
 
     @staticmethod
-    def _detect_browser() -> tuple[str, list] | None:
-        """Find a browser that has YouTube cookies and return both."""
+    def _detect_browser() -> tuple[str, list, list] | None:
+        """Find a browser that has YouTube cookies.
+
+        Returns ``(browser, youtube_cookies, full_jar)`` — the full jar feeds
+        the stream cookiejar (youtube.com + google.com) via _save_stream_cookiejar.
+        """
         _patch_yt_dlp_browsers()
 
         for browser in _BROWSERS:
@@ -253,20 +305,51 @@ class AuthManager:
                 jar = _extract_browser_jar(browser)
                 yt_cookies = [c for c in jar if c.domain == ".youtube.com"]
                 if any(c.name in ("SAPISID", "__Secure-3PAPISID") for c in yt_cookies):
-                    return browser, yt_cookies
+                    return browser, yt_cookies, list(jar)
             except Exception:
                 logger.debug("Browser %s not available", browser, exc_info=True)
                 continue
         return None
 
+    @staticmethod
+    def _backup_bytes(path: Path, label: str) -> bytes | None:
+        """Snapshot *path*'s contents so a failed refresh can restore them."""
+        if not path.exists():
+            return None
+        try:
+            return path.read_bytes()
+        except OSError:
+            logger.debug("Could not backup existing %s", label, exc_info=True)
+            return None
+
+    @staticmethod
+    def _restore_or_remove(path: Path, backup: bytes | None, label: str) -> None:
+        """Undo a failed refresh: restore *path* from *backup*, or remove it
+        if there was no prior backup (the refresh wrote it fresh).
+
+        Restores via _atomic_write(), the shared O_NOFOLLOW-temp-file-plus-
+        os.replace helper also used by _save_stream_cookiejar — a plain
+        write_bytes() would follow a symlink planted at *path* during the
+        network-bound window between backup and restore.
+        """
+        try:
+            if backup is not None:
+                payload = backup
+
+                def _write(f: IO[Any]) -> None:
+                    f.write(payload)
+
+                _atomic_write(path, "wb", _write)
+                logger.debug("Restored previous %s after cookies file validation failure", label)
+            elif path.exists():
+                path.unlink()
+        except OSError:
+            logger.warning("Failed to restore previous %s", label, exc_info=True)
+
     def _refresh_from_cookies_file(self, cookies_file: Path, interactive: bool = False) -> bool:
         """Refresh auth from cookies file without losing working credentials."""
-        backup: bytes | None = None
-        if self._auth_file.exists():
-            try:
-                backup = self._auth_file.read_bytes()
-            except OSError:
-                logger.debug("Could not backup existing auth file", exc_info=True)
+        backup = self._backup_bytes(self._auth_file, "auth file")
+        stream_backup = self._backup_bytes(self._stream_cookies_file, "stream cookiejar")
 
         if not self._extract_and_save_from_cookies_file(cookies_file, interactive=interactive):
             return False
@@ -277,13 +360,8 @@ class AuthManager:
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             logger.warning("Network error during cookies-file validation; restoring backup")
 
-        if backup is not None:
-            try:
-                self._auth_file.write_bytes(backup)
-                secure_chmod(self._auth_file, SECURE_FILE_MODE)
-                logger.debug("Restored previous auth after cookies file validation failure")
-            except OSError:
-                logger.warning("Failed to restore previous auth file", exc_info=True)
+        self._restore_or_remove(self._auth_file, backup, "auth file")
+        self._restore_or_remove(self._stream_cookies_file, stream_backup, "stream cookiejar")
         return False
 
     def _extract_and_save_from_cookies_file(
@@ -321,7 +399,7 @@ class AuthManager:
             logger.warning("No youtube.com cookies found in %s", cookies_file)
             return False
 
-        if self._save_youtube_cookies(yt_cookies, interactive=interactive):
+        if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
             if interactive:
                 print(f"  Cookies extracted from file and saved: {cookies_file}")
             return True
@@ -343,14 +421,18 @@ class AuthManager:
             logger.warning("No .youtube.com cookies found in %s", browser)
             return False
 
-        if self._save_youtube_cookies(yt_cookies, interactive=interactive):
+        if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
             if interactive:
                 print(f"  Cookies extracted from {browser} and saved.")
             return True
         return False
 
     def _save_youtube_cookies(
-        self, cookies: list, interactive: bool = False, first_valid: bool = False
+        self,
+        cookies: list,
+        interactive: bool = False,
+        first_valid: bool = False,
+        stream_jar: Iterable[Cookie] | None = None,
     ) -> bool:
         """Persist YouTube cookie headers into auth.json."""
         cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
@@ -485,6 +567,56 @@ class AuthManager:
         except OSError:
             logger.exception("Failed to write auth file %s", self._auth_file)
             return False
+
+        if stream_jar is not None:
+            self._save_stream_cookiejar(stream_jar)
+        return True
+
+    def _save_stream_cookiejar(self, jar: Iterable[Cookie]) -> bool:
+        """Write a wide youtube.com/google.com cookiejar for stream.py's yt-dlp resolver.
+
+        Builds a fresh jar rather than mutating *jar* in place — callers may
+        own or share that iterable, and this method has no reason to assume
+        it's safe to consume destructively.
+
+        On failure any existing jar is removed: auth.json now belongs to
+        this session, and streaming must not keep using the previous one.
+        """
+        try:
+            from yt_dlp.cookies import YoutubeDLCookieJar
+
+            stream_jar = YoutubeDLCookieJar()
+            for cookie in jar:
+                bare = cookie.domain.lstrip(".")
+                if bare in ("youtube.com", "google.com") or bare.endswith(
+                    (".youtube.com", ".google.com")
+                ):
+                    value = cookie.value or ""
+                    if _has_control_chars(cookie.name, value):
+                        continue
+                    stream_jar.set_cookie(cookie)
+
+            self._config_dir.mkdir(parents=True, exist_ok=True)
+
+            def _write(f: IO[Any]) -> None:
+                # save()'s stub types filename as str | None, but its open()
+                # accepts a file object directly at runtime (non-path-like
+                # branch truncates and reuses it) — verified against yt-dlp
+                # source.
+                stream_jar.save(f, ignore_discard=True, ignore_expires=True)  # type: ignore[arg-type]
+
+            _atomic_write(self._stream_cookies_file, "w", _write, encoding="utf-8")
+        except Exception:
+            logger.exception("Failed to write stream cookiejar to %s", self._stream_cookies_file)
+            try:
+                self._stream_cookies_file.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Could not remove stale stream cookiejar %s",
+                    self._stream_cookies_file,
+                    exc_info=True,
+                )
+            return False
         return True
 
     # ── Manual header paste (fallback) ───────────────────────────────
@@ -521,6 +653,13 @@ class AuthManager:
         raw = "\n".join(lines)
         normalized = _normalize_raw_headers(raw)
 
+        cookie_value: str | None = None
+        for line in normalized.split("\n"):
+            name, sep, value = line.partition(":")
+            if sep and name.strip().lower() == "cookie":
+                cookie_value = value.strip()
+                break
+
         if "cookie" not in normalized.lower():
             print()
             print("  Warning: no 'cookie' header found.")
@@ -533,6 +672,8 @@ class AuthManager:
 
             ytmusicapi.setup(filepath=str(self._auth_file), headers_raw=normalized)
             secure_chmod(self._auth_file, SECURE_FILE_MODE)
+            if cookie_value is not None:
+                self._save_stream_cookiejar(_cookies_from_raw_header(cookie_value))
             print()
             print("  Browser authentication saved.")
             return True
@@ -587,6 +728,18 @@ def _strip_decoded_blocks(lines: list[str]) -> list[str]:
     return out
 
 
+def _has_control_chars(*values: str) -> bool:
+    """True if any of *values* contains a tab/newline/carriage-return.
+
+    Both cookiejar formats this module writes (Netscape, and the raw-header
+    fallback) are line-oriented — an embedded control character in a cookie
+    name/value would corrupt the file. Shared by _save_stream_cookiejar and
+    _cookies_from_raw_header, the two places that build Cookie objects from
+    untrusted input (browser-extracted and user-pasted, respectively).
+    """
+    return any(ch in value for value in values for ch in ("\t", "\n", "\r"))
+
+
 def _normalize_raw_headers(raw: str) -> str:
     """Pre-process raw headers into ``Name: Value\\n`` format.
 
@@ -632,3 +785,45 @@ def _normalize_raw_headers(raw: str) -> str:
             continue
         result.append(stripped)
     return "\n".join(result)
+
+
+def _cookies_from_raw_header(cookie_header_value: str) -> list[Cookie]:
+    """Build Cookie objects from a raw ``Cookie:`` header value pasted by the user.
+
+    A raw header carries no per-cookie domain/path/expiry, so every cookie is
+    scoped to ``.youtube.com`` — the domain family the browser already
+    restricted this exact header to when it was copied.
+    """
+    expires = int(time.time()) + 2 * 365 * 24 * 60 * 60
+    cookies: list[Cookie] = []
+    for part in cookie_header_value.strip().split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        pieces = part.split("=", 1)
+        if len(pieces) != 2:
+            continue
+        name, value = pieces[0].strip(), pieces[1].strip()
+        if _has_control_chars(name, value):
+            continue
+        cookies.append(
+            Cookie(
+                version=0,
+                name=name,
+                value=value,
+                port=None,
+                port_specified=False,
+                domain=".youtube.com",
+                domain_specified=True,
+                domain_initial_dot=True,
+                path="/",
+                path_specified=True,
+                secure=True,
+                expires=expires,
+                discard=False,
+                comment=None,
+                comment_url=None,
+                rest={},
+            )
+        )
+    return cookies

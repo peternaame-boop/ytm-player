@@ -10,7 +10,8 @@ class TestAutoRefresh:
     def test_reuses_cookies_found_during_browser_detection(self, tmp_path, monkeypatch):
         manager = AuthManager(config_dir=tmp_path, auth_file=tmp_path / "auth.json")
         cookies = [MagicMock()]
-        detect = MagicMock(return_value=("brave", cookies))
+        jar = [MagicMock(), MagicMock()]
+        detect = MagicMock(return_value=("brave", cookies, jar))
         save = MagicMock(return_value=True)
         monkeypatch.setattr(manager, "_detect_browser", detect)
         monkeypatch.setattr(manager, "_save_youtube_cookies", save)
@@ -18,7 +19,7 @@ class TestAutoRefresh:
         assert manager.try_auto_refresh()
 
         detect.assert_called_once_with()
-        save.assert_called_once_with(cookies, first_valid=True)
+        save.assert_called_once_with(cookies, first_valid=True, stream_jar=jar)
 
     def test_silent_refresh_only_probes_preferred_account(self, tmp_path, monkeypatch, capsys):
         auth_file = tmp_path / "auth.json"

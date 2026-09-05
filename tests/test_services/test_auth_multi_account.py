@@ -17,7 +17,11 @@ def _make_cookie(name: str, value: str = "val", domain: str = ".youtube.com"):
 
 
 def _make_auth(tmp_path):
-    return AuthManager(config_dir=tmp_path, auth_file=tmp_path / "headers_auth.json")
+    return AuthManager(
+        config_dir=tmp_path,
+        auth_file=tmp_path / "headers_auth.json",
+        stream_cookies_file=tmp_path / "stream_cookies.txt",
+    )
 
 
 def _account(name):

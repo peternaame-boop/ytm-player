@@ -21,6 +21,7 @@ class TestDefaultValues:
         assert s.playback.default_volume == 80
         assert s.playback.autoplay is True
         assert s.search.default_mode == "music"
+        assert s.yt_dlp.use_session_cookies is False
         assert s.cache.enabled is True
         assert s.cache.max_size_mb == 1024
         assert s.ui.theme == "ytm-dark"

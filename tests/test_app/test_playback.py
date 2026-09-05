@@ -459,6 +459,53 @@ class TestFetchAndPlayRadioSeedFirst:
         host.play_track.assert_not_called()
 
 
+class TestFetchAndPlayRadioNotifyOrder:
+    """Regression: 'Playing: X' must announce as soon as the radio is
+    fetched and queued, not wait for the first track's stream resolve to
+    finish (which can include a one-time cookie decryption)."""
+
+    async def test_notify_fires_before_play_track(self):
+        from ytm_player.services.queue import QueueManager
+
+        host = _fresh_playback_host()
+        host.queue = QueueManager()
+        host.ytmusic = MagicMock()
+        host.ytmusic.get_radio = AsyncMock(
+            return_value=[
+                {
+                    "video_id": "r1",
+                    "title": "Radio 1",
+                    "artist": "",
+                    "artists": [],
+                    "album": "",
+                    "album_id": "",
+                    "duration": 200,
+                    "thumbnail_url": "",
+                    "is_video": False,
+                },
+            ]
+        )
+        host._refresh_queue_page = MagicMock()
+
+        call_order = []
+
+        def _record_notify(message, *args, **kwargs):
+            if message.startswith("Playing:"):
+                call_order.append("notify")
+
+        host.notify = MagicMock(side_effect=_record_notify)
+
+        async def _slow_play_track(track):
+            call_order.append("play_track")
+
+        host.play_track = AsyncMock(side_effect=_slow_play_track)
+
+        seeds = [{"videoId": "s1", "title": "Seed 1", "artists": [{"name": "A"}]}]
+        await host._fetch_and_play_radio(seeds, label="Test Radio")
+
+        assert call_order == ["notify", "play_track"]
+
+
 class TestCrossTrackRace:
     """T11: a later play_track call must supersede an in-flight one —
     the older call may not steal playback back or push stale metadata."""

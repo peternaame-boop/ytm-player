@@ -401,10 +401,15 @@ class PlaybackMixin(YTMHostBase):
         self._refresh_queue_page()
         if not label:
             label = f"Radio from {seeds[0].get('title', 'Unknown')}"
+        # Fire before play_track(), not after: "Playing: X" means the radio
+        # was fetched and queued, not that the first track's audio is
+        # already flowing. play_track() awaits the full stream resolve, so
+        # placing this after it delayed the confirmation by however long
+        # that took, instead of confirming as soon as it was actually true.
+        self.notify(f"Playing: {label}", timeout=4)
         first = self.queue.next_track()
         if first:
             await self.play_track(first)
-        self.notify(f"Playing: {label}", timeout=4)
 
     # ── Player event callbacks ───────────────────────────────────────
 

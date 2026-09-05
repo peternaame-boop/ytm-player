@@ -30,6 +30,14 @@ dependencies = [
     "textual>=7.0,<9.0",
     "ytmusicapi>=1.11.0",
     "yt-dlp>=2026.8.19",
+    # yt-dlp treats this as optional and falls back to a pure-Python AES
+    # implementation without it — fine for occasional use, but browser
+    # cookie extraction (see AuthManager's _extract_and_save and
+    # _extract_and_save_from_cookies_file in services/auth.py) decrypts a
+    # whole browser cookie store at once. Measured locally: ~26s with
+    # the pure-Python fallback vs ~2.4s with pycryptodomex's native AES
+    # for a ~3500-cookie Chromium-based profile.
+    "pycryptodomex>=3.19.1",
     "python-mpv>=1.0.0",
     "aiosqlite>=0.20.0",
     "click>=8.1.0",

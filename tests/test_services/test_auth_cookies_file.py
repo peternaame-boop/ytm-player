@@ -24,7 +24,7 @@ def test_extract_from_cookies_file_rejects_non_youtube_suffix(tmp_path):
     _write_netscape_cookie_file(cookies_file, domain="notyoutube.com")
 
     auth_file = tmp_path / "headers_auth.json"
-    auth = AuthManager(auth_file=auth_file)
+    auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
     assert auth._extract_and_save_from_cookies_file(cookies_file) is False
     assert not auth_file.exists()
@@ -40,7 +40,7 @@ def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
     original = '{"cookie": "old=1"}'
     auth_file.write_text(original)
 
-    auth = AuthManager(auth_file=auth_file)
+    auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
     monkeypatch.setattr(auth, "validate", lambda: False)
 
@@ -57,7 +57,7 @@ def test_refresh_from_cookies_file_restores_backup_on_network_error(tmp_path, mo
     original = '{"cookie": "old=1"}'
     auth_file.write_text(original)
 
-    auth = AuthManager(auth_file=auth_file)
+    auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
     def _raise_network_error():
         raise requests.exceptions.ConnectionError("connection reset")
