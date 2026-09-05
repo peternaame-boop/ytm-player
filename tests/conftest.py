@@ -28,6 +28,7 @@ def make_ytmusic_service(**overrides):
     svc._consecutive_api_failures = 0
     svc._client_init_lock = threading.Lock()
     svc._auth_refresh_lock = asyncio.Lock()
+    svc._renewal_retry_after = 0.0
     svc._order_lock = asyncio.Lock()
     svc._no_patch = asyncio.Event()
     svc._no_patch.set()
