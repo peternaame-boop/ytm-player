@@ -43,6 +43,7 @@ _BROWSERS = (
     "chromium",
     "brave",
     "firefox",
+    "zen",
     "edge",
     "vivaldi",
     "opera",
@@ -54,6 +55,39 @@ _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
     "helium": ("net.imput.helium", "Chromium"),
 }
 _yt_dlp_patched = False
+
+
+def _zen_profile_roots() -> list[Path]:
+    """Return candidate Zen profile roots for the current platform."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        return [Path(appdata) / "zen"] if appdata else []
+
+    home = Path.home()
+    if sys.platform == "darwin":
+        return [home / "Library" / "Application Support" / "zen"]
+
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    xdg_root = Path(xdg_config_home) if xdg_config_home else home / ".config"
+    return [
+        home / ".zen",
+        xdg_root / "zen",
+        home / ".var" / "app" / "app.zen_browser.zen" / ".zen",
+        home / ".var" / "app" / "app.zen_browser.zen" / "zen",
+    ]
+
+
+def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
+    """Extract cookies from a supported browser, including Zen profiles."""
+    from yt_dlp.cookies import extract_cookies_from_browser
+
+    if browser == "zen":
+        for root in _zen_profile_roots():
+            if root.exists():
+                return extract_cookies_from_browser("firefox", profile=str(root))
+        raise FileNotFoundError("no Zen profile directory found")
+
+    return extract_cookies_from_browser(browser)
 
 
 def _patch_yt_dlp_browsers() -> None:
@@ -195,16 +229,12 @@ class AuthManager:
         if self._cookies_file and self._refresh_from_cookies_file(Path(self._cookies_file)):
             return True
 
-        browser = self._detect_browser()
-        if browser is None:
+        detected = self._detect_browser()
+        if detected is None:
             return False
+        browser, cookies, jar = detected
         try:
-            # Unlike _refresh_from_cookies_file, this path has no backup/restore
-            # for auth.json or stream_cookies.txt — a validate() failure below
-            # leaves freshly-extracted-but-invalid credentials on disk. Known,
-            # deliberately-deferred gap (see plan's exclusions), not an oversight.
-            if self._extract_and_save(browser):
-                return self.validate()
+            return self._save_youtube_cookies(cookies, first_valid=True, stream_jar=jar)
         except Exception:
             logger.debug("Auto-refresh failed", exc_info=True)
         return False
@@ -248,10 +278,11 @@ class AuthManager:
         # Auto-detect browser.
         detected = self._detect_browser()
         if detected:
-            print(f"  Found YouTube cookies in {detected}.")
+            browser, cookies, jar = detected
+            print(f"  Found YouTube cookies in {browser}.")
             print("  Extracting automatically...")
             print()
-            if self._extract_and_save(detected, interactive=True):
+            if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar):
                 return True
             print("  Auto-extraction failed. Falling back to manual setup.")
             print()
@@ -261,25 +292,20 @@ class AuthManager:
     # ── Browser cookie extraction ────────────────────────────────────
 
     @staticmethod
-    def _detect_browser() -> str | None:
-        """Find a browser that has YouTube cookies."""
-        try:
-            from yt_dlp.cookies import extract_cookies_from_browser
-        except ImportError:
-            logger.debug("yt-dlp not available for cookie extraction")
-            return None
+    def _detect_browser() -> tuple[str, list, list] | None:
+        """Find a browser that has YouTube cookies.
 
+        Returns ``(browser, youtube_cookies, full_jar)`` — the full jar feeds
+        the stream cookiejar (youtube.com + google.com) via _save_stream_cookiejar.
+        """
         _patch_yt_dlp_browsers()
 
         for browser in _BROWSERS:
             try:
-                jar = extract_cookies_from_browser(browser)
-                has_sapisid = any(
-                    c.name in ("SAPISID", "__Secure-3PAPISID") and c.domain == ".youtube.com"
-                    for c in jar
-                )
-                if has_sapisid:
-                    return browser
+                jar = _extract_browser_jar(browser)
+                yt_cookies = [c for c in jar if c.domain == ".youtube.com"]
+                if any(c.name in ("SAPISID", "__Secure-3PAPISID") for c in yt_cookies):
+                    return browser, yt_cookies, list(jar)
             except Exception:
                 logger.debug("Browser %s not available", browser, exc_info=True)
                 continue
@@ -374,17 +400,16 @@ class AuthManager:
             return False
 
         if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
-            print(f"  Cookies extracted from file and saved: {cookies_file}")
+            if interactive:
+                print(f"  Cookies extracted from file and saved: {cookies_file}")
             return True
         return False
 
     def _extract_and_save(self, browser: str, interactive: bool = False) -> bool:
         """Extract YouTube cookies from *browser* and write auth.json."""
         try:
-            from yt_dlp.cookies import extract_cookies_from_browser
-
             _patch_yt_dlp_browsers()
-            jar = extract_cookies_from_browser(browser)
+            jar = _extract_browser_jar(browser)
         except Exception as exc:
             logger.warning("Cookie extraction from %s failed: %s", browser, exc)
             return False
@@ -397,7 +422,8 @@ class AuthManager:
             return False
 
         if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
-            print(f"  Cookies extracted from {browser} and saved.")
+            if interactive:
+                print(f"  Cookies extracted from {browser} and saved.")
             return True
         return False
 
@@ -405,6 +431,7 @@ class AuthManager:
         self,
         cookies: list,
         interactive: bool = False,
+        first_valid: bool = False,
         stream_jar: Iterable[Cookie] | None = None,
     ) -> bool:
         """Persist YouTube cookie headers into auth.json."""
@@ -423,13 +450,7 @@ class AuthManager:
         base_headers["cookie"] = cookie_str
         base_headers["authorization"] = get_authorization(sapisid + " " + origin)
 
-        # Probe x-goog-authuser indices 0–4. The SAPISID cookie is shared across
-        # all Google accounts signed into the browser — x-goog-authuser is a
-        # server-side account selector with no mapping to cookie names.
-        authuser_indices = list(range(5))
-
-        # Probe each account index and collect all valid YouTube Music accounts.
-        # Capture any previously saved account preference before probing overwrites the auth file.
+        # Capture any previously saved account preference before probing.
         preferred_index_before_probe: int | None = None
         if self._auth_file.exists():
             try:
@@ -437,6 +458,14 @@ class AuthManager:
                 preferred_index_before_probe = int(existing.get("x-goog-authuser", 0))
             except (OSError, json.JSONDecodeError, ValueError):
                 pass
+
+        # Auto-refresh only needs the preferred account (or the first valid
+        # fallback), while setup lists every available account.
+        authuser_indices = list(range(5))
+        if first_valid and preferred_index_before_probe in authuser_indices:
+            authuser_indices.remove(preferred_index_before_probe)
+            authuser_indices.insert(0, preferred_index_before_probe)
+
         self._config_dir.mkdir(parents=True, exist_ok=True)
         valid_accounts: list[tuple[int, str, str]] = []  # (authuser_index, accountName, handle)
         for authuser in authuser_indices:
@@ -452,6 +481,8 @@ class AuthManager:
                 handle = account.get("channelHandle") or ""
                 if name:
                     valid_accounts.append((authuser, name, handle))
+                    if first_valid:
+                        break
             except Exception:
                 logger.debug("x-goog-authuser=%d did not work, skipping", authuser)
             finally:
@@ -475,7 +506,7 @@ class AuthManager:
             parts.append(f"browser slot {authuser}")
             return "  ·  ".join(parts)
 
-        if len(valid_accounts) == 1:
+        if interactive and len(valid_accounts) == 1:
             chosen_index, chosen_name, chosen_handle = valid_accounts[0]
             print(f"  Authenticated as: {_label(chosen_index, chosen_name, chosen_handle)}")
         elif interactive:
@@ -643,6 +674,46 @@ class AuthManager:
 
 _PSEUDO_HEADERS = {":authority", ":method", ":path", ":scheme", ":status"}
 
+# Chrome annotates ``x-client-data`` with a pretty-printed protobuf, opened by
+# a bare ``Decoded:`` line and closed by a bare ``}``.
+_DECODED_OPEN = "Decoded:"
+_DECODED_CLOSE = "}"
+
+
+def _strip_decoded_blocks(lines: list[str]) -> list[str]:
+    """Drop Chrome's decoded-protobuf annotation for ``x-client-data``.
+
+    Chrome DevTools renders that header as its name, its value, then a
+    ``Decoded:`` line followed by a pretty-printed protobuf block ending in
+    ``}``.  Those lines are not headers, and the block spans an odd number of
+    lines, so leaving it in shifts the name/value pairing of every header
+    after it — including ``x-goog-authuser``, which ytmusicapi requires and
+    which sorts after ``x-client-data``.
+
+    A block with no closing ``}`` is left untouched: dropping to end-of-input
+    would discard real headers, and the caller degrades better on a parity
+    shift than on missing lines.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() != _DECODED_OPEN:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        close = next(
+            (j for j in range(i + 1, len(lines)) if lines[j].strip() == _DECODED_CLOSE),
+            None,
+        )
+        if close is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        i = close + 1
+
+    return out
+
 
 def _has_control_chars(*values: str) -> bool:
     """True if any of *values* contains a tab/newline/carriage-return.
@@ -678,7 +749,7 @@ def _normalize_raw_headers(raw: str) -> str:
             lines.append(f"{name}: {value}")
         return "\n".join(lines)
 
-    raw_lines = [line for line in raw.split("\n") if line.strip()]
+    raw_lines = _strip_decoded_blocks([line for line in raw.split("\n") if line.strip()])
     colon_lines = sum(1 for line in raw_lines if ": " in line)
     is_alternating = len(raw_lines) > 2 and colon_lines < len(raw_lines) * 0.2
 

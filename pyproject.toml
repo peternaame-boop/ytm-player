@@ -29,7 +29,7 @@ classifiers = [
 dependencies = [
     "textual>=7.0,<9.0",
     "ytmusicapi>=1.11.0",
-    "yt-dlp>=2025.1.0",
+    "yt-dlp>=2026.8.19",
     # yt-dlp treats this as optional and falls back to a pure-Python AES
     # implementation without it — fine for occasional use, but browser
     # cookie extraction (see AuthManager's _extract_and_save and
@@ -59,7 +59,7 @@ dependencies = [
 [project.optional-dependencies]
 spotify = [
     "spotipy>=2.24.0",
-    "spotifyscraper>=2.0.0",
+    "spotifyscraper>=3.0.0",
     "thefuzz>=0.22.0",
 ]
 mpris = []  # dbus-fast is now a Linux core dependency; kept for backwards compat.

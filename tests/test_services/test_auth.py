@@ -1,6 +1,52 @@
-"""Tests for ytm_player.services.auth._normalize_raw_headers."""
+"""Tests for ytm_player.services.auth."""
 
-from ytm_player.services.auth import _normalize_raw_headers
+import json
+from unittest.mock import MagicMock
+
+from ytm_player.services.auth import AuthManager, _normalize_raw_headers
+
+
+class TestAutoRefresh:
+    def test_reuses_cookies_found_during_browser_detection(self, tmp_path, monkeypatch):
+        manager = AuthManager(config_dir=tmp_path, auth_file=tmp_path / "auth.json")
+        cookies = [MagicMock()]
+        jar = [MagicMock(), MagicMock()]
+        detect = MagicMock(return_value=("brave", cookies, jar))
+        save = MagicMock(return_value=True)
+        monkeypatch.setattr(manager, "_detect_browser", detect)
+        monkeypatch.setattr(manager, "_save_youtube_cookies", save)
+
+        assert manager.try_auto_refresh()
+
+        detect.assert_called_once_with()
+        save.assert_called_once_with(cookies, first_valid=True, stream_jar=jar)
+
+    def test_silent_refresh_only_probes_preferred_account(self, tmp_path, monkeypatch, capsys):
+        auth_file = tmp_path / "auth.json"
+        auth_file.write_text(json.dumps({"x-goog-authuser": "2"}))
+        probed: list[int] = []
+
+        class Cookie:
+            name = "__Secure-3PAPISID"
+            value = "test"
+
+        def fake_ytmusic(path):
+            authuser = int(json.loads(open(path).read())["x-goog-authuser"])
+            probed.append(authuser)
+            client = MagicMock()
+            client.get_account_info.return_value = {
+                "accountName": "Test",
+                "channelHandle": "@test",
+            }
+            return client
+
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", fake_ytmusic)
+        manager = AuthManager(config_dir=tmp_path, auth_file=auth_file)
+
+        assert manager._save_youtube_cookies([Cookie()], first_valid=True)
+        assert probed == [2]
+        assert json.loads(auth_file.read_text())["x-goog-authuser"] == "2"
+        assert capsys.readouterr().out == ""
 
 
 class TestStandardFormat:
@@ -76,3 +122,73 @@ class TestEdgeCases:
 
     def test_whitespace_only_returns_empty(self):
         assert _normalize_raw_headers("   \n   \n  ") == ""
+
+
+class TestChromeDecodedBlock:
+    """Chrome annotates x-client-data with a multi-line decoded protobuf.
+
+    The block spans an odd number of lines, so before it was stripped it
+    shifted the alternating name/value pairing of every header after it and
+    ``x-goog-authuser`` — required by ytmusicapi — was parsed as a value.
+    """
+
+    # Name, value, then the annotation Chrome appends underneath it.
+    DECODED = (
+        "x-client-data\n"
+        "CIm2yQEIprbJAQipncoBCMiWywEI\n"
+        "Decoded:\n"
+        "message ClientVariations {\n"
+        "  // Active Google-visible variation IDs on this client. These are reported for\n"
+        "  // analysis, but do not directly affect any server-side behavior.\n"
+        "  repeated int32 variation_id = [3300105, 3300134];\n"
+        "  repeated int32 trigger_variation_id = [101003180];\n"
+        "}"
+    )
+
+    def test_authuser_survives_decoded_block(self):
+        raw = f"cookie\nabc=123\n{self.DECODED}\nx-goog-authuser\n0\nx-origin\nhttps://music.youtube.com"
+        result = _normalize_raw_headers(raw)
+        assert "x-goog-authuser: 0" in result
+        assert "cookie: abc=123" in result
+        assert "x-origin: https://music.youtube.com" in result
+
+    def test_decoded_body_not_emitted_as_headers(self):
+        raw = f"cookie\nabc=123\n{self.DECODED}\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "Decoded" not in result
+        assert "ClientVariations" not in result
+        assert "variation_id" not in result
+        assert "x-client-data: CIm2yQEIprbJAQipncoBCMiWywEI" in result
+
+    def test_decoded_block_in_standard_format(self):
+        raw = (
+            "cookie: abc=123\n"
+            "x-client-data: CIm2yQEIprbJAQipncoBCMiWywEI\n"
+            "Decoded:\n"
+            "message ClientVariations {\n"
+            "  repeated int32 variation_id = [3300105];\n"
+            "}\n"
+            "x-goog-authuser: 0"
+        )
+        result = _normalize_raw_headers(raw)
+        assert "x-goog-authuser: 0" in result
+        assert "ClientVariations" not in result
+
+    def test_multiple_decoded_blocks(self):
+        raw = f"cookie\nabc=123\n{self.DECODED}\n{self.DECODED}\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "x-goog-authuser: 0" in result
+        assert "ClientVariations" not in result
+
+    def test_unterminated_block_keeps_following_headers(self):
+        """No closing brace: leave the input alone rather than truncate it."""
+        raw = "cookie\nabc=123\nDecoded:\nmessage ClientVariations {\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "cookie: abc=123" in result
+        assert "0" in result
+
+    def test_lone_closing_brace_is_not_a_block(self):
+        raw = "cookie\nabc=123\n}\nsomething\nx-goog-authuser\n0"
+        result = _normalize_raw_headers(raw)
+        assert "cookie: abc=123" in result
+        assert "x-goog-authuser: 0" in result

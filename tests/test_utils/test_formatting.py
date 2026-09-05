@@ -350,6 +350,28 @@ class TestNormalizeTracks:
         result = normalize_tracks([{"videoId": "x", "thumbnails": []}])
         assert result[0]["thumbnail_url"] is None
 
+    def test_singular_thumbnail_key_fallback(self):
+        """get_watch_playlist(radio=True) tracks use "thumbnail", not "thumbnails"."""
+        raw = [
+            {
+                "videoId": "x",
+                "thumbnail": [{"url": "http://img/small"}, {"url": "http://img/large"}],
+            }
+        ]
+        result = normalize_tracks(raw)
+        assert result[0]["thumbnail_url"] == "http://img/large"
+
+    def test_plural_thumbnails_key_takes_priority(self):
+        raw = [
+            {
+                "videoId": "x",
+                "thumbnails": [{"url": "http://plural"}],
+                "thumbnail": [{"url": "http://singular"}],
+            }
+        ]
+        result = normalize_tracks(raw)
+        assert result[0]["thumbnail_url"] == "http://plural"
+
     def test_artists_passthrough(self):
         artists = [{"name": "A", "id": "1"}, {"name": "B", "id": "2"}]
         result = normalize_tracks([{"videoId": "x", "artists": artists}])

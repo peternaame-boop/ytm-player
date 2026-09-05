@@ -23,47 +23,24 @@
         # spotifyscraper is not in nixpkgs — build from PyPI.
         spotifyscraper = python.pkgs.buildPythonPackage rec {
           pname = "spotifyscraper";
-          version = "2.1.5";
-          # PEP 517 build via setuptools.build_meta. The sdist also ships a
-          # Makefile whose `install` target runs `pip install --upgrade pip`;
-          # with pyproject = false the Python hooks don't engage and stdenv
-          # falls back to `make install`, which fails in the hermetic sandbox
-          # (no pip, no network) — that was issue #93.
+          version = "3.9.2";
+          # PEP 517 build (hatchling). The sdist also ships a Makefile whose
+          # `install` target runs `pip install --upgrade pip`; with
+          # pyproject = false the Python hooks don't engage and stdenv falls
+          # back to `make install`, which fails in the hermetic sandbox (no
+          # pip, no network) — that was issue #93.
           pyproject = true;
 
           src = python.pkgs.fetchPypi {
             inherit pname version;
-            hash = "sha256-QoapRb+L265P3zUX4IHJxf9k4dlB6451p5aI6nZvOto=";
+            hash = "sha256-6ozyx0VjVAbaqBnlUEZ5zUoRGPjS9U/qwnQH0DNPs60=";
           };
 
-          build-system = with python.pkgs; [
-            setuptools
-            wheel
-          ];
+          build-system = with python.pkgs; [ hatchling ];
 
-          dependencies = with python.pkgs; [
-            requests
-            beautifulsoup4
-            lxml
-            pyyaml
-            urllib3
-            cssselect
-            soupsieve
-            filetype
-            fake-useragent
-            certifi
-            packaging
-            tqdm
-            pyparsing
-            deprecation
-            click
-            rich
-          ];
-
-          # Upstream declares eyeD3 (MP3 cover-art embedding), but ytm-player
-          # only uses playlist scraping and eyeD3 is imported lazily, so drop
-          # it rather than pull the dependency.
-          pythonRemoveDeps = [ "eyeD3" ];
+          # 3.x's only hard dependency; the CLI/browser/media/mcp extras are
+          # optional and ytm-player uses none of them.
+          dependencies = with python.pkgs; [ httpx ];
 
           # Tests require network access.
           doCheck = false;
@@ -113,7 +90,7 @@
             # Core dep on Linux so MPRIS works out of the box; Linux-only because
             # it can't import on darwin (socket.CMSG_LEN), matching the pyproject
             # sys_platform marker.
-            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ python.pkgs.dbus-fast ];
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ python.pkgs.dbus-fast ];
 
           optional-dependencies = with python.pkgs; {
             mpris = [ ];  # dbus-fast moved to core deps (Linux-only); kept for compat
@@ -200,7 +177,7 @@
             ])
             # dbus-fast is Linux-only (socket.CMSG_LEN); guard it so `nix develop`
             # still works on darwin.
-            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ python.pkgs.dbus-fast ]
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ python.pkgs.dbus-fast ]
             ++ [
               pkgs.mpv
             ];

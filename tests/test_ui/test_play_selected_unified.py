@@ -92,6 +92,44 @@ async def test_helper_still_forces_saved_shuffle_on():
     assert host.queue.shuffle_enabled is True
 
 
+async def test_helper_explicit_collection_play_clears_unsaved_shuffle():
+    queue = QueueManager()
+    queue.toggle_shuffle()
+    host = _make_host(queue=queue)
+
+    await TrackActionsMixin._replace_queue_and_play(
+        host, [_track("a"), _track("b")], entity_id="PL1", shuffle=None, autoplay=False
+    )
+
+    assert host.queue.shuffle_enabled is False
+    host._sync_shuffle_bar.assert_called_once()
+
+
+async def test_helper_explicit_collection_play_preserves_saved_shuffle_on():
+    queue = QueueManager()
+    queue.toggle_shuffle()
+    host = _make_host(queue=queue)
+    host.shuffle_prefs.get = MagicMock(return_value=True)
+
+    await TrackActionsMixin._replace_queue_and_play(
+        host, [_track("a"), _track("b")], entity_id="PL1", shuffle=None, autoplay=False
+    )
+
+    assert host.queue.shuffle_enabled is True
+
+
+async def test_helper_explicit_non_collection_play_clears_unsaved_shuffle():
+    queue = QueueManager()
+    queue.toggle_shuffle()
+    host = _make_host(queue=queue)
+
+    await TrackActionsMixin._replace_queue_and_play(
+        host, [_track("a"), _track("b")], entity_id=None, shuffle=None, autoplay=False
+    )
+
+    assert host.queue.shuffle_enabled is False
+
+
 async def test_helper_explicit_shuffle_with_saved_off_pref():
     """Explicit shuffle=True pre-randomizes the track list; the saved-OFF
     pref then clears the queue's shuffle MODE without defeating the
