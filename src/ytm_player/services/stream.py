@@ -144,7 +144,10 @@ class StreamResolver:
         self._quality = quality
         self._cache: dict[str, StreamInfo] = {}
         self._cache_lock = threading.Lock()
-        self._pending: dict[str, asyncio.Future[StreamInfo | None]] = {}
+        # In-flight async resolves, keyed by video_id, tagged with the
+        # _cache_generation they started under so a request made after
+        # clear_cache() never joins (or gets cleaned up by) a stale one.
+        self._pending: dict[str, tuple[int, asyncio.Future[StreamInfo | None]]] = {}
         # yt_dlp.YoutubeDL — typed Any because yt-dlp ships no stubs.
         self._ydl: Any | None = None
         self._ydl_lock = threading.Lock()
@@ -482,14 +485,18 @@ class StreamResolver:
         # Deduplicate concurrent requests for the same video.  Shield the
         # shared future: cancelling a waiter task would otherwise propagate
         # into the bare future (Task.cancel cancels what it awaits) and break
-        # the owner's set_result with InvalidStateError.
-        if video_id in self._pending:
-            return await asyncio.shield(self._pending[video_id])
+        # the owner's set_result with InvalidStateError.  A pending resolve
+        # from before a clear_cache() is not joined: its result comes from
+        # the old resolver setup, so this request starts its own and takes
+        # over the slot (the old owner's cleanup below checks identity).
+        generation = self._cache_generation
+        pending = self._current_pending(video_id, generation)
+        if pending is not None:
+            return await asyncio.shield(pending)
 
         logger.debug("Cache miss for video_id=%s, resolving via yt-dlp", video_id)
         future: asyncio.Future[StreamInfo | None] = asyncio.get_running_loop().create_future()
-        self._pending[video_id] = future
-        generation = self._cache_generation
+        self._pending[video_id] = (generation, future)
         try:
             info = await asyncio.to_thread(self._resolve_sync, video_id)
             if info is not None:
@@ -502,13 +509,24 @@ class StreamResolver:
                 future.set_exception(exc)
             raise
         finally:
-            self._pending.pop(video_id, None)
+            entry = self._pending.get(video_id)
+            if entry is not None and entry[1] is future:
+                del self._pending[video_id]
             if not future.done():
                 # Owner was cancelled before the future resolved (a BaseException
                 # such as CancelledError bypasses the except above).  Cancel the
                 # shared future so concurrent waiters get CancelledError instead
                 # of hanging forever on an orphaned, never-resolved future.
                 future.cancel()
+
+    def _current_pending(
+        self, video_id: str, generation: int
+    ) -> asyncio.Future[StreamInfo | None] | None:
+        """The in-flight resolve for *video_id* if it started under *generation*."""
+        entry = self._pending.get(video_id)
+        if entry is None or entry[0] != generation:
+            return None
+        return entry[1]
 
     async def prefetch(self, video_id: str) -> None:
         """Resolve a video ID in the background without blocking the caller.
@@ -518,7 +536,7 @@ class StreamResolver:
         """
         if self._get_cached(video_id) is not None:
             return  # Already cached, nothing to do.
-        if video_id in self._pending:
+        if self._current_pending(video_id, self._cache_generation) is not None:
             return  # Already being resolved.
         try:
             await self.resolve(video_id)

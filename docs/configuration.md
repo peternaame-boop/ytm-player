@@ -80,12 +80,14 @@ youtube.com/google.com cookies of your session to `stream_cookies.txt`; with
 `use_session_cookies = true` the resolver loads that file, so tracks that need your account
 (Premium-only, age-restricted) resolve as you.
 
-That mode needs yt-dlp's JavaScript challenge solver, because YouTube's cookie-aware clients
-require it: set `remote_components = "ejs:github"` and have a JavaScript runtime installed
-(`deno` is picked up automatically; for `node` or `bun` set `js_runtimes`). Without the solver,
-every resolve fails while `use_session_cookies` is on. yt-dlp never writes `stream_cookies.txt`
-back; re-run `ytm setup` to refresh it. An explicit `cookies_file` takes precedence and is used
-the way yt-dlp normally uses it.
+That mode relies on yt-dlp's JavaScript challenge solver, because YouTube's cookie-aware clients
+need it. Either install the solver locally (`pip install "yt-dlp[default]"` pulls in
+`yt-dlp-ejs`) or let yt-dlp download it with `remote_components = "ejs:github"`, and have a
+supported JavaScript runtime installed (`deno` is used automatically; for `node`, `bun` or
+`quickjs` set `js_runtimes`). Without a working solver, authenticated playback may fail while
+`use_session_cookies` is on; anonymous streaming is unaffected. yt-dlp never writes
+`stream_cookies.txt` back; re-run `ytm setup` to refresh it. An explicit `cookies_file` takes
+precedence and is used the way yt-dlp normally uses it.
 
 ### `[search]`
 

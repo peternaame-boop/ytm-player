@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -263,6 +264,96 @@ class TestClearCacheMidResolve:
         resolver.resolve_sync("mid03")
 
         assert resolver._get_cached("mid03") is info
+
+
+class TestPendingResolveAcrossClearCache:
+    """A resolve() that starts AFTER clear_cache() must not join a pending
+    resolve that started before it: that in-flight result comes from the old
+    resolver setup (old cookies, old quality). And when the old one finishes,
+    its cleanup must not remove the newer request's pending entry."""
+
+    @staticmethod
+    def _info(url: str) -> StreamInfo:
+        return StreamInfo(
+            url=url,
+            video_id="race",
+            format="opus",
+            bitrate=128,
+            duration=200,
+            expires_at=time.time() + 18000,
+        )
+
+    async def test_request_after_clear_does_not_join_stale_pending_resolve(self):
+        resolver = StreamResolver()
+        old_started = threading.Event()
+        release_old = threading.Event()
+        calls: list[int] = []
+
+        def fake_resolve_sync(video_id):
+            calls.append(len(calls) + 1)
+            if calls[-1] == 1:
+                old_started.set()
+                release_old.wait(timeout=5)
+                return self._info("https://old")
+            return self._info("https://new")
+
+        resolver._resolve_sync = fake_resolve_sync
+
+        first = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.to_thread(old_started.wait, 5)
+        resolver.clear_cache()
+        second = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.sleep(0.05)
+        release_old.set()
+
+        old, new = await asyncio.gather(first, second)
+
+        assert old.url == "https://old"
+        assert new.url == "https://new"
+        assert resolver._get_cached("race") is new
+        assert calls == [1, 2]
+        assert "race" not in resolver._pending
+
+    async def test_old_resolve_finishing_does_not_drop_newer_pending_entry(self):
+        resolver = StreamResolver()
+        old_started = threading.Event()
+        release_old = threading.Event()
+        new_started = threading.Event()
+        release_new = threading.Event()
+        calls: list[int] = []
+
+        def fake_resolve_sync(video_id):
+            calls.append(len(calls) + 1)
+            if calls[-1] == 1:
+                old_started.set()
+                release_old.wait(timeout=5)
+                return self._info("https://old")
+            new_started.set()
+            release_new.wait(timeout=5)
+            return self._info("https://new")
+
+        resolver._resolve_sync = fake_resolve_sync
+
+        first = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.to_thread(old_started.wait, 5)
+        resolver.clear_cache()
+        second = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.to_thread(new_started.wait, 5)
+
+        release_old.set()
+        await first
+        # The newer request is still in flight: its dedup entry must survive
+        # the older request's cleanup, so a third caller joins IT.
+        assert "race" in resolver._pending
+        third = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.sleep(0.05)
+        release_new.set()
+
+        new, joined = await asyncio.gather(second, third)
+        assert new.url == "https://new"
+        assert joined is new
+        assert calls == [1, 2]
+        assert "race" not in resolver._pending
 
 
 class TestStaleCookieDiagnosticHint:
