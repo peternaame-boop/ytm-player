@@ -114,10 +114,17 @@ def test_media_service_start_publish_pump_and_stop() -> None:
     assert float(published[macos_media._DURATION_KEY]) == 90.0
 
     assert r["rate_after_playing"] == 1.0, "playback rate not published for 'playing'"
-    if r["state_playing_const"] is not None and r["state_after_playing"] is not None:
-        assert r["state_after_playing"] == r["state_playing_const"], (
-            "playback state not published for 'playing'"
-        )
+    assert r["state_playing_const"] is not None, (
+        "MPNowPlayingPlaybackStatePlaying is unavailable in this MediaPlayer; the playback "
+        "state cannot be validated here"
+    )
+    assert r["state_after_playing"] is not None, (
+        "MPNowPlayingInfoCenter.playbackState is unavailable here; the playback state "
+        "cannot be validated"
+    )
+    assert r["state_after_playing"] == r["state_playing_const"], (
+        "playback state not published for 'playing'"
+    )
 
     assert r["pump_alive_after_pumping"], (
         "run-loop pump stopped on its own — check the child's stderr for an exception"
