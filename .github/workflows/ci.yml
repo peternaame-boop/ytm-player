@@ -56,4 +56,4 @@ jobs:
       # #106 platform-guard test teeth: it proves the forced-win32/darwin import
       # never pulls dbus-fast in even when it's present. macOS/Windows runners
       # correctly never install it (sys_platform marker).
-      - run: pytest --cov=ytm_player --cov-report=term-missing
+      - run: pytest -rs --cov=ytm_player --cov-report=term-missing
