@@ -32,7 +32,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **yt-dlp's own warnings and errors now reach `ytm.log`** — yt-dlp's default logger dropped them, so failures like "Signature solving failed" or "Skipping client … since it does not support cookies" left no trace. Thanks @wgordon17 (#136).
 - **Stream resolver reset fixes** — resetting the resolver (a quality change, or the automatic reset after repeated failures) no longer closes the yt-dlp instance under a resolve that is still running (a ~30 s stall), no longer loses a reset that lands while the instance is being built, and a resolve that finishes after a reset no longer puts its result back into the cleared cache. Concurrent resolves are serialized on the shared yt-dlp instance, which is not thread-safe. Thanks @wgordon17 (#136).
 - **`pycryptodomex` is now a core dependency** — yt-dlp uses it to decrypt Chromium cookies during `ytm setup`; without it the pure-Python fallback took ~26 s instead of ~2 s on a large profile. Thanks @wgordon17 (#136).
-- **macOS Now Playing stays active** — the Cocoa main run loop is serviced alongside Textual's asyncio loop, so published track metadata appears reliably in Control Center.
+- **macOS media keys stopped working after a while** — macOS disables the media-key event tap when a callback is slow or during an input flood, and nothing re-enabled it, so the keys silently went to Apple Music for the rest of the session. The tap is re-enabled as soon as macOS reports it disabled. Thanks @wgordon17 (#141).
+- **macOS Now Playing stays active** — the Cocoa main run loop is serviced alongside Textual's asyncio loop, so published track metadata appears reliably in Control Center. Thanks @alvaro0x404 (#131).
+- **Phantom bouncing "Python" Dock icon on macOS** — creating the mpv handle promotes the process to a foreground app and nothing ever finishes that launch, so a generic Python tile bounced in the Dock indefinitely. The process is demoted to an accessory app (no Dock tile, still a Now Playing source) once mpv is up. Thanks @aksholokhov (#128).
 
 ### v2.0.0 (2026-07-04)
 
