@@ -17,6 +17,10 @@ from ytm_player.utils.formatting import get_video_id, normalize_tracks
 logger = logging.getLogger(__name__)
 
 _MAX_CONSECUTIVE_FAILURES = 5
+# Plays the account accepted while no account history was cached; the next
+# fetch merges them in. Bounded so a session that never opens the page
+# cannot grow it without limit.
+_YTM_PENDING_MAX = 100
 
 # Poll player.position with a timer instead of relying on UI position events:
 # timers keep firing when the terminal window loses focus, while position stays
@@ -809,14 +813,12 @@ class PlaybackMixin(YTMHostBase):
                 # duplicate from a blind direct log.
                 owned.pending_seconds = listened
             else:
-                play_id = await self.history.log_play(
+                await self.history.log_play(
                     track=track,
                     listened_seconds=listened,
                     source="tui",
                     min_listen_seconds=self._history_min_listen_seconds(),
                 )
-                if play_id is not None:
-                    self._drop_from_ytm_history_cache(video_id)
         except Exception:
             logger.exception("Failed to log play history")
 
@@ -902,8 +904,6 @@ class PlaybackMixin(YTMHostBase):
         claim.row_id = play_id
         if play_id is None:
             return
-        # The play is now local history; keep the YT Music tab disjoint.
-        self._drop_from_ytm_history_cache(claim.video_id)
         # Finalize may have stashed the final duration while the insert was
         # in flight. No await sits between publishing row_id above and
         # reading pending_seconds here, so a finalize either already saw
@@ -934,22 +934,27 @@ class PlaybackMixin(YTMHostBase):
         if isinstance(page, RecentlyPlayedPage):
             page.optimistic_add(_TAB_LOCAL, track)
 
-    def _drop_from_ytm_history_cache(self, video_id: str) -> None:
-        """Evict a just-logged local play from the cached YT Music tab.
+    def _add_to_ytm_history_cache(self, track: dict) -> None:
+        """Reflect a play the account just accepted in the cached account history.
 
-        The YT Music tab shows online-only plays: once a track enters the
-        local history, a fresh ``get_history()`` fetch would filter it out,
-        so the populated app-level cache must drop it too — otherwise the
-        tabs stop being disjoint until the next refetch. Re-renders the tab
-        live if it is showing.
+        Runs only after ``add_history_item`` succeeded, so the YT Music and
+        All tabs agree with the account. With a feed cached, the play moves
+        to the top. With none cached (first visit still pending, or a
+        refresh in flight) it is parked in ``_ytm_history_pending`` and the
+        next fetch puts it ahead of the feed it received — a fetch that
+        started before this report cannot hide it. Re-renders the page
+        when the YT Music or All tab is showing.
         """
+        video_id = get_video_id(track)
+        if not video_id:
+            return
         cache = self._ytm_history
-        if cache is None or not video_id:
+        if cache is None:
+            pending = self._ytm_history_pending
+            pending[:] = [dict(track)] + [t for t in pending if get_video_id(t) != video_id]
+            del pending[_YTM_PENDING_MAX:]
             return
-        pruned = [t for t in cache if get_video_id(t) != video_id]
-        if len(pruned) == len(cache):
-            return
-        self._ytm_history = pruned
+        self._ytm_history = [dict(track)] + [t for t in cache if get_video_id(t) != video_id]
 
         from ytm_player.ui.pages.recently_played import _TAB_YTM, RecentlyPlayedPage
 
@@ -1013,24 +1018,25 @@ class PlaybackMixin(YTMHostBase):
             )
             return
         self.run_worker(
-            self._push_ytm_history_report(video_id, generation),
+            self._push_ytm_history_report(track, video_id, generation),
             group="ytm-history-report",
         )
 
-    async def _push_ytm_history_report(self, video_id: str, generation: int) -> None:
+    async def _push_ytm_history_report(self, track: dict, video_id: str, generation: int) -> None:
         """Report the play to the account history (best-effort).
 
         ``add_history_item`` returns False on any failure (expired auth,
         missing playbackTracking, non-204) without raising — marking the
-        play reported on failure would suppress the retry on the next poll.
-        The YT Music tab deliberately does NOT reflect this play: it shows
-        online-only plays and filters TUI plays out of the account feed.
+        play reported on failure would suppress the retry on the next poll,
+        and the cached account history is only updated once the account
+        actually accepted the play.
         """
         if not self.ytmusic:
             return
         if not await self.ytmusic.add_history_item(video_id):
             return
         self._ytm_reported_generation = generation
+        self._add_to_ytm_history_cache(track)
 
     # ── Like toggle ──────────────────────────────────────────────────
 

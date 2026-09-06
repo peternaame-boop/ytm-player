@@ -53,6 +53,16 @@ sync_history_to_ytmusic = true  # report TUI plays back to your YT Music account
 
 > `sync_history_to_ytmusic` reports tracks you play in the TUI back to your YouTube Music account history (via ytmusicapi's `add_history_item`), so they show up in your history and feed recommendations like any other client. It uses `history_min_listen_seconds` as the reporting threshold. Set to `false` to keep TUI listening off your account.
 
+#### Recently Played tabs
+
+`g r` opens Recently Played with three tabs; a line under the tab row says what the active one shows.
+
+- **All** (default) — local history first, followed by additional account history. One row per track: a track played both here and elsewhere keeps its local position and time, with artist, album and artwork details filled in from the account row. It is two groups, not one timeline — the account feed only says roughly when a track was played, so a phone play from an hour ago can sit below an older play from this app. Up to 100 local rows plus up to 100 further account rows.
+- **Local** — tracks played in this app, most recent first, up to 100.
+- **YT Music** — your account's complete play history from any device, in YouTube Music's order, up to 100. Needs a signed-in session.
+
+If one source can't be loaded, All shows the other and says so in the footer. Re-selecting the active tab refreshes it; refreshing All refetches both sources. A play the account accepts (with `sync_history_to_ytmusic` on) appears on the YT Music and All tabs right away.
+
 ### `[cache]`
 
 ```toml

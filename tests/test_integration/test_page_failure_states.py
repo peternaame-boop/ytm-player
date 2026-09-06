@@ -53,7 +53,7 @@ def _make_recently_played_page() -> tuple[RecentlyPlayedPage, dict[str, MagicMoc
     ``query_one`` selector so tests can introspect ``.update`` calls
     and ``.display`` flips.
     """
-    page = RecentlyPlayedPage()
+    page = RecentlyPlayedPage(active_tab=_TAB_LOCAL)
 
     loading = MagicMock(name="recent-loading")
     table = MagicMock(name="recent-table")

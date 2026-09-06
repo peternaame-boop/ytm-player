@@ -281,6 +281,9 @@ class YTMPlayerApp(
         # we don't refetch on every visit, and is optimistically prepended to
         # when a play is reported. None = not fetched yet this session.
         self._ytm_history: list[dict] | None = None
+        # Plays the account accepted while _ytm_history was None; merged in
+        # ahead of the next fetched feed (see _add_to_ytm_history_cache).
+        self._ytm_history_pending: list[dict] = []
         # Makes the generation check + mpv play command atomic.
         self._play_lock = asyncio.Lock()
 

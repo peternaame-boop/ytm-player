@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Unreleased
 
+**Changes**
+
+- **Recently Played: All / Local / YT Music tabs** (#115) — the YT Music tab now shows your account's complete play history instead of hiding every track ever played in this app, and a new All tab (the default) shows local history first, followed by additional account history, one row per track. A line under the tabs says what each shows, and the footer says when a source couldn't be loaded. A play the account accepts appears on the YT Music and All tabs right away. Thanks @Villoh for the tabs and the discussion.
+
 **Fixes**
 
 - **Double-clicking a sidebar playlist loaded it three times** — one double-click fired two single-click selections plus the double-click, starting three concurrent playlist fetches. It now fires exactly one selection and one double-click.

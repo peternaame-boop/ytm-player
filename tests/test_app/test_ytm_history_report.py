@@ -34,6 +34,7 @@ def _host(
     host._play_generation = play_generation
     host._ytm_reported_generation = reported_generation
     host._ytm_history = None
+    host._ytm_history_pending = []
     host._local_history_claim = None
     host._track_start_position = 0.0
     host.history = MagicMock()
@@ -50,6 +51,7 @@ def _host(
     # Bind the push coroutine too: _report_ytm_play hands it to run_worker,
     # and an auto-mocked method there would hide the real coroutine contract.
     host._push_ytm_history_report = PlaybackMixin._push_ytm_history_report.__get__(host)
+    host._add_to_ytm_history_cache = PlaybackMixin._add_to_ytm_history_cache.__get__(host)
     return host
 
 
@@ -306,18 +308,31 @@ def test_ytm_report_fires_even_when_current_track_cleared() -> None:
     host.run_worker.call_args.args[0].close()  # unawaited coroutine cleanup
 
 
-async def test_push_marks_on_server_accept_without_touching_ytm_tab() -> None:
-    """The YT Music tab shows online-only plays: a successful report must
-    mark the generation but never inject the TUI play into the tab cache."""
+async def test_push_adds_the_accepted_play_to_the_account_cache() -> None:
+    """Once the account accepted the play it belongs on the YT Music and All
+    tabs: mark the generation and move the track to the top of the cache."""
     host = _host(play_generation=3, position=DEFAULT_HISTORY_MIN_LISTEN_SECONDS + 1)
     host.ytmusic.add_history_item = AsyncMock(return_value=True)
-    host._ytm_history = [{"video_id": "old"}]
+    host._ytm_history = [{"video_id": "old"}, {"video_id": "vid1", "title": "stale"}]
 
-    await PlaybackMixin._push_ytm_history_report.__get__(host)("vid1", 3)
+    track = {"video_id": "vid1", "title": "Fresh"}
+    await PlaybackMixin._push_ytm_history_report.__get__(host)(track, "vid1", 3)
 
     host.ytmusic.add_history_item.assert_awaited_once_with("vid1")
     assert host._ytm_reported_generation == 3
-    assert host._ytm_history == [{"video_id": "old"}]
+    assert host._ytm_history == [{"video_id": "vid1", "title": "Fresh"}, {"video_id": "old"}]
+    assert host._ytm_history_pending == []
+
+
+async def test_push_parks_the_accepted_play_when_no_feed_is_cached() -> None:
+    host = _host(play_generation=3, position=DEFAULT_HISTORY_MIN_LISTEN_SECONDS + 1)
+    host.ytmusic.add_history_item = AsyncMock(return_value=True)
+    host._ytm_history = None
+
+    await PlaybackMixin._push_ytm_history_report.__get__(host)({"video_id": "vid1"}, "vid1", 3)
+
+    assert host._ytm_history is None
+    assert host._ytm_history_pending == [{"video_id": "vid1"}]
 
 
 async def test_push_failure_leaves_tab_and_marking_untouched() -> None:
@@ -326,7 +341,9 @@ async def test_push_failure_leaves_tab_and_marking_untouched() -> None:
     host.ytmusic.add_history_item = AsyncMock(return_value=False)
     host._ytm_history = [{"video_id": "old"}]
 
-    await PlaybackMixin._push_ytm_history_report.__get__(host)("vid1", 3)
+    await PlaybackMixin._push_ytm_history_report.__get__(host)({"video_id": "vid1"}, "vid1", 3)
+
+    assert host._ytm_history_pending == []
 
     assert host._ytm_reported_generation == -1
     assert host._ytm_history == [{"video_id": "old"}]
@@ -615,66 +632,84 @@ def test_optimistic_local_add_noop_when_page_closed() -> None:
     # No RecentlyPlayedPage → nothing to assert beyond no exception.
 
 
-# ── YT Music cache eviction on local plays ───────────────────────────
+# ── Account cache updates on accepted plays ──────────────────────────
 
 
-def test_ytm_cache_eviction_drops_matching_row() -> None:
-    """Once a play lands in local history, a fresh YT Music fetch would
-    filter it out — the populated cache must drop it too (disjoint tabs)."""
+def test_ytm_cache_update_moves_the_play_to_the_top() -> None:
     host = MagicMock()
-    host._ytm_history = [{"video_id": "a"}, {"video_id": "vid1"}]
+    host._ytm_history = [{"video_id": "a"}, {"video_id": "vid1", "title": "old"}]
+    host._ytm_history_pending = []
     host._get_current_page.return_value = MagicMock()  # not a RecentlyPlayedPage
-    PlaybackMixin._drop_from_ytm_history_cache.__get__(host)("vid1")
-    assert [t["video_id"] for t in host._ytm_history] == ["a"]
+
+    PlaybackMixin._add_to_ytm_history_cache.__get__(host)({"video_id": "vid1", "title": "new"})
+
+    assert host._ytm_history == [{"video_id": "vid1", "title": "new"}, {"video_id": "a"}]
 
 
-def test_ytm_cache_eviction_noop_when_cache_unfetched() -> None:
+def test_ytm_cache_update_rerenders_the_open_page() -> None:
+    from ytm_player.ui.pages.recently_played import _TAB_YTM, RecentlyPlayedPage
+
+    host = MagicMock()
+    host._ytm_history = [{"video_id": "a"}]
+    host._ytm_history_pending = []
+    page = MagicMock(spec=RecentlyPlayedPage)
+    host._get_current_page.return_value = page
+
+    PlaybackMixin._add_to_ytm_history_cache.__get__(host)({"video_id": "vid1"})
+
+    page._refresh_tab_from_cache.assert_called_once_with(_TAB_YTM)
+
+
+def test_ytm_cache_update_pending_is_deduped_and_bounded() -> None:
+    from ytm_player.app._playback import _YTM_PENDING_MAX
+
     host = MagicMock()
     host._ytm_history = None
-    PlaybackMixin._drop_from_ytm_history_cache.__get__(host)("vid1")
-    assert host._ytm_history is None
+    host._ytm_history_pending = [{"video_id": f"p{i}"} for i in range(_YTM_PENDING_MAX)]
+    add = PlaybackMixin._add_to_ytm_history_cache.__get__(host)
+
+    add({"video_id": "p3", "title": "again"})
+    assert host._ytm_history_pending[0] == {"video_id": "p3", "title": "again"}
+    assert len(host._ytm_history_pending) == _YTM_PENDING_MAX
+
+    add({"video_id": "brand-new"})
+    assert host._ytm_history_pending[0] == {"video_id": "brand-new"}
+    assert len(host._ytm_history_pending) == _YTM_PENDING_MAX
+    host._get_current_page.assert_not_called()
 
 
-async def test_local_insert_worker_evicts_from_ytm_cache() -> None:
+def test_ytm_cache_update_ignores_a_track_without_an_id() -> None:
+    host = MagicMock()
+    host._ytm_history = [{"video_id": "a"}]
+    PlaybackMixin._add_to_ytm_history_cache.__get__(host)({"title": "no id"})
+    assert host._ytm_history == [{"video_id": "a"}]
+
+
+async def test_local_insert_leaves_the_account_cache_alone() -> None:
+    """A local play is local history; the account cache changes only when the
+    account itself accepted the play (see _push_ytm_history_report)."""
     host = _host(play_generation=4)
+    host._add_to_ytm_history_cache = MagicMock()
     claim = _claim(generation=4, insert_started=True)
     host._local_history_claim = claim
     host.history.log_play = AsyncMock(return_value=123)
     host._optimistic_local_history_add = MagicMock()
+    host._ytm_history = [{"video_id": "vid1"}, {"video_id": "a"}]
 
     await _insert(host, claim)
 
-    host._drop_from_ytm_history_cache.assert_called_once_with("vid1")
+    assert host._ytm_history == [{"video_id": "vid1"}, {"video_id": "a"}]
+    host._add_to_ytm_history_cache.assert_not_called()
 
 
-async def test_failed_local_insert_does_not_evict() -> None:
-    host = _host()
-    claim = _claim(insert_started=True)
-    host._local_history_claim = claim
-    host.history.log_play = AsyncMock(return_value=None)
-
-    await _insert(host, claim)
-
-    host._drop_from_ytm_history_cache.assert_not_called()
-
-
-async def test_direct_log_finalize_evicts_from_ytm_cache() -> None:
+async def test_direct_log_finalize_leaves_the_account_cache_alone() -> None:
     host = _host(position=60)
+    host._add_to_ytm_history_cache = MagicMock()
     host._local_history_claim = None
     host.history.log_play = AsyncMock(return_value=7)
+    host._ytm_history = [{"video_id": "vid1"}]
 
     await _finalize(host)
 
-    host._drop_from_ytm_history_cache.assert_called_once_with("vid1")
-
-
-async def test_rejected_direct_log_does_not_evict() -> None:
-    """log_play returning None (below threshold) wrote no local row — the
-    track keeps its place on the YT Music tab."""
-    host = _host(position=60)
-    host._local_history_claim = None
-    host.history.log_play = AsyncMock(return_value=None)
-
-    await _finalize(host)
-
-    host._drop_from_ytm_history_cache.assert_not_called()
+    assert host._ytm_history == [{"video_id": "vid1"}]
+    host._add_to_ytm_history_cache.assert_not_called()
