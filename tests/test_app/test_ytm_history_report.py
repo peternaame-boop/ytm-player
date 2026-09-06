@@ -35,6 +35,7 @@ def _host(
     host._ytm_reported_generation = reported_generation
     host._ytm_history = None
     host._ytm_history_pending = []
+    host._ytm_history_pending_seq = 0
     host._local_history_claim = None
     host._track_start_position = 0.0
     host.history = MagicMock()
@@ -332,7 +333,8 @@ async def test_push_parks_the_accepted_play_when_no_feed_is_cached() -> None:
     await PlaybackMixin._push_ytm_history_report.__get__(host)({"video_id": "vid1"}, "vid1", 3)
 
     assert host._ytm_history is None
-    assert host._ytm_history_pending == [{"video_id": "vid1"}]
+    assert host._ytm_history_pending == [(1, {"video_id": "vid1"})]
+    assert host._ytm_history_pending_seq == 1
 
 
 async def test_push_failure_leaves_tab_and_marking_untouched() -> None:
@@ -665,17 +667,39 @@ def test_ytm_cache_update_pending_is_deduped_and_bounded() -> None:
 
     host = MagicMock()
     host._ytm_history = None
-    host._ytm_history_pending = [{"video_id": f"p{i}"} for i in range(_YTM_PENDING_MAX)]
+    host._ytm_history_pending = [(i + 1, {"video_id": f"p{i}"}) for i in range(_YTM_PENDING_MAX)]
+    host._ytm_history_pending_seq = _YTM_PENDING_MAX
     add = PlaybackMixin._add_to_ytm_history_cache.__get__(host)
 
     add({"video_id": "p3", "title": "again"})
-    assert host._ytm_history_pending[0] == {"video_id": "p3", "title": "again"}
+    assert host._ytm_history_pending[0] == (
+        _YTM_PENDING_MAX + 1,
+        {"video_id": "p3", "title": "again"},
+    )
     assert len(host._ytm_history_pending) == _YTM_PENDING_MAX
+    assert [t["video_id"] for _s, t in host._ytm_history_pending].count("p3") == 1
 
     add({"video_id": "brand-new"})
-    assert host._ytm_history_pending[0] == {"video_id": "brand-new"}
+    assert host._ytm_history_pending[0] == (_YTM_PENDING_MAX + 2, {"video_id": "brand-new"})
     assert len(host._ytm_history_pending) == _YTM_PENDING_MAX
     host._get_current_page.assert_not_called()
+
+
+def test_ytm_cache_update_pending_sequence_numbers_only_grow() -> None:
+    """Each parked play gets a fresh, higher number — a replay of a track
+    that is already parked counts as a new, later play."""
+    host = MagicMock()
+    host._ytm_history = None
+    host._ytm_history_pending = []
+    host._ytm_history_pending_seq = 0
+    add = PlaybackMixin._add_to_ytm_history_cache.__get__(host)
+
+    add({"video_id": "a"})
+    add({"video_id": "b"})
+    add({"video_id": "a"})
+
+    assert host._ytm_history_pending == [(3, {"video_id": "a"}), (2, {"video_id": "b"})]
+    assert host._ytm_history_pending_seq == 3
 
 
 def test_ytm_cache_update_ignores_a_track_without_an_id() -> None:

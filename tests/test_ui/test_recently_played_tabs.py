@@ -7,7 +7,8 @@
 - a source that fails leaves All showing the other with an explicit note,
 - All is the default tab, navigation state restores the others,
 - live updates (a local play, a play the account accepted) re-render All,
-- a fetch that started before an accepted play cannot hide that play.
+- a fetch that started before an accepted play cannot hide that play, while
+  a play accepted before the fetch keeps its server position.
 
 Like ``test_page_failure_states``, we exercise the page methods directly
 and replace the widgets the page queries with ``MagicMock`` at the
@@ -21,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ytm_player.app._playback import PlaybackMixin
 from ytm_player.config.keymap import Action
 from ytm_player.ui.pages.recently_played import (
     _DEFAULT_TAB,
@@ -76,6 +78,9 @@ def _fake_app(
     app = MagicMock()
     app._ytm_history = None
     app._ytm_history_pending = []
+    app._ytm_history_pending_seq = 0
+    # The real parking code, so the pending entries look like the app's.
+    app._add_to_ytm_history_cache = PlaybackMixin._add_to_ytm_history_cache.__get__(app)
     if local_error is not None:
         app.history.get_recently_played = AsyncMock(side_effect=local_error)
     else:
@@ -184,28 +189,49 @@ async def test_ytm_tab_no_service_shows_auth_message(monkeypatch) -> None:
     assert any("Sign in to YT Music" in m for m in _loading_messages(widgets))
 
 
-async def test_ytm_fetch_puts_pending_accepted_plays_ahead_of_the_feed(monkeypatch) -> None:
+async def test_ytm_fetch_keeps_server_order_for_a_play_accepted_before_it_started(
+    monkeypatch,
+) -> None:
+    """A play the account accepted BEFORE the fetch began is already in the
+    feed it returns: the server's position and row stand. Putting it on top
+    would reorder a feed that is newer than the report."""
     page, widgets = _make_page(active_tab=_TAB_YTM)
-    fake_app = _fake_app(feed=_raw_tracks(3))
-    fake_app._ytm_history_pending = [{"video_id": "vid0001", "title": "Accepted"}]
+    feed = [{**_raw_tracks(1, prefix="phone")[0]}, {**_raw_tracks(1, prefix="tui")[0]}]
+    fake_app = _fake_app(feed=feed)
+    fake_app._add_to_ytm_history_cache({"video_id": "tui0000", "title": "Accepted earlier"})
     _attach_fake_app(page, fake_app, monkeypatch)
 
     await page._load_ytm_history()
 
-    assert _ids(fake_app._ytm_history) == ["vid0001", "vid0000", "vid0002"]
-    assert fake_app._ytm_history[0]["title"] == "Accepted"
+    assert _ids(fake_app._ytm_history) == ["phone0000", "tui0000"]
+    assert fake_app._ytm_history[1]["title"] == "Song 0"
+    assert fake_app._ytm_history_pending == []
+
+
+async def test_ytm_fetch_puts_an_earlier_accepted_play_ahead_only_when_the_feed_lacks_it(
+    monkeypatch,
+) -> None:
+    page, widgets = _make_page(active_tab=_TAB_YTM)
+    fake_app = _fake_app(feed=_raw_tracks(2))
+    fake_app._add_to_ytm_history_cache({"video_id": "missing", "title": "Not in the feed yet"})
+    _attach_fake_app(page, fake_app, monkeypatch)
+
+    await page._load_ytm_history()
+
+    assert _ids(fake_app._ytm_history) == ["missing", "vid0000", "vid0001"]
     assert fake_app._ytm_history_pending == []
 
 
 async def test_ytm_fetch_in_flight_cannot_hide_a_newer_accepted_play(monkeypatch) -> None:
-    """A report the account accepts while get_history() is still running is
-    parked as pending; the older fetch merges it in instead of overwriting."""
+    """A report the account accepts while get_history() is still running
+    post-dates the feed: it goes on top even though the (stale) feed lists
+    the track further down, and the older fetch cannot overwrite it."""
     page, widgets = _make_page(active_tab=_TAB_YTM)
     release = asyncio.Event()
 
     async def slow_history():
         await release.wait()
-        return _raw_tracks(2)
+        return _raw_tracks(2) + [{**_raw_tracks(1)[0], "videoId": "new", "title": "Stale row"}]
 
     fake_app = _fake_app()
     fake_app.ytmusic.get_history = AsyncMock(side_effect=slow_history)
@@ -213,12 +239,51 @@ async def test_ytm_fetch_in_flight_cannot_hide_a_newer_accepted_play(monkeypatch
 
     fetch = asyncio.create_task(page._load_ytm_history())
     await asyncio.sleep(0)  # the fetch is now waiting on get_history()
-    fake_app._ytm_history_pending.append({"video_id": "new", "title": "Just played"})
+    fake_app._add_to_ytm_history_cache({"video_id": "new", "title": "Just played"})
     release.set()
     await fetch
 
     assert _ids(fake_app._ytm_history) == ["new", "vid0000", "vid0001"]
+    assert fake_app._ytm_history[0]["title"] == "Just played"
     assert _ids(_loaded(widgets)) == ["new", "vid0000", "vid0001"]
+    assert fake_app._ytm_history_pending == []
+
+
+async def test_ytm_fetch_orders_pending_plays_newer_first_then_earlier_missing(
+    monkeypatch,
+) -> None:
+    page, widgets = _make_page(active_tab=_TAB_YTM)
+    release = asyncio.Event()
+
+    async def slow_history():
+        await release.wait()
+        return _raw_tracks(1) + [{**_raw_tracks(1)[0], "videoId": "before-present"}]
+
+    fake_app = _fake_app()
+    fake_app.ytmusic.get_history = AsyncMock(side_effect=slow_history)
+    fake_app._add_to_ytm_history_cache({"video_id": "before-missing"})
+    fake_app._add_to_ytm_history_cache({"video_id": "before-present"})
+    _attach_fake_app(page, fake_app, monkeypatch)
+
+    fetch = asyncio.create_task(page._load_ytm_history())
+    await asyncio.sleep(0)
+    fake_app._add_to_ytm_history_cache({"video_id": "during"})
+    release.set()
+    await fetch
+
+    assert _ids(fake_app._ytm_history) == ["during", "before-missing", "vid0000", "before-present"]
+
+
+async def test_ytm_fetch_failure_leaves_pending_plays_parked(monkeypatch) -> None:
+    page, widgets = _make_page(active_tab=_TAB_YTM)
+    fake_app = _fake_app(feed=None)
+    fake_app._add_to_ytm_history_cache({"video_id": "parked"})
+    _attach_fake_app(page, fake_app, monkeypatch)
+
+    await page._load_ytm_history()
+
+    assert fake_app._ytm_history is None
+    assert [t["video_id"] for _seq, t in fake_app._ytm_history_pending] == ["parked"]
 
 
 # ── Local loader ─────────────────────────────────────────────────────
@@ -281,6 +346,45 @@ def test_compose_all_overlap_keeps_local_row_and_fills_missing_metadata() -> Non
     assert row["is_video"] is False
 
 
+def test_compose_all_overlap_fills_absent_none_and_empty_fields() -> None:
+    """Whatever form 'lacking' takes in the local row — absent, None or "" —
+    the account value fills it, without touching what the local row has."""
+    local = [
+        {
+            "video_id": "loc0000",
+            "title": "Local title",
+            "artist": "",
+            "album": None,
+            "duration_seconds": 180,
+            "played_at": "2026-09-06T12:59:00",
+        }
+    ]
+    account = [
+        {
+            "video_id": "loc0000",
+            "title": "Server title",
+            "artist": "Server artist",
+            "album": "Server album",
+            "album_id": "AL1",
+            "thumbnail_url": "",
+            "played_at": "Today",
+        }
+    ]
+
+    (row,) = _compose_all(local, account)
+
+    assert row["artist"] == "Server artist"
+    assert row["album"] == "Server album"
+    assert row["album_id"] == "AL1"
+    assert row["title"] == "Local title"
+    assert row["played_at"] == "2026-09-06T12:59:00"
+    assert row["duration_seconds"] == 180
+    # An empty account value is no enrichment: the key stays absent.
+    assert "thumbnail_url" not in row
+    # The local row itself is untouched.
+    assert local[0]["artist"] == "" and local[0]["album"] is None
+
+
 def test_compose_all_dedups_before_the_account_only_cap() -> None:
     """100 local rows all present in a 200-row feed: All is 100 local plus the
     100 account-only rows, not 100 local plus nothing."""
@@ -339,7 +443,10 @@ async def test_all_tab_shows_local_only_with_a_note_when_ytm_fails(monkeypatch) 
     await page._load_all()
 
     assert _ids(_loaded(widgets)) == ["loc0000", "loc0001"]
-    assert "YT Music history couldn't be loaded" in _footer(widgets)
+    assert _footer(widgets).startswith(
+        "YT Music history couldn't be loaded; showing local history only"
+    )
+    assert "2 tracks" in _footer(widgets)
     assert fake_app._ytm_history is None
 
 
@@ -351,7 +458,9 @@ async def test_all_tab_shows_account_only_with_a_note_when_local_fails(monkeypat
     await page._load_all()
 
     assert _ids(_loaded(widgets)) == ["vid0000", "vid0001"]
-    assert "local history couldn't be loaded" in _footer(widgets)
+    assert _footer(widgets).startswith(
+        "Local history couldn't be loaded; showing YT Music history only"
+    )
     assert page._get_cache(_TAB_LOCAL) is None
 
 
@@ -362,7 +471,7 @@ async def test_all_tab_without_a_service_shows_local_with_a_sign_in_note(monkeyp
     await page._load_all()
 
     assert _ids(_loaded(widgets)) == ["loc0000", "loc0001"]
-    assert "sign in to YT Music" in _footer(widgets)
+    assert _footer(widgets).startswith("Sign in to YT Music to include your account history")
 
 
 async def test_all_tab_says_which_sources_failed_when_nothing_loads(monkeypatch) -> None:

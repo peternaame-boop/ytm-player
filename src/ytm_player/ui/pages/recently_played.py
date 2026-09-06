@@ -74,6 +74,21 @@ _TAB_DESCRIPTIONS = {
 _MAX_TRACKS = 100
 
 
+def _enrich(track: dict, extra: dict) -> dict:
+    """A copy of *track* with the fields it lacks filled in from *extra*.
+
+    A field counts as lacking when it is absent, ``None`` or ``""``; the
+    local row's own values, ``played_at`` included, are never replaced, and
+    an empty value in *extra* never replaces anything either.
+    """
+    merged = dict(track)
+    for key, value in extra.items():
+        if value in (None, "") or track.get(key) not in (None, ""):
+            continue
+        merged[key] = value
+    return merged
+
+
 def _compose_all(local: list[dict], account: list[dict]) -> list[dict]:
     """Local rows first, in their own order, then account-only rows in server order.
 
@@ -97,8 +112,7 @@ def _compose_all(local: list[dict], account: list[dict]) -> list[dict]:
         seen.add(vid)
         extra = by_id.get(vid)
         if extra is not None:
-            missing = {k: v for k, v in extra.items() if track.get(k) in (None, "")}
-            track = {**missing, **track}
+            track = _enrich(track, extra)
         rows.append(track)
     account_only = [track for vid, track in by_id.items() if vid not in seen]
     return rows + account_only[:_MAX_TRACKS]
@@ -133,7 +147,7 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
     }
     .recent-header {
         height: auto;
-        max-height: 4;
+        max-height: 5;
         padding: 1 2;
         background: $surface;
     }
@@ -149,7 +163,7 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         color: $primary;
     }
     .recent-tab-desc {
-        height: 1;
+        height: auto;
         color: $text-muted;
     }
     .recent-tab-sep {
@@ -191,7 +205,8 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         background: $primary 30%;
     }
     .recent-footer {
-        height: 1;
+        height: auto;
+        max-height: 2;
         padding: 0 2;
         color: $text-muted;
         dock: bottom;
@@ -331,9 +346,8 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
 
         The cache holds the whole normalized feed, unfiltered; views apply
         their own limits. Plays the account accepted while no feed was
-        cached (see ``_add_to_ytm_history_cache`` on the app) are put ahead
-        of the fetched feed, so a fetch that started before such a report
-        cannot hide it.
+        cached (see ``_add_to_ytm_history_cache`` on the app) are folded
+        into the fetched feed by ``_merge_pending_account_plays``.
         """
         self._ytm_auth_required = False
         self._ytm_load_failed = False
@@ -341,6 +355,9 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         if not ytmusic:
             self._ytm_auth_required = True
             return
+        # Reports accepted from here on post-date the feed we are about to
+        # receive; the sequence number tells them apart from earlier ones.
+        fetch_seq = self._pending_account_seq()
         # ``get_history`` requires auth; the service logs and returns None on
         # any failure (expired session, network, server error) so we can tell
         # a genuine empty history from an error.
@@ -348,14 +365,35 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         if raw is None:
             self._ytm_load_failed = True
             return
-        tracks = normalize_tracks(raw)
-        pending = self._take_pending_account_plays()
-        if pending:
-            ids = {get_video_id(t) for t in pending}
-            tracks = pending + [t for t in tracks if get_video_id(t) not in ids]
-        self._set_cache(_TAB_YTM, tracks)
+        self._set_cache(
+            _TAB_YTM, self._merge_pending_account_plays(normalize_tracks(raw), fetch_seq)
+        )
 
-    def _take_pending_account_plays(self) -> list[dict]:
+    def _pending_account_seq(self) -> int:
+        """The sequence number of the latest pending accepted play (0 = none yet)."""
+        seq = getattr(self.app, "_ytm_history_pending_seq", 0)
+        return seq if isinstance(seq, int) else 0
+
+    def _merge_pending_account_plays(self, feed: list[dict], fetch_seq: int) -> list[dict]:
+        """Fold the pending accepted plays into *feed*, consuming them.
+
+        A play accepted after the fetch started (sequence number above
+        *fetch_seq*) post-dates the feed, so it goes ahead of it even when
+        the feed already lists the track. A play accepted before the fetch
+        started is already reflected in the feed: its server position
+        stands. Only when the feed does not list such a play yet does it go
+        ahead of the feed, behind the newer plays.
+        """
+        pending = self._take_pending_account_plays()
+        if not pending:
+            return feed
+        feed_ids = {get_video_id(t) for t in feed}
+        ahead = [t for seq, t in pending if seq > fetch_seq]
+        ahead += [t for seq, t in pending if seq <= fetch_seq and get_video_id(t) not in feed_ids]
+        ahead_ids = {get_video_id(t) for t in ahead}
+        return ahead + [t for t in feed if get_video_id(t) not in ahead_ids]
+
+    def _take_pending_account_plays(self) -> list[tuple[int, dict]]:
         pending = getattr(self.app, "_ytm_history_pending", None)
         if not isinstance(pending, list) or not pending:
             return []
@@ -526,15 +564,19 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
             return f"{count} recently played tracks (local)"
         if self._active_tab == _TAB_YTM:
             return f"{count} recently played tracks (YT Music)"
-        text = f"{count} tracks — local history first, then additional account history"
-        # Partial results are said out loud: a missing source is not an empty one.
+        # Partial results are said out loud, and first: a missing source is
+        # not an empty one, and the notice must survive a narrow terminal.
         if self._load_failed:
-            text += " — local history couldn't be loaded; showing YT Music only"
+            notice = "Local history couldn't be loaded; showing YT Music history only"
         elif self._ytm_auth_required:
-            text += " — sign in to YT Music to include your account history"
+            notice = (
+                "Sign in to YT Music to include your account history; showing local history only"
+            )
         elif self._ytm_load_failed:
-            text += " — YT Music history couldn't be loaded; showing local only"
-        return text
+            notice = "YT Music history couldn't be loaded; showing local history only"
+        else:
+            return f"{count} tracks — local history first, then additional account history"
+        return f"{notice} — {count} tracks"
 
     def get_nav_state(self) -> dict[str, Any]:
         """Return state to preserve when navigating away."""

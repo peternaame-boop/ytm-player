@@ -114,7 +114,8 @@ if TYPE_CHECKING:
         _ytm_reported_generation: int
         _local_history_claim: _LocalHistoryClaim | None
         _ytm_history: list[dict] | None
-        _ytm_history_pending: list[dict]
+        _ytm_history_pending: list[tuple[int, dict]]
+        _ytm_history_pending_seq: int
         _play_lock: asyncio.Lock
 
         # ── Pending resume from prior session ──────────────────────────

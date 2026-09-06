@@ -940,18 +940,22 @@ class PlaybackMixin(YTMHostBase):
         Runs only after ``add_history_item`` succeeded, so the YT Music and
         All tabs agree with the account. With a feed cached, the play moves
         to the top. With none cached (first visit still pending, or a
-        refresh in flight) it is parked in ``_ytm_history_pending`` and the
-        next fetch puts it ahead of the feed it received — a fetch that
-        started before this report cannot hide it. Re-renders the page
-        when the YT Music or All tab is showing.
+        refresh in flight) it is parked in ``_ytm_history_pending`` with a
+        sequence number, so the next fetch can tell whether the play came
+        before or after the feed it received (see the page's
+        ``_merge_pending_account_plays``). Re-renders the page when the YT
+        Music or All tab is showing.
         """
         video_id = get_video_id(track)
         if not video_id:
             return
         cache = self._ytm_history
         if cache is None:
+            self._ytm_history_pending_seq += 1
             pending = self._ytm_history_pending
-            pending[:] = [dict(track)] + [t for t in pending if get_video_id(t) != video_id]
+            pending[:] = [(self._ytm_history_pending_seq, dict(track))] + [
+                entry for entry in pending if get_video_id(entry[1]) != video_id
+            ]
             del pending[_YTM_PENDING_MAX:]
             return
         self._ytm_history = [dict(track)] + [t for t in cache if get_video_id(t) != video_id]
