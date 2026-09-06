@@ -8,8 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Unreleased
 
+**New features**
+
+- **Browse in the sidebar** — a pinned "Browse" item next to Liked Songs, Recently Played and Discovery Mix opens the Browse page, which was only reachable through the footer button or `g b`. Thanks @ThePhatLeee (#125).
+- **Playlists tab on Browse** — every playlist the home feed offers, in one list: YouTube Music's own mixes (Discover Mix, New Release Mix, My Supermix, ...), curated and community playlists, recaps and Liked Music, read up to 25 shelves deep, one row per playlist. Albums and songs stay out. Selecting a row opens the playlist. For You and Playlists share one home feed per visit: For You alone fetches its configured `home_shelves`; opening Playlists deepens the feed once, and For You reuses it. (#125)
+- **Subscriptions tab on Browse** — the artists you're subscribed to, all of them, each opening its artist page. (#125)
+
 **Changes**
 
+- **Browse tabs are For You, Charts, Releases, Playlists, Subs** — For You stays first and default. The labels are short so all five fit beside the playlist sidebar in an 80-column terminal.
+- **Browse tabs recover from a failed load** — a tab whose load failed shows a message and loads again when you select it again, instead of staying on "Loading...". Switching tabs while one is still loading no longer leaves it stuck either.
 - **Recently Played: All / Local / YT Music tabs** (#115) — the YT Music tab now shows your account's complete play history instead of hiding every track ever played in this app, and a new All tab (the default) shows local history first, followed by additional account history, one row per track. A line under the tabs says what each shows, and the footer says when a source couldn't be loaded. A play the account accepts appears on the YT Music and All tabs right away. Thanks @Villoh for the tabs and the discussion.
 
 **Fixes**

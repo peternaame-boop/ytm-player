@@ -124,7 +124,8 @@ col_album = 0                # 0 = auto-fill
 col_duration = 8
 bidi_mode = "auto"           # auto, reorder, passthrough — RTL text handling
 region = "ZZ"                # ISO 3166-1 alpha-2 (or "ZZ" = Global, default) — Browse → Charts. 68 regions selectable; locale-style codes like "ES-ES" auto-normalise to "ES".
-home_shelves = 3             # number of recommendation shelves on Browse → For You (1–25)
+home_shelves = 3             # number of recommendation shelves on Browse → For You (1–25);
+                             # the Playlists tab always reads up to 25
 show_selection_info = true   # show focused-item full name in the row above the playback bar
 sidebar_overflow = "truncate"  # "truncate" (1-row + ellipsis) or "wrap" (multi-line names)
 show_queue_source = true     # show "Generated from: …" header on radio/discovery queues

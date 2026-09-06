@@ -382,7 +382,7 @@ async def test_liked_songs_empty_playlist_shows_empty_state(
 async def test_foryou_service_failure_shows_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """get_home returns None on any fetch failure — the section must show
     the retryable error copy instead of rendering an empty shelf list."""
-    from ytm_player.ui.pages.browse import ForYouSection
+    from ytm_player.ui.pages.browse import _FORYOU_LOAD_FAILED, ForYouSection
 
     section = ForYouSection()
     fake_app = MagicMock()
@@ -393,7 +393,7 @@ async def test_foryou_service_failure_shows_error(monkeypatch: pytest.MonkeyPatc
 
     await section.load_data()
 
-    shown.assert_called_once_with("Failed to load recommendations.")
+    shown.assert_called_once_with(_FORYOU_LOAD_FAILED)
     assert section.is_loading is False
 
 

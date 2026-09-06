@@ -407,13 +407,17 @@ class YTMusicService:
             logger.exception("get_library_albums failed")
             return []
 
-    async def get_library_artists(self, limit: int | None = 25) -> list[dict[str, Any]]:
-        """Return the user's subscribed/followed artists."""
+    async def get_library_artists(self, limit: int | None = 25) -> list[dict[str, Any]] | None:
+        """Return the user's subscribed/followed artists.
+
+        Returns ``None`` on failure (auth expired, network, server error);
+        an empty list means the account has no subscriptions.
+        """
         try:
             return await self._call(self.client.get_library_subscriptions, limit=limit)
         except Exception:
             logger.exception("get_library_artists failed")
-            return []
+            return None
 
     async def get_liked_songs(
         self, limit: int | None = None, timeout: int | None = None
@@ -470,11 +474,13 @@ class YTMusicService:
             logger.exception("get_charts failed for country=%r", country)
             return None
 
-    async def get_new_releases(self) -> list[dict[str, Any]]:
+    async def get_new_releases(self) -> list[dict[str, Any]] | None:
         """Return new album releases.
 
         ytmusicapi has no dedicated ``get_new_releases`` endpoint; the
-        explore page bundles the data under ``new_releases``.
+        explore page bundles the data under ``new_releases``. Returns
+        ``None`` on failure (auth expired, network, server error); an empty
+        list means the explore page listed no releases.
         """
         try:
             result = await self._call(self.client.get_explore)
@@ -485,7 +491,7 @@ class YTMusicService:
             return []
         except Exception:
             logger.exception("get_new_releases failed")
-            return []
+            return None
 
     # ------------------------------------------------------------------
     # Content details

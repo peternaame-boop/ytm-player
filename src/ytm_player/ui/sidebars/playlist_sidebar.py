@@ -519,6 +519,7 @@ class PlaylistSidebar(Widget):
             yield Static("\u2665 Liked Songs", id="ps-nav-liked", classes="ps-pinned-item")
             yield Static("\u23f1 Recently Played", id="ps-nav-recent", classes="ps-pinned-item")
             yield Static("\u266b Discovery Mix", id="ps-nav-discovery", classes="ps-pinned-item")
+            yield Static("\u25c8 Browse", id="ps-nav-browse", classes="ps-pinned-item")
         yield Rule(id="ps-separator")
         yield LibraryPanel("Playlists", id="ps-playlists", instant_select=True)
         yield Rule(id="ps-separator-bottom")
@@ -593,6 +594,9 @@ class PlaylistSidebar(Widget):
         elif target.id == "ps-nav-discovery":
             event.stop()
             self.post_message(self.NavItemClicked("discovery_mix"))
+        elif target.id == "ps-nav-browse":
+            event.stop()
+            self.post_message(self.NavItemClicked("browse"))
 
     # -- Public helpers for sidebar actions --
 
