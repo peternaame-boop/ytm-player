@@ -319,7 +319,9 @@ class TestStreamCookiejarLoading:
         # Loaded from the bytes that were checked, not by re-reading the path.
         ydl.cookiejar.load.assert_called_once()
         loaded, kwargs = ydl.cookiejar.load.call_args
-        assert loaded[0].getvalue() == jar.read_text(encoding="utf-8")
+        assert loaded[0].getvalue() == jar.read_bytes().decode(
+            "utf-8"
+        )  # exact bytes, no newline translation
         assert kwargs == {"ignore_discard": True, "ignore_expires": True}
         assert resolver._ydl_cookiejar_sig is not None
         assert resolver._ydl_cookiejar_sig[0] == str(jar)
@@ -375,7 +377,9 @@ class TestStreamCookiejarLoading:
         assert second is not first
         first.close.assert_called_once()
         second.cookiejar.load.assert_called_once()
-        assert second.cookiejar.load.call_args.args[0].getvalue() == jar.read_text(encoding="utf-8")
+        assert second.cookiejar.load.call_args.args[0].getvalue() == jar.read_bytes().decode(
+            "utf-8"
+        )
 
     def test_rewritten_jar_is_ignored_when_anonymous(self, tmp_path, monkeypatch):
         self._settings(monkeypatch)
@@ -495,7 +499,7 @@ class TestStreamCookiejarVouching:
         jar = session_dir / "stream_cookies.txt"
         auth = session_dir / "auth.json"
         record = session_dir / "account.json"
-        jar.write_text(self.JAR, encoding="utf-8")
+        jar.write_bytes(self.JAR.encode("utf-8"))  # exact bytes on every platform
         auth.write_bytes(self.AUTH)
         record.write_text(
             json.dumps(
@@ -576,7 +580,7 @@ class TestStreamCookiejarVouching:
             elif changed == "record":
                 record.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
             else:
-                jar.write_text(self.JAR + "# extra\n", encoding="utf-8")
+                jar.write_bytes((self.JAR + "# extra\n").encode("utf-8"))
             second = resolver._get_ydl()
         finally:
             patcher.stop()
