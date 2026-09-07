@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ytm_player.services.macos_app import hide_dock_icon
 from ytm_player.utils.compat import StrEnum, auto
 
 if sys.platform == "win32":
@@ -182,6 +183,9 @@ class Player:
             event: [] for event in PlayerEvent
         }
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Thread the loop runs on (recorded by set_event_loop); the Dock
+        # policy is handed to the loop only when that is the main thread.
+        self._loop_thread: threading.Thread | None = None
         # Context (captured when the loop is set, i.e. inside the running
         # Textual app) used to dispatch callbacks. Without it, callbacks
         # scheduled from mpv's thread run without Textual's ``active_app``
@@ -261,6 +265,13 @@ class Player:
             loglevel="warn",
         )
 
+        # Creating the mpv handle initialises Cocoa in-process, which promotes
+        # this process to a foreground GUI app: macOS then shows a generic
+        # "Python" Dock tile that bounces indefinitely, because nothing ever
+        # signals that app launch finished.  Demote it now that mpv is up —
+        # doing this earlier is useless, since libmpv re-promotes it.
+        self._apply_dock_policy()
+
         # Enable gapless playback if configured.
         if settings.playback.gapless:
             try:
@@ -334,10 +345,32 @@ class Player:
         even though the event originates on mpv's callback thread.
         """
         self._loop = loop
+        self._loop_thread = threading.current_thread()
         try:
             self._dispatch_context = contextvars.copy_context()
         except Exception:
             self._dispatch_context = None
+
+    def _apply_dock_policy(self) -> None:
+        """Run hide_dock_icon() on the main thread, or not at all.
+
+        AppKit is main-thread-only. The startup call from __init__ is
+        already on the main thread; the one after an mpv recovery comes
+        from the worker thread running _play_sync and is handed to the
+        app's event loop, which runs on the main thread. Without such a
+        route the policy is skipped rather than applied from the worker.
+        """
+        if threading.current_thread() is threading.main_thread():
+            hide_dock_icon()
+            return
+        loop = self._get_loop()
+        if loop is not None and self._loop_thread is threading.main_thread():
+            try:
+                loop.call_soon_threadsafe(hide_dock_icon)
+                return
+            except RuntimeError:
+                pass  # loop closed between the check and the call
+        logger.debug("No main-thread route for the macOS Dock policy; leaving it")
 
     # ── Callback registration ───────────────────────────────────────
 

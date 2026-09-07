@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -832,3 +833,77 @@ class TestErrorPayload:
         await player.stop()
 
         assert player._current_attempt is None
+
+
+class TestDockPolicyDispatch:
+    """The Dock policy reaches AppKit on the main thread only (#128 follow-up)."""
+
+    def test_startup_applies_the_policy_directly_on_the_main_thread(self, player):
+        seen: list[threading.Thread] = []
+        with patch(
+            "ytm_player.services.player.hide_dock_icon",
+            side_effect=lambda: seen.append(threading.current_thread()) or True,
+        ):
+            player._init_mpv()
+
+        assert seen == [threading.main_thread()]
+
+    async def test_worker_thread_recovery_is_handed_to_the_main_thread_loop(self, player):
+        seen: list[threading.Thread] = []
+        worker: list[threading.Thread] = []
+        player.set_event_loop(asyncio.get_running_loop())
+
+        def on_worker():
+            worker.append(threading.current_thread())
+            player._apply_dock_policy()
+
+        with patch(
+            "ytm_player.services.player.hide_dock_icon",
+            side_effect=lambda: seen.append(threading.current_thread()) or True,
+        ):
+            await asyncio.to_thread(on_worker)
+            await asyncio.sleep(0)  # the scheduled call runs on the loop
+
+        assert worker[0] is not threading.main_thread()
+        assert seen == [threading.main_thread()]  # ran on the loop's thread, not the worker
+
+    async def test_worker_thread_without_a_loop_skips_the_policy(self, player):
+        assert player._loop is None
+        with patch("ytm_player.services.player.hide_dock_icon") as hide:
+            await asyncio.to_thread(player._apply_dock_policy)
+            await asyncio.sleep(0)
+
+        hide.assert_not_called()
+
+    async def test_worker_thread_with_a_loop_off_the_main_thread_skips_the_policy(self, player):
+        player.set_event_loop(asyncio.get_running_loop())
+        player._loop_thread = threading.Thread()  # a loop that isn't on the main thread
+        with patch("ytm_player.services.player.hide_dock_icon") as hide:
+            await asyncio.to_thread(player._apply_dock_policy)
+            await asyncio.sleep(0)
+
+        hide.assert_not_called()
+
+    async def test_mpv_recovery_from_the_play_worker_reaches_the_main_thread(self, player):
+        """End to end: _play_sync's ShutdownError → _try_recover → _init_mpv, on a worker."""
+        from ytm_player.services.player import mpv as _mpv
+
+        seen: list[threading.Thread] = []
+        player.set_event_loop(asyncio.get_running_loop())
+        calls = {"n": 0}
+
+        def flaky_play(url):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise _mpv.ShutdownError("simulated crash")
+
+        player._mpv.play.side_effect = flaky_play
+        with patch(
+            "ytm_player.services.player.hide_dock_icon",
+            side_effect=lambda: seen.append(threading.current_thread()) or True,
+        ):
+            await player.play("http://stream", {"video_id": "abc"})
+            await asyncio.sleep(0)
+
+        assert calls["n"] == 2  # recovered and replayed
+        assert seen == [threading.main_thread()]
