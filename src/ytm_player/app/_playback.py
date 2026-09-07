@@ -1102,8 +1102,13 @@ class PlaybackMixin(YTMHostBase):
             self.notify("Track has no video ID.", severity="warning", timeout=2)
             return
 
-        already_downloaded = self.downloader.is_downloaded(video_id)
         title = track.get("title", video_id)
+        if self.downloader.is_downloading(video_id):
+            # The running writer keeps ownership; this press just reports it.
+            self.notify(f"Already downloading: {title}", timeout=3)
+            return
+
+        already_downloaded = self.downloader.is_downloaded(video_id)
         if not already_downloaded:
             self.notify(f"Downloading: {title}", timeout=3)
 
@@ -1114,12 +1119,25 @@ class PlaybackMixin(YTMHostBase):
                 try:
                     fmt = result.file_path.suffix.lstrip(".")
                     await self.cache.put_file(video_id, result.file_path, fmt)
+                    retained = await self.cache.has(video_id)
                 except Exception:
                     logger.exception("Failed to index downloaded file in cache")
                     self.notify(
                         "Downloaded file could not be indexed. Retry Download to repair it.",
                         severity="warning",
                         timeout=4,
+                    )
+                    return
+                if not retained:
+                    # Indexing ran LRU eviction and the file itself was the
+                    # victim: it does not fit within [cache] max_size_mb.
+                    logger.warning(
+                        "Download %s was not retained: over the cache size limit", video_id
+                    )
+                    self.notify(
+                        f"Not retained in cache: {title} doesn't fit within the cache size limit.",
+                        severity="warning",
+                        timeout=6,
                     )
                     return
             message = "Already downloaded." if already_downloaded else f"Downloaded: {title}"

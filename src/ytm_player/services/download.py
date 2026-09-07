@@ -73,10 +73,10 @@ class DownloadService:
         if not VALID_VIDEO_ID.match(video_id):
             return DownloadResult(video_id=video_id, success=False, error="Invalid video ID")
 
-        self._ensure_dir()
         url = f"https://music.youtube.com/watch?v={video_id}"
 
         try:
+            self._ensure_dir()
             # FFmpeg can leave its final extension behind on failure. Keep all
             # job output private until yt-dlp and its context finish successfully.
             # Staging on the same filesystem allows atomic publication below.
@@ -183,14 +183,23 @@ class DownloadService:
         """Check if a track has been downloaded."""
         return self.get_path(video_id) is not None
 
+    def is_downloading(self, video_id: str) -> bool:
+        """True while this service owns a running writer for *video_id*."""
+        return video_id in self._active
+
     def get_path(self, video_id: str) -> Path | None:
         """Return a completed download, never a file its worker may still be writing."""
         if video_id in self._active:
             return None
         for ext in ("opus", "webm", "m4a", "mp3", "ogg"):
             path = self._download_dir / f"{video_id}.{ext}"
-            if path.exists():
-                return path
+            try:
+                if path.exists():
+                    return path
+            except OSError as exc:
+                # An unreadable download directory must not escape into the UI.
+                logger.warning("Cannot check for downloaded file %s: %s", path, exc)
+                return None
         return None
 
     @property

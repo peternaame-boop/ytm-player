@@ -198,3 +198,105 @@ async def test_failed_postprocessing_output_is_never_reused_on_retry(
         release.set()
         await asyncio.wait_for(asyncio.gather(waiter, *owned, return_exceptions=True), 3)
         await host.cache.close()
+
+
+async def test_directory_failure_is_reported_and_releases_ownership(tmp_path, monkeypatch):
+    """R1: a permission/directory failure is a failed download, not an exception in the worker."""
+    host = PlaybackMixin()
+    host.notify = Mock()
+    host.downloader = DownloadService(download_dir=tmp_path / "audio")
+    host.cache = CacheManager(cache_dir=tmp_path / "audio", db_path=tmp_path / "cache.db")
+    await host.cache.init()
+    monkeypatch.setattr(
+        host.downloader,
+        "_ensure_dir",
+        Mock(side_effect=PermissionError(13, "Permission denied")),
+    )
+    try:
+        await host._download_track({"video_id": VID, "title": "Song"})  # must not raise
+        notices = [c.args[0] for c in host.notify.call_args_list]
+        assert notices[0] == "Downloading: Song"
+        assert notices[-1].startswith("Download failed: ")
+        assert "Permission denied" in notices[-1]
+        assert host.notify.call_args.kwargs["severity"] == "error"
+        assert host.downloader.active_count == 0
+        assert not host.downloader.is_downloading(VID)
+        assert await host.cache.get(VID) is None
+    finally:
+        await host.cache.close()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+async def test_oversized_download_is_reported_as_not_retained(tmp_path, monkeypatch, existing):
+    """R2: bounded LRU eviction stays; the notice must not claim the file was kept."""
+    host = PlaybackMixin()
+    host.notify = Mock()
+    audio = tmp_path / "audio"
+    host.downloader = DownloadService(download_dir=audio)
+    host.cache = CacheManager(cache_dir=audio, db_path=tmp_path / "cache.db", max_size_mb=1)
+    await host.cache.init()
+    path = audio / f"{VID}.opus"
+    payload = b"x" * (2 * 1024 * 1024)
+
+    def download(video_id):
+        path.write_bytes(payload)
+        return DownloadResult(video_id, True, path)
+
+    worker = Mock(side_effect=download)
+    monkeypatch.setattr(host.downloader, "_download_sync", worker)
+    if existing:
+        path.write_bytes(payload)
+    try:
+        await host._download_track({"video_id": VID, "title": "Song"})
+        notices = [c.args[0] for c in host.notify.call_args_list]
+        assert notices[-1] == "Not retained in cache: Song doesn't fit within the cache size limit."
+        assert host.notify.call_args.kwargs["severity"] == "warning"
+        assert "Downloaded: Song" not in notices
+        assert "Already downloaded." not in notices
+        assert worker.call_count == (0 if existing else 1)
+        assert await host.cache.get(VID) is None
+        assert not path.exists()
+    finally:
+        await host.cache.close()
+
+
+async def test_second_press_while_downloading_gives_one_notice(tmp_path, monkeypatch):
+    """R4: an active download yields one informational notice and keeps its writer."""
+    host = PlaybackMixin()
+    host.notify = Mock()
+    host.downloader = DownloadService(download_dir=tmp_path / "audio")
+    host.cache = CacheManager(cache_dir=tmp_path / "audio", db_path=tmp_path / "cache.db")
+    await host.cache.init()
+    path = tmp_path / "audio" / f"{VID}.opus"
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+
+    def download(video_id):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(5), "test did not release download thread"
+        path.write_bytes(b"completed")
+        return DownloadResult(video_id, True, path)
+
+    worker = Mock(side_effect=download)
+    monkeypatch.setattr(host.downloader, "_download_sync", worker)
+    track = {"video_id": VID, "title": "Song"}
+    first = asyncio.create_task(host._download_track(track))
+    try:
+        await asyncio.wait_for(started.wait(), 3)
+        assert host.downloader.is_downloading(VID)
+        before = host.notify.call_count
+
+        await host._download_track(track)
+
+        added = host.notify.call_args_list[before:]
+        assert [c.args[0] for c in added] == ["Already downloading: Song"]
+        assert "severity" not in added[0].kwargs
+        assert host.downloader.active_count == 1
+        assert worker.call_count == 1
+    finally:
+        release.set()
+        await asyncio.wait_for(first, 3)
+        await host.cache.close()
+    assert not host.downloader.is_downloading(VID)
+    assert host.notify.call_args.args[0] == "Downloaded: Song"

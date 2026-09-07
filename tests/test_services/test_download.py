@@ -1,6 +1,8 @@
 """Tests for DownloadService (filesystem logic only — no yt-dlp calls)."""
 
 import asyncio
+import os
+import sys
 import threading
 from pathlib import Path
 from unittest.mock import Mock
@@ -227,3 +229,40 @@ async def test_real_download_publishes_only_after_success_and_cleans_its_stage(
             assert public_path.read_bytes() == b"unrelated existing file"
         else:
             assert not public_path.exists()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX permission bits enforced for this user",
+)
+async def test_unwritable_parent_returns_a_failed_result(tmp_path):
+    parent = tmp_path / "ro"
+    parent.mkdir()
+    parent.chmod(0o500)
+    svc = DownloadService(download_dir=parent / "audio")
+    try:
+        result = await svc.download("abcdefghijk")  # must not raise
+    finally:
+        parent.chmod(0o700)
+    assert not result.success
+    assert result.error
+    assert svc.active_count == 0
+    assert svc.get_path("abcdefghijk") is None
+
+
+async def test_directory_failure_inside_the_thread_returns_a_failed_result(tmp_path, monkeypatch):
+    svc = DownloadService(download_dir=tmp_path / "audio")
+    monkeypatch.setattr(
+        svc, "_ensure_dir", Mock(side_effect=OSError(28, "No space left on device"))
+    )
+    result = await svc.download("abcdefghijk")
+    assert not result.success
+    assert "No space left on device" in (result.error or "")
+    assert svc.active_count == 0
+
+
+def test_get_path_survives_an_unreadable_directory(tmp_path, monkeypatch):
+    svc = DownloadService(download_dir=tmp_path)
+    monkeypatch.setattr(Path, "exists", Mock(side_effect=PermissionError(13, "Permission denied")))
+    assert svc.get_path("abcdefghijk") is None
+    assert svc.is_downloaded("abcdefghijk") is False
