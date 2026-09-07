@@ -22,6 +22,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **The source distribution is an explicit allowlist** — `src/ytm_player`, `tests`, `docs`, `scripts`, `.github/scripts`, `aur` and the top-level documents, plus what hatchling always adds (`pyproject.toml`, `README.md`, `LICENSE`, `.gitignore`); `*.local.md` is ignored everywhere. Local notes and other files outside those paths stay out of a locally built archive, and a packaging test reports any other untracked file a build from the checkout would include.
 - **Sign-in files are updated in one guarded step** — `auth.json` is replaced atomically, its account record is written for exactly those bytes, and an automatic renewal only replaces the session it started from: a newer `ytm setup` is never overwritten or rolled back by a renewal, and two `ytm` processes can no longer update the sign-in at the same time. A crash between the writes leaves a working session that needs `ytm setup` to renew automatically again, never a truncated file.
 - **Stream cookies are used only when they belong to the current sign-in** — with `[yt_dlp] use_session_cookies` on, the saved stream cookie file is loaded only if the sign-in record vouches for it; otherwise streaming continues without session cookies and the log says to run `ytm setup`.
 - **`ytm setup --manual` keeps the existing account record until the pasted headers are accepted**, records a pasted session it could not verify as such, and refuses to write through a symlink at `auth.json`.
