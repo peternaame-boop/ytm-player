@@ -22,6 +22,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Sign-in files are updated in one guarded step** — `auth.json` is replaced atomically, its account record is written for exactly those bytes, and an automatic renewal only replaces the session it started from: a newer `ytm setup` is never overwritten or rolled back by a renewal, and two `ytm` processes can no longer update the sign-in at the same time. A crash between the writes leaves a working session that needs `ytm setup` to renew automatically again, never a truncated file.
+- **Stream cookies are used only when they belong to the current sign-in** — with `[yt_dlp] use_session_cookies` on, the saved stream cookie file is loaded only if the sign-in record vouches for it; otherwise streaming continues without session cookies and the log says to run `ytm setup`.
+- **`ytm setup --manual` keeps the existing account record until the pasted headers are accepted**, records a pasted session it could not verify as such, and refuses to write through a symlink at `auth.json`.
+- **`ytm setup` says when ytm is running** and that it needs a restart to use the new sign-in.
 - **Downloaded audio is indexed for playback** — files already in the configured cache directory are no longer copied onto themselves. Retrying Download repairs an existing unindexed file without downloading it again, and indexing failures are reported.
 - **Cancelled downloads retain their writer until completion** — retries cannot start another writer for the same track while yt-dlp is still running. New downloads publish their final cache file only after downloading and postprocessing succeed, so failed conversion output cannot be reused as a completed download.
 - **Downloads count toward the cache limit** — a downloaded track is a cache entry like any other: it counts toward `[cache] max_size_mb` and is removed least-recently-accessed when the limit is reached. A download that doesn't fit within the limit is reported as "Not retained in cache" instead of "Downloaded". A download interrupted by the app being killed starts again from the beginning.

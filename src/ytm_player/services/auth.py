@@ -5,21 +5,26 @@ Brave, Helium, etc.) using yt-dlp's cookie extraction. Falls back to manual
 header paste if auto-extraction fails.
 
 Also writes a separate, wider-scoped (youtube.com+google.com) cookiejar file
-consumed by stream.py's yt-dlp resolver — see _save_stream_cookiejar().
+consumed by stream.py's yt-dlp resolver — see _build_stream_cookiejar() and
+read_vouched_stream_jar().
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import io
 import json
 import logging
 import os
 import re
+import stat
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
 from typing import IO, Any
@@ -135,36 +140,299 @@ def _atomic_write(
     write: Callable[[IO[Any]], None],
     encoding: str | None = None,
 ) -> None:
-    """Write *path* atomically via an O_NOFOLLOW temp file + os.replace.
+    """Replace *path* atomically through a temp file this call created.
 
-    Shared by AuthManager._restore_or_remove and
-    AuthManager._save_stream_cookiejar, the two sites that need
-    atomic-replace semantics for a security-sensitive file: open a
-    PID-suffixed temp file with O_NOFOLLOW (refusing to follow a symlink
-    planted at the temp path), let *write* fill it via the fd opened in
-    *mode* (and *encoding*, for text mode), chmod it to SECURE_FILE_MODE,
-    then os.replace() it into place.
+    The temp file is opened O_CREAT | O_EXCL (plus O_NOFOLLOW where the
+    platform has it) under a random name, so on every platform — Windows
+    included — it is a file of our own: never an existing entry, never a
+    planted symlink written through. *write* fills it via the fd opened in
+    *mode* (and *encoding*, for text mode); it is chmod'ed to
+    SECURE_FILE_MODE and then os.replace()d into place.
 
-    *write* owns the actual content — a raw bytes write, a cookiejar's
-    .save(), etc. — so this helper stays agnostic to what's being written.
-    On any failure the temp file is removed and the exception re-raised;
-    callers decide what to catch and how to log, since they disagree on
-    which exceptions are recoverable (OSError only vs. broad Exception).
+    Symlink at the destination: one that is already there is refused
+    (OSError ELOOP) and left alone. os.replace() never writes through a
+    link, so the target of a link planted between that check and the
+    replace is untouched as well — the link entry itself is replaced by the
+    file. The guarantee is "a symlink's target is never overwritten", not
+    "a planted link always survives".
+
+    On any failure only the temp file this call created is removed and the
+    exception re-raised; callers decide what to catch and how to log.
     """
-    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}-{os.urandom(4).hex()}")
+    created = False
     try:
         fd = os.open(
             str(tmp_path),
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
             SECURE_FILE_MODE,
         )
+        created = True
         with os.fdopen(fd, mode, encoding=encoding) as f:
             write(f)
         secure_chmod(tmp_path, SECURE_FILE_MODE)
+        if _is_symlink(path):
+            raise OSError(errno.ELOOP, "refusing to replace a symlink", str(path))
         os.replace(tmp_path, path)
     except Exception:
-        tmp_path.unlink(missing_ok=True)
+        if created:
+            tmp_path.unlink(missing_ok=True)
         raise
+
+
+def _is_symlink(path: Path) -> bool:
+    """lstat-based check; on Windows this also reports reparse-point links."""
+    try:
+        return stat.S_ISLNK(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+class SessionError(RuntimeError):
+    """A sign-in file operation could not complete safely.
+
+    Deliberately NOT an OSError: this module's auth-file fallbacks and read
+    guards catch OSError, and none of them may absorb one of these.
+    """
+
+
+class SessionBusyError(SessionError):
+    """auth.json / account.json are mid-replacement by another writer."""
+
+
+class SessionLockTimeoutError(SessionError):
+    """Another ytm thread or process held the sign-in lock for the whole wait."""
+
+
+class SessionUnreadableError(SessionError):
+    """account.json exists but cannot be read: the session cannot be
+    classified, so no client is built from it (an unreadable record is
+    never treated as an absent one)."""
+
+
+_LOCK_TIMEOUT_SECONDS = 30.0
+_LOCK_POLL_SECONDS = 0.05
+
+
+@dataclass
+class _PathLock:
+    """In-process half of the sign-in lock for one lock-file path."""
+
+    mutex: threading.Lock = field(default_factory=threading.Lock)
+    owner: int | None = None  # threading.get_ident() of the holder
+
+
+_PATH_LOCKS: dict[str, _PathLock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(lock_path: Path) -> _PathLock:
+    """The one _PathLock for *lock_path*, shared by every AuthManager in the process."""
+    key = os.path.normcase(os.path.abspath(lock_path))
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, _PathLock())
+
+
+def _open_lock_file(lock_path: Path) -> int:
+    """Open the lock file (creating it 0600 if needed), refusing a symlink or
+    reparse point at its path on every platform. O_NOFOLLOW closes the
+    check→open gap where the platform has it; on Windows that gap remains
+    and the worst case is a one-byte range lock on the link's target."""
+    if _is_symlink(lock_path):
+        raise OSError(errno.ELOOP, "refusing to lock through a symlink", str(lock_path))
+    fd = os.open(
+        str(lock_path),
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        SECURE_FILE_MODE,
+    )
+    try:
+        if sys.platform != "win32":
+            os.fchmod(fd, SECURE_FILE_MODE)
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _try_os_lock(fd: int) -> bool:
+    """One non-blocking attempt at the OS-level exclusive lock on *fd*."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _release_os_lock(fd: int) -> None:
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        logger.debug("Could not release the sign-in lock cleanly", exc_info=True)
+    finally:
+        os.close(fd)
+
+
+class _SessionLock:
+    """Exclusive lock on the sign-in files: across threads (one _PathLock per
+    lock path, shared by every AuthManager in the process) and across
+    processes (flock / msvcrt.locking on ``<auth_file>.lock``).
+
+    Not re-entrant: acquiring it again from the holding thread is a
+    programming error and raises RuntimeError at once. The lock file is
+    never unlinked — removing it would let a later opener lock a different
+    inode and defeat the exclusion.
+    """
+
+    def __init__(self, lock_path: Path) -> None:
+        self._path = lock_path
+        self._state = _path_lock(lock_path)
+        self._fd: int | None = None
+        self.last_error: OSError | None = None
+
+    def _check_not_held_by_me(self) -> None:
+        if self._state.owner == threading.get_ident():
+            raise RuntimeError("session lock is not re-entrant")
+
+    def acquire(self, timeout: float = _LOCK_TIMEOUT_SECONDS) -> None:
+        """Wait up to *timeout* seconds — one deadline covering both the
+        thread mutex and the OS lock — then raise SessionLockTimeoutError. An
+        OSError opening the lock file propagates."""
+        self._check_not_held_by_me()
+        deadline = time.monotonic() + timeout
+        if not self._state.mutex.acquire(timeout=max(timeout, 0.0)):
+            raise SessionLockTimeoutError(f"sign-in lock {self._path} is held by another thread")
+        try:
+            fd = _open_lock_file(self._path)
+            try:
+                while not _try_os_lock(fd):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise SessionLockTimeoutError(
+                            f"sign-in lock {self._path} is held by another process"
+                        )
+                    time.sleep(min(_LOCK_POLL_SECONDS, remaining))
+            except BaseException:
+                os.close(fd)
+                raise
+        except BaseException:
+            self._state.mutex.release()
+            raise
+        self._fd = fd
+        self._state.owner = threading.get_ident()
+
+    def try_acquire(self) -> str:
+        """Non-blocking: ``"acquired"``; ``"held"`` by another thread or
+        process; or ``"unavailable"`` — the lock file could not be opened,
+        which says nothing about other holders (``last_error`` has why)."""
+        self._check_not_held_by_me()
+        if not self._state.mutex.acquire(blocking=False):
+            return "held"
+        try:
+            fd = _open_lock_file(self._path)
+        except OSError as exc:
+            self._state.mutex.release()
+            self.last_error = exc
+            return "unavailable"
+        if not _try_os_lock(fd):
+            os.close(fd)
+            self._state.mutex.release()
+            return "held"
+        self._fd = fd
+        self._state.owner = threading.get_ident()
+        return "acquired"
+
+    def release(self) -> None:
+        if self._fd is None:
+            return
+        fd, self._fd = self._fd, None
+        self._state.owner = None
+        try:
+            _release_os_lock(fd)
+        finally:
+            self._state.mutex.release()
+
+    def __enter__(self) -> _SessionLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
+
+
+_MISSING_STAT = (-1, -1, -1)
+
+
+def file_signature(path: str | os.PathLike[str] | None) -> tuple[int, int, int]:
+    """``(st_ino, st_mtime_ns, st_size)`` of *path*, or a sentinel when there
+    is no such file (or it cannot be stat'ed). The files this module writes
+    are only ever replaced atomically, so a changed triple means different
+    bytes; the inode guards against a same-nanosecond, same-size rewrite."""
+    if path is None:
+        return _MISSING_STAT
+    try:
+        st = os.stat(path)
+    except OSError:
+        return _MISSING_STAT
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+@dataclass(frozen=True)
+class _FileRead:
+    """One read of a sign-in file: its bytes, or why there are none.
+
+    ``data`` is None both for a missing file and for one that exists but
+    could not be read; ``error`` tells the two apart. Consumers must never
+    collapse "unreadable" into "absent": absence is a legacy shape that
+    inherits trust, an unreadable record forbids everything.
+    """
+
+    data: bytes | None
+    stat: tuple[int, int, int]
+    error: OSError | None = None
+
+    @property
+    def missing(self) -> bool:
+        return self.data is None and self.error is None
+
+    @property
+    def unreadable(self) -> bool:
+        return self.error is not None
+
+    @property
+    def key(self) -> tuple[bytes | None, bool]:
+        """What two reads of the same file are compared on."""
+        return self.data, self.unreadable
+
+
+def _read_with_stat(path: str | os.PathLike[str]) -> _FileRead:
+    """Read *path* and fstat the very descriptor the bytes came from."""
+    try:
+        with open(path, "rb") as f:
+            st = os.fstat(f.fileno())
+            return _FileRead(f.read(), (st.st_ino, st.st_mtime_ns, st.st_size))
+    except FileNotFoundError:
+        return _FileRead(None, _MISSING_STAT)
+    except OSError as exc:
+        return _FileRead(None, file_signature(path), exc)
 
 
 _ACCOUNT_SCHEMA_VERSION = 1
@@ -199,6 +467,242 @@ class _ProbedAccount:
 class _RecordedIdentity:
     slot: int
     channel_id: str
+
+
+@dataclass(frozen=True)
+class _SessionOwner:
+    """What a renewal attempt saw on disk when it started: the auth.json
+    hash and the record's revision. A commit guarded by an owner refuses
+    when either differs — a newer ``ytm setup``, even one that wrote
+    byte-identical headers, is never overwritten."""
+
+    auth_sha256: str
+    revision: str | None
+
+
+def _identity_from_record(record: dict[str, Any] | None) -> _RecordedIdentity | None:
+    if record is None or record.get("verified") is False:
+        return None
+    channel_id = record.get("channel_id")
+    slot = record.get("x-goog-authuser")
+    if not (isinstance(channel_id, str) and _CHANNEL_ID_RE.fullmatch(channel_id)):
+        return None
+    if not (isinstance(slot, str) and slot.isdigit()):
+        return None
+    return _RecordedIdentity(slot=int(slot), channel_id=channel_id)
+
+
+@dataclass(frozen=True)
+class _SessionPair:
+    """One consistent snapshot of auth.json and the record describing those
+    exact bytes (``record`` is None when there is no usable one)."""
+
+    auth_bytes: bytes
+    record: dict[str, Any] | None
+
+    @property
+    def identity(self) -> _RecordedIdentity | None:
+        return _identity_from_record(self.record)
+
+    @property
+    def owner(self) -> _SessionOwner:
+        revision = self.record.get("revision") if self.record is not None else None
+        return _SessionOwner(
+            _sha256(self.auth_bytes), revision if isinstance(revision, str) else None
+        )
+
+
+def _owner_of(auth_bytes: bytes | None, record_raw: bytes | None) -> _SessionOwner | None:
+    """The owner the files on disk currently describe (None without auth.json)."""
+    if auth_bytes is None:
+        return None
+    record = _parse_record(record_raw)
+    auth_sha256 = _sha256(auth_bytes)
+    revision = (
+        record.get("revision") if record and record.get("auth_sha256") == auth_sha256 else None
+    )
+    return _SessionOwner(auth_sha256, revision if isinstance(revision, str) else None)
+
+
+def _parse_record(raw: bytes | None) -> dict[str, Any] | None:
+    """account.json as a dict, or None when missing, malformed or another schema."""
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("schema_version") != _ACCOUNT_SCHEMA_VERSION:
+        return None
+    return data
+
+
+def _sha256(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _serialize_headers(headers: dict) -> bytes:
+    """The one serialisation of an auth.json candidate: probed and committed as is."""
+    return json.dumps(headers, ensure_ascii=True, indent=4, sort_keys=True).encode("utf-8")
+
+
+def _candidate_payload(base_headers: dict, slot: int) -> bytes:
+    return _serialize_headers({**base_headers, "x-goog-authuser": str(slot)})
+
+
+def _build_record(
+    account: _ProbedAccount, auth_payload: bytes, stream_sha256: str | None, *, verified: bool
+) -> dict[str, Any]:
+    """The account.json record for exactly *auth_payload* and the jar hashed
+    as *stream_sha256* (None: this session has no stream jar)."""
+    return {
+        "schema_version": _ACCOUNT_SCHEMA_VERSION,
+        "x-goog-authuser": str(account.slot),
+        "channel_id": account.channel_id,
+        "name": account.name,
+        "handle": account.handle or None,
+        "verified": verified,
+        "auth_sha256": _sha256(auth_payload),
+        "stream_sha256": stream_sha256,
+        "revision": os.urandom(16).hex(),
+    }
+
+
+def _record_writer(record: dict[str, Any]) -> Callable[[IO[Any]], None]:
+    def _write(f: IO[Any]) -> None:
+        json.dump(record, f, ensure_ascii=True, indent=4, sort_keys=True)
+
+    return _write
+
+
+def _bytes_writer(data: bytes) -> Callable[[IO[Any]], None]:
+    def _write(f: IO[Any]) -> None:
+        f.write(data)
+
+    return _write
+
+
+def _build_stream_cookiejar(jar: Iterable[Cookie]) -> bytes:
+    """Netscape-format bytes of the wide youtube.com/google.com cookiejar that
+    stream.py's yt-dlp resolver loads.
+
+    Builds a fresh jar rather than mutating *jar* in place — callers may
+    own or share that iterable, and this function has no reason to assume
+    it's safe to consume destructively.
+    """
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    stream_jar = YoutubeDLCookieJar()
+    for cookie in jar:
+        bare = cookie.domain.lstrip(".")
+        if bare in ("youtube.com", "google.com") or bare.endswith((".youtube.com", ".google.com")):
+            value = cookie.value or ""
+            if _has_control_chars(cookie.name, value):
+                continue
+            stream_jar.set_cookie(cookie)
+    buffer = io.StringIO()
+    # save()'s stub types filename as str | None, but its open() accepts a
+    # file object directly at runtime (non-path-like branch truncates and
+    # reuses it) — verified against yt-dlp source.
+    stream_jar.save(buffer, ignore_discard=True, ignore_expires=True)  # type: ignore[arg-type]
+    return buffer.getvalue().encode("utf-8")
+
+
+# ── Stream cookiejar vouching (consumed by stream.py) ────────────────────
+
+
+@dataclass(frozen=True)
+class VouchedJar:
+    """Result of read_vouched_stream_jar: the jar bytes the resolver may load
+    (None → stream anonymously) and the signature of the exact file snapshot
+    that decision was made on."""
+
+    payload: bytes | None
+    signature: tuple[Any, ...]
+
+
+def _vouch_failure(auth: _FileRead, record: _FileRead, jar: _FileRead) -> str | None:
+    """Why the jar must not be used, or None when it may.
+
+    A jar is vouched for when the record describing the current auth.json
+    carries its hash. Two legacy shapes are accepted as today's trust:
+    an install with auth.json and NO record file at all, and a record that
+    parses but has no ``stream_sha256`` key — both predate this version,
+    and AuthManager._leave_legacy_locked makes sure this version never
+    creates either of them (a strict record is published before any jar).
+    A record that exists but cannot be read, or does not parse, is neither:
+    it refuses.
+    """
+    if jar.data is None:
+        return "the stream cookie file is unreadable"
+    if auth.unreadable:
+        return "auth.json is unreadable"
+    if auth.data is None:
+        return "auth.json is missing"
+    if record.unreadable:
+        return f"account.json cannot be read ({record.error})"
+    if record.data is None:
+        return None
+    parsed = _parse_record(record.data)
+    if parsed is None:
+        return "account.json is malformed"
+    record_dict = parsed
+    if record_dict.get("auth_sha256") != _sha256(auth.data):
+        return "account.json does not describe the current auth.json"
+    if "stream_sha256" not in record_dict:
+        return None
+    expected = record_dict["stream_sha256"]
+    if expected is None:
+        return "the saved sign-in has no stream cookie file"
+    if expected != _sha256(jar.data):
+        return "the stream cookie file does not match the saved sign-in"
+    return None
+
+
+def read_vouched_stream_jar(jar_path: str, session: tuple[str, str] | None) -> VouchedJar:
+    """Bytes of the stream cookie jar at *jar_path* that the sign-in files
+    vouch for, or None (stream anonymously). *session* is
+    ``(auth_path, account_path)``.
+
+    Every file is read as open → fstat → read, so the returned signature
+    ``(jar_path, jar, auth, record)`` of ``(st_ino, st_mtime_ns, st_size)``
+    triples describes the bytes that were actually checked (these files are
+    only ever replaced atomically). The record is read before and after the
+    others and must not have changed in between; three inconsistent
+    attempts refuse for this snapshot — the next signature change reruns
+    the check. Every refusal logs one warning naming the reason.
+    """
+    if session is None:
+        logger.warning(
+            "Stream cookie file %s is not used: no sign-in files to check it against", jar_path
+        )
+        return VouchedJar(None, (jar_path, file_signature(jar_path), _MISSING_STAT, _MISSING_STAT))
+    auth_path, record_path = session
+    signature: tuple[Any, ...] = (jar_path, _MISSING_STAT, _MISSING_STAT, _MISSING_STAT)
+    for _ in range(3):
+        record = _read_with_stat(record_path)
+        auth = _read_with_stat(auth_path)
+        jar = _read_with_stat(jar_path)
+        record_again = _read_with_stat(record_path)
+        signature = (jar_path, jar.stat, auth.stat, record.stat)
+        if record.key != record_again.key:
+            continue
+        reason = _vouch_failure(auth, record, jar)
+        if reason is None:
+            return VouchedJar(jar.data, signature)
+        logger.warning(
+            "Stream cookie file %s is not used: %s. Streaming without session cookies; "
+            "run `ytm setup` to refresh it.",
+            jar_path,
+            reason,
+        )
+        return VouchedJar(None, signature)
+    logger.warning(
+        "Stream cookie file %s is not used: the sign-in files changed while they were "
+        "being checked",
+        jar_path,
+    )
+    return VouchedJar(None, signature)
 
 
 def _channel_id_from_account_menu(response: Any) -> str | None:
@@ -289,12 +793,15 @@ class AuthManager:
         self._auth_file = auth_file
         self._cookies_file = normalize_cookiefile(cookies_file)
         self._stream_cookies_file = stream_cookies_file
-        # Identity of the session in auth.json (see _write_account_file).
+        # Identity of the session in auth.json (see _commit_session).
         # Lives next to auth.json (ACCOUNT_FILE for the default location) so
         # tests pointing auth_file at a temp dir never touch the real one.
         self._account_file = (
             account_file if account_file is not None else auth_file.with_name("account.json")
         )
+        # Cross-process/thread lock for every write to the files above; also
+        # next to auth.json, for the same reason. Never unlinked.
+        self._lock_path = auth_file.with_name(auth_file.name + ".lock")
 
     @property
     def auth_file(self) -> Path:
@@ -323,17 +830,22 @@ class AuthManager:
         The client is built from the snapshot's parsed headers, never from
         the path: a constructor re-reading the file could load a different
         session than the one the record was checked against (another
-        process's ``ytm setup`` landing and rolling back in between), and a
-        client tagged with the wrong identity would defeat the retry guard
-        in YTMusicService.
+        process's ``ytm setup`` landing in between), and a client tagged
+        with the wrong identity would defeat the retry guard in
+        YTMusicService.
+
+        Raises SessionBusyError while another writer is mid-replacement; that is
+        not an OSError and is never turned into an unbound client here.
         """
         try:
-            payload = self._auth_file.read_bytes()
+            pair = self._read_session_pair()
         except OSError:
+            # Missing or unreadable auth.json only: the client built from the
+            # path reports that itself, as before.
             return YTMusic(str(self._auth_file), user=user), None
-        recorded = self._load_recorded_identity(payload)
-        client = YTMusic(json.loads(payload), user=user)
-        return client, recorded.channel_id if recorded is not None else None
+        identity = pair.identity
+        client = YTMusic(json.loads(pair.auth_bytes), user=user)
+        return client, identity.channel_id if identity is not None else None
 
     def validate(self) -> bool:
         """Verify that the auth credentials actually work.
@@ -360,13 +872,37 @@ class AuthManager:
         """Attempt to silently refresh auth from cookies/browser.
 
         Called when the app detects an auth failure at runtime. Returns
-        True if fresh cookies were extracted and validation passed. Only the
+        True if fresh cookies were extracted, probed and committed. Only the
         account recorded by the last ``ytm setup`` is accepted; when the
         caller knows which account its failed client belonged to, pass it
         as *expected_channel_id* and the recorded account must be that one.
+
+        The pair on disk is read ONCE here; both sources (cookies file, then
+        browser) check the recorded identity from that snapshot and commit
+        only while the files still match it (see _commit_session).
         """
+        try:
+            pair = self._read_session_pair()
+        except SessionBusyError:
+            logger.warning(
+                "Automatic session renewal refused: another ytm process is updating the sign-in"
+            )
+            return False
+        except SessionUnreadableError as exc:
+            logger.warning("Automatic session renewal refused: %s", exc)
+            return False
+        except OSError:
+            logger.warning(
+                "Automatic session renewal refused: no saved session at %s", self._auth_file
+            )
+            return False
+        recorded, owner = pair.identity, pair.owner
+
         if self._cookies_file and self._refresh_from_cookies_file(
-            Path(self._cookies_file), expected_channel_id=expected_channel_id
+            Path(self._cookies_file),
+            expected_channel_id=expected_channel_id,
+            recorded=recorded,
+            owner=owner,
         ):
             return True
 
@@ -376,7 +912,11 @@ class AuthManager:
         browser, cookies, jar = detected
         try:
             return self._save_youtube_cookies(
-                cookies, stream_jar=jar, expected_channel_id=expected_channel_id
+                cookies,
+                stream_jar=jar,
+                expected_channel_id=expected_channel_id,
+                recorded=recorded,
+                owner=owner,
             )
         except Exception:
             logger.debug("Auto-refresh failed", exc_info=True)
@@ -439,7 +979,7 @@ class AuthManager:
         """Find a browser that has YouTube cookies.
 
         Returns ``(browser, youtube_cookies, full_jar)`` — the full jar feeds
-        the stream cookiejar (youtube.com + google.com) via _save_stream_cookiejar.
+        the stream cookiejar (youtube.com + google.com) via _commit_session.
         """
         _patch_yt_dlp_browsers()
 
@@ -454,73 +994,39 @@ class AuthManager:
                 continue
         return None
 
-    @staticmethod
-    def _backup_bytes(path: Path, label: str) -> bytes | None:
-        """Snapshot *path*'s contents so a failed refresh can restore them."""
-        if not path.exists():
-            return None
-        try:
-            return path.read_bytes()
-        except OSError:
-            logger.debug("Could not backup existing %s", label, exc_info=True)
-            return None
-
-    @staticmethod
-    def _restore_or_remove(path: Path, backup: bytes | None, label: str) -> None:
-        """Undo a failed refresh: restore *path* from *backup*, or remove it
-        if there was no prior backup (the refresh wrote it fresh).
-
-        Restores via _atomic_write(), the shared O_NOFOLLOW-temp-file-plus-
-        os.replace helper also used by _save_stream_cookiejar — a plain
-        write_bytes() would follow a symlink planted at *path* during the
-        network-bound window between backup and restore.
-        """
-        try:
-            if backup is not None:
-                payload = backup
-
-                def _write(f: IO[Any]) -> None:
-                    f.write(payload)
-
-                _atomic_write(path, "wb", _write)
-                logger.debug("Restored previous %s after cookies file validation failure", label)
-            elif path.exists():
-                path.unlink()
-        except OSError:
-            logger.warning("Failed to restore previous %s", label, exc_info=True)
-
     def _refresh_from_cookies_file(
         self,
         cookies_file: Path,
         interactive: bool = False,
         expected_channel_id: str | None = None,
+        *,
+        recorded: _RecordedIdentity | None = None,
+        owner: _SessionOwner | None = None,
     ) -> bool:
-        """Refresh auth from cookies file without losing working credentials."""
-        backup = self._backup_bytes(self._auth_file, "auth file")
-        account_backup = self._backup_bytes(self._account_file, "account file")
-        stream_backup = self._backup_bytes(self._stream_cookies_file, "stream cookiejar")
+        """Refresh auth from a cookies file.
 
-        if not self._extract_and_save_from_cookies_file(
-            cookies_file, interactive=interactive, expected_channel_id=expected_channel_id
-        ):
-            return False
-
-        try:
-            if self.validate():
-                return True
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-            logger.warning("Network error during cookies-file validation; restoring backup")
-
-        self._restore_or_remove(self._auth_file, backup, "auth file")
-        self._restore_or_remove(self._account_file, account_backup, "account file")
-        self._restore_or_remove(self._stream_cookies_file, stream_backup, "stream cookiejar")
-        return False
+        The candidate session is probed before anything is written and the
+        commit is guarded by *owner*, so there is nothing to back up or roll
+        back: a refused or failed refresh leaves the working credentials as
+        they were, and a session another process committed meanwhile is
+        never restored over.
+        """
+        return self._extract_and_save_from_cookies_file(
+            cookies_file,
+            interactive=interactive,
+            expected_channel_id=expected_channel_id,
+            recorded=recorded,
+            owner=owner,
+        )
 
     def _extract_and_save_from_cookies_file(
         self,
         cookies_file: Path,
         interactive: bool = False,
         expected_channel_id: str | None = None,
+        *,
+        recorded: _RecordedIdentity | None = None,
+        owner: _SessionOwner | None = None,
     ) -> bool:
         """Extract YouTube cookies from a Netscape cookies.txt file and write auth.json."""
         if not cookies_file.exists():
@@ -559,6 +1065,8 @@ class AuthManager:
             interactive=interactive,
             stream_jar=jar,
             expected_channel_id=expected_channel_id,
+            recorded=recorded,
+            owner=owner,
         ):
             if interactive:
                 print(f"  Cookies extracted from file and saved: {cookies_file}")
@@ -593,6 +1101,9 @@ class AuthManager:
         interactive: bool = False,
         stream_jar: Iterable[Cookie] | None = None,
         expected_channel_id: str | None = None,
+        *,
+        recorded: _RecordedIdentity | None = None,
+        owner: _SessionOwner | None = None,
     ) -> bool:
         """Persist YouTube cookie headers into auth.json and record the account.
 
@@ -600,11 +1111,13 @@ class AuthManager:
         pick, and record the chosen account's identity in account.json.
 
         Silent (automatic renewal): only replace the session with the SAME
-        account. The channel ID recorded by the last setup must be found,
-        in the saved slot or — if the browser re-ordered its accounts — in
-        exactly one other slot. No recorded identity, no channel ID, no
-        match, or an ambiguous match refuses the renewal; the caller then
-        treats the session as expired and the user runs ``ytm setup`` once.
+        account. The channel ID recorded by the last setup (*recorded*, from
+        the snapshot the attempt started with) must be found, in the saved
+        slot or — if the browser re-ordered its accounts — in exactly one
+        other slot. No recorded identity, no channel ID, no match, or an
+        ambiguous match refuses the renewal; the caller then treats the
+        session as expired and the user runs ``ytm setup`` once. The commit
+        itself refuses when the files no longer match *owner*.
         """
         cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
 
@@ -626,28 +1139,24 @@ class AuthManager:
         if interactive:
             chosen = self._select_account_interactively(base_headers)
         else:
-            chosen = self._find_recorded_account(base_headers, expected_channel_id)
+            chosen = self._find_recorded_account(base_headers, expected_channel_id, recorded)
         if chosen is None:
             return False
 
-        headers = {**base_headers, "x-goog-authuser": str(chosen.slot)}
-        if not self._write_session(headers, chosen):
-            return False
-
-        if stream_jar is not None:
-            self._save_stream_cookiejar(stream_jar)
-        return True
+        # The same bytes that were probed for *chosen* are committed.
+        payload = _candidate_payload(base_headers, chosen.slot)
+        return self._commit_session(payload, chosen, stream_jar, owner=owner)
 
     # ── Account probing / selection ──────────────────────────────────
 
-    def _probe_slot(self, base_headers: dict, slot: int) -> _ProbedAccount | None:
-        """Ask YouTube Music who ``x-goog-authuser=slot`` is, or None."""
-        headers = {**base_headers, "x-goog-authuser": str(slot)}
+    def _probe_payload(self, payload: bytes, slot: int) -> _ProbedAccount | None:
+        """Ask YouTube Music who the session in *payload* (the exact auth.json
+        bytes a commit would write) is, or None."""
         tmp_path: str | None = None
         try:
             fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=str(self._config_dir))
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(headers, f, ensure_ascii=True, indent=4, sort_keys=True)
+            with os.fdopen(fd, "wb") as f:
+                f.write(payload)
             return _probe_account(tmp_path, slot)
         except Exception:
             logger.debug("x-goog-authuser=%d did not work, skipping", slot)
@@ -664,7 +1173,8 @@ class AuthManager:
         valid_accounts = [
             account
             for slot in range(5)
-            if (account := self._probe_slot(base_headers, slot)) is not None
+            if (account := self._probe_payload(_candidate_payload(base_headers, slot), slot))
+            is not None
         ]
         if not valid_accounts:
             logger.warning(
@@ -710,16 +1220,21 @@ class AuthManager:
         return chosen
 
     def _find_recorded_account(
-        self, base_headers: dict, expected_channel_id: str | None = None
+        self,
+        base_headers: dict,
+        expected_channel_id: str | None = None,
+        recorded: _RecordedIdentity | None = None,
     ) -> _ProbedAccount | None:
         """Silent renewal: locate the account recorded by the last setup, or None.
 
-        With *expected_channel_id* (the account of the client whose call
+        *recorded* is the identity from the snapshot the renewal attempt
+        started from (never re-read here, so the check and the ownership
+        guard in _commit_session see the same pair). With
+        *expected_channel_id* (the account of the client whose call
         failed), the recorded account must be that one: a ``ytm setup`` for
         another account that landed in the meantime must not renew on its
         behalf.
         """
-        recorded = self._load_recorded_identity()
         if recorded is None:
             logger.warning(
                 "Automatic session renewal refused: no account identity is recorded for "
@@ -734,7 +1249,7 @@ class AuthManager:
             return None
 
         # The saved slot first; the rest only if the browser re-ordered its accounts.
-        probed = self._probe_slot(base_headers, recorded.slot)
+        probed = self._probe_payload(_candidate_payload(base_headers, recorded.slot), recorded.slot)
         if probed is not None and probed.channel_id == recorded.channel_id:
             return probed
 
@@ -742,7 +1257,8 @@ class AuthManager:
             account
             for slot in range(5)
             if slot != recorded.slot
-            and (account := self._probe_slot(base_headers, slot)) is not None
+            and (account := self._probe_payload(_candidate_payload(base_headers, slot), slot))
+            is not None
             and account.channel_id == recorded.channel_id
         ]
         if len(matches) == 1:
@@ -762,171 +1278,255 @@ class AuthManager:
 
     # ── Session + account record persistence ─────────────────────────
 
-    def _write_session(self, headers: dict, account: _ProbedAccount) -> bool:
-        """Write auth.json for *account*, then account.json describing it.
-
-        The previous account record is dropped first: if the auth write
-        fails part-way, stale metadata must never vouch for whatever is
-        left in auth.json. A failed account.json write only disables
-        automatic renewal (the session itself works), never the setup.
-        """
-        self._remove_account_file()
-        payload = json.dumps(headers, ensure_ascii=True, indent=4, sort_keys=True).encode("utf-8")
-        # O_NOFOLLOW (POSIX-only; getattr fallback for Windows) refuses to
-        # follow a symlink at the target path — defense-in-depth against
-        # a malicious local user planting a symlink in CONFIG_DIR.
+    def _read_record_raw(self) -> bytes | None:
+        """account.json bytes; None when there is no such file. A file that
+        exists but cannot be read raises — it is never reported as absent."""
         try:
-            fd = os.open(
-                str(self._auth_file),
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
-                SECURE_FILE_MODE,
-            )
-            with os.fdopen(fd, "wb") as f:
-                f.write(payload)
-        except OSError:
-            logger.exception("Failed to write auth file %s", self._auth_file)
-            return False
+            return self._account_file.read_bytes()
+        except FileNotFoundError:
+            return None
 
-        self._write_account_file(account, payload)
-        return True
-
-    def _write_account_file(self, account: _ProbedAccount, auth_payload: bytes) -> bool:
-        """Record *account* as the identity of the auth.json whose bytes are *auth_payload*.
-
-        The record carries a hash of those bytes so metadata that no longer
-        matches auth.json (a partial write, an auth.json replaced by hand)
-        is ignored by _load_recorded_identity instead of authorising a
-        renewal.
-        """
-        record = {
-            "schema_version": _ACCOUNT_SCHEMA_VERSION,
-            "x-goog-authuser": str(account.slot),
-            "channel_id": account.channel_id,
-            "name": account.name,
-            "handle": account.handle or None,
-            "auth_sha256": hashlib.sha256(auth_payload).hexdigest(),
-        }
-
-        def _write(f: IO[Any]) -> None:
-            json.dump(record, f, ensure_ascii=True, indent=4, sort_keys=True)
-
+    def _read_record_or_refuse(self) -> bytes | None:
         try:
-            _atomic_write(self._account_file, "w", _write, encoding="utf-8")
-        except Exception:
-            logger.exception(
-                "Failed to write %s; automatic session renewal is disabled until the next "
-                "`ytm setup`",
-                self._account_file,
-            )
-            self._remove_account_file()
-            return False
-        if account.channel_id is None:
+            return self._read_record_raw()
+        except OSError as exc:
+            raise SessionUnreadableError(
+                f"{self._account_file} exists but cannot be read: {exc}"
+            ) from exc
+
+    def _read_pair_locked(self) -> tuple[bytes | None, bytes | None]:
+        """Raw auth.json and account.json bytes. The caller holds the session
+        lock, so the two reads are one consistent snapshot. An unreadable
+        record raises, which fails the commit."""
+        try:
+            auth_bytes: bytes | None = self._auth_file.read_bytes()
+        except FileNotFoundError:
+            auth_bytes = None
+        return auth_bytes, self._read_record_raw()
+
+    def _classify_pair(
+        self, auth_bytes: bytes, record_raw: bytes | None, *, writer_possible: bool
+    ) -> _SessionPair | None:
+        """Pair a snapshot of auth.json with the record that describes it.
+
+        A record for other auth bytes is either a commit in flight (auth.json
+        replaced, account.json not yet — *writer_possible*, so the caller
+        retries) or a permanent leftover of a crash between those two writes
+        (no writer holds the lock): then the session is usable but unbound,
+        exactly what a record-less session is today, and the record is
+        ignored with a warning. Nothing here ever invents an identity.
+        """
+        if record_raw is None:
+            return _SessionPair(auth_bytes, None)
+        record = _parse_record(record_raw)
+        if record is None:
+            # Never a mid-commit shape (records are replaced whole): permanent.
+            logger.warning("%s is malformed; ignoring it", self._account_file.name)
+            return _SessionPair(auth_bytes, None)
+        if record.get("auth_sha256") == _sha256(auth_bytes):
+            return _SessionPair(auth_bytes, record)
+        if writer_possible:
+            return None
+        logger.warning(
+            "%s does not describe the current %s; ignoring it",
+            self._account_file.name,
+            self._auth_file.name,
+        )
+        return _SessionPair(auth_bytes, None)
+
+    def _read_session_pair(self) -> _SessionPair:
+        """One consistent snapshot of auth.json + its record, without waiting.
+
+        Takes the session lock only when it is free right now (non-blocking
+        try). Acquired: the two files are read under it. Held by another
+        thread or process, or the lock file cannot be opened at all (which
+        proves nothing about other holders): a lock-free record → auth →
+        record read is used, consistent when both record reads agree and the
+        record describes the auth bytes. Three inconsistent attempts raise
+        SessionBusyError — a RuntimeError, never an OSError — so no fallback can
+        quietly build a client from a half-replaced pair. A record that exists
+        but cannot be read raises SessionUnreadableError the same way.
+
+        Raises OSError only for a missing/unreadable auth.json.
+        """
+        lock = _SessionLock(self._lock_path)
+        state = lock.try_acquire()
+        if state == "acquired":
+            try:
+                auth_bytes = self._auth_file.read_bytes()
+                record_raw = self._read_record_or_refuse()
+            finally:
+                lock.release()
+            pair = self._classify_pair(auth_bytes, record_raw, writer_possible=False)
+            assert pair is not None  # writer_possible=False always classifies
+            return pair
+        for _ in range(3):
+            first = self._read_record_or_refuse()
+            auth_bytes = self._auth_file.read_bytes()
+            second = self._read_record_or_refuse()
+            if first != second:
+                continue
+            pair = self._classify_pair(auth_bytes, first, writer_possible=True)
+            if pair is not None:
+                return pair
+        if state == "unavailable":
             logger.warning(
-                "No channel ID for this account; automatic session renewal is disabled until "
-                "the next `ytm setup`"
+                "Sign-in files are inconsistent and the lock %s cannot be opened (%s)",
+                self._lock_path,
+                lock.last_error,
             )
-        return True
-
-    def _remove_account_file(self) -> None:
-        try:
-            self._account_file.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Could not remove %s", self._account_file, exc_info=True)
+        raise SessionBusyError(f"{self._auth_file.name} is being replaced by another writer")
 
     def _load_recorded_identity(self, auth_bytes: bytes | None = None) -> _RecordedIdentity | None:
         """The identity account.json records for the CURRENT auth.json, or None.
 
         None (renewal refused) when the record is missing, malformed, has
-        no channel ID, or was written for different auth.json bytes.
-        *auth_bytes* lets a caller that already read auth.json check the
-        record against exactly that snapshot.
+        no channel ID, is unverified, or was written for different
+        auth.json bytes. *auth_bytes* lets a caller that already read
+        auth.json check the record against exactly that snapshot.
         """
         try:
-            data = json.loads(self._account_file.read_text(encoding="utf-8"))
-            current = auth_bytes if auth_bytes is not None else self._auth_file.read_bytes()
-        except (OSError, json.JSONDecodeError):
+            pair = self._read_session_pair()
+        except (OSError, SessionError):
             logger.debug("No usable account record at %s", self._account_file, exc_info=True)
             return None
-        if not isinstance(data, dict) or data.get("schema_version") != _ACCOUNT_SCHEMA_VERSION:
+        if auth_bytes is not None and auth_bytes != pair.auth_bytes:
             return None
-        channel_id = data.get("channel_id")
-        slot = data.get("x-goog-authuser")
-        if not (isinstance(channel_id, str) and _CHANNEL_ID_RE.fullmatch(channel_id)):
-            return None
-        if not (isinstance(slot, str) and slot.isdigit()):
-            return None
-        if data.get("auth_sha256") != hashlib.sha256(current).hexdigest():
-            logger.warning(
-                "%s does not describe the current %s; ignoring it",
-                self._account_file.name,
-                self._auth_file.name,
-            )
-            return None
-        return _RecordedIdentity(slot=int(slot), channel_id=channel_id)
+        return pair.identity
 
-    def _record_manual_identity(self) -> None:
-        """After a manual header paste, probe the pasted session for its identity."""
-        try:
-            saved = json.loads(self._auth_file.read_text(encoding="utf-8"))
-            slot = int(saved.get("x-goog-authuser", 0))
-            probed = _probe_account(str(self._auth_file), slot)
-        except Exception:
-            logger.debug("Could not probe the pasted session's account", exc_info=True)
-            probed = None
-        recorded = (
-            probed is not None
-            and self._write_account_file(probed, self._auth_file.read_bytes())
-            and probed.channel_id is not None
-        )
-        if not recorded:
-            print(_NO_RENEWAL_NOTE)
+    def _commit_session(
+        self,
+        payload: bytes,
+        account: _ProbedAccount,
+        jar: Iterable[Cookie] | None,
+        *,
+        owner: _SessionOwner | None = None,
+        verified: bool = True,
+    ) -> bool:
+        """Publish a new session: stream jar, auth.json, then account.json.
 
-    def _save_stream_cookiejar(self, jar: Iterable[Cookie]) -> bool:
-        """Write a wide youtube.com/google.com cookiejar for stream.py's yt-dlp resolver.
+        Runs under the session lock. Steps, each one atomic replace:
 
-        Builds a fresh jar rather than mutating *jar* in place — callers may
-        own or share that iterable, and this method has no reason to assume
-        it's safe to consume destructively.
+        0. With *owner* (an automatic renewal), refuse unless the pair on
+           disk is still the one the attempt started from — a newer
+           ``ytm setup`` is never overwritten. Setup passes no owner.
+        0b. A legacy pair (no record, or a record without ``stream_sha256``)
+           first gets a strict record for the *current* files, so the jar
+           published next can never be accepted under the legacy rule.
+        1. The stream jar for *jar* (removed when *jar* is None).
+        2. auth.json = *payload* — the exact bytes that were probed.
+        3. account.json for exactly those bytes, with a fresh revision and
+           the hash of the jar from step 1.
 
-        On failure any existing jar is removed: auth.json now belongs to
-        this session, and streaming must not keep using the previous one.
+        A failure or crash leaves every earlier step in place and every file
+        whole: after step 1 the record still describes the old auth.json (the
+        new jar is unvouched and refused by the resolver); after step 2 the
+        record describes nothing (the session works unbound, renewal is
+        refused until ``ytm setup``). No rollback, no repair, no cleanup.
         """
+        lock = _SessionLock(self._lock_path)
         try:
-            from yt_dlp.cookies import YoutubeDLCookieJar
-
-            stream_jar = YoutubeDLCookieJar()
-            for cookie in jar:
-                bare = cookie.domain.lstrip(".")
-                if bare in ("youtube.com", "google.com") or bare.endswith(
-                    (".youtube.com", ".google.com")
-                ):
-                    value = cookie.value or ""
-                    if _has_control_chars(cookie.name, value):
-                        continue
-                    stream_jar.set_cookie(cookie)
-
             self._config_dir.mkdir(parents=True, exist_ok=True)
-
-            def _write(f: IO[Any]) -> None:
-                # save()'s stub types filename as str | None, but its open()
-                # accepts a file object directly at runtime (non-path-like
-                # branch truncates and reuses it) — verified against yt-dlp
-                # source.
-                stream_jar.save(f, ignore_discard=True, ignore_expires=True)  # type: ignore[arg-type]
-
-            _atomic_write(self._stream_cookies_file, "w", _write, encoding="utf-8")
-        except Exception:
-            logger.exception("Failed to write stream cookiejar to %s", self._stream_cookies_file)
-            try:
-                self._stream_cookies_file.unlink(missing_ok=True)
-            except OSError:
-                logger.warning(
-                    "Could not remove stale stream cookiejar %s",
-                    self._stream_cookies_file,
-                    exc_info=True,
-                )
+            lock.acquire(timeout=_LOCK_TIMEOUT_SECONDS)
+        except SessionLockTimeoutError as exc:
+            logger.warning("Another ytm process is updating the sign-in; not saving (%s)", exc)
             return False
+        except OSError as exc:
+            logger.warning("Cannot lock the sign-in files: %s: %s", self._lock_path, exc)
+            return False
+        step = "reading the current sign-in"
+        try:
+            auth_bytes, record_raw = self._read_pair_locked()
+            if owner is not None and _owner_of(auth_bytes, record_raw) != owner:
+                logger.warning(
+                    "Automatic session renewal refused: the saved session changed while it "
+                    "was being renewed"
+                )
+                return False
+            step = "recording the current stream cookie file"
+            self._leave_legacy_locked(auth_bytes, record_raw)
+            step = "writing the stream cookie file"
+            stream_sha256: str | None = None
+            if jar is not None:
+                jar_bytes = _build_stream_cookiejar(jar)
+                _atomic_write(self._stream_cookies_file, "wb", _bytes_writer(jar_bytes))
+                stream_sha256 = _sha256(jar_bytes)
+            else:
+                self._stream_cookies_file.unlink(missing_ok=True)
+            step = f"writing {self._auth_file.name}"
+            _atomic_write(self._auth_file, "wb", _bytes_writer(payload))
+            step = f"writing {self._account_file.name}"
+            record = _build_record(account, payload, stream_sha256, verified=verified)
+            _atomic_write(self._account_file, "w", _record_writer(record), encoding="utf-8")
+        except Exception:
+            logger.exception("Failed to save the sign-in while %s", step)
+            return False
+        finally:
+            lock.release()
+        if account.channel_id is None or not verified:
+            logger.warning(
+                "No verified account identity for this session; automatic session renewal "
+                "is disabled until the next `ytm setup`"
+            )
         return True
+
+    def _leave_legacy_locked(self, auth_bytes: bytes | None, record_raw: bytes | None) -> None:
+        """Step 0b of _commit_session: make a legacy pair strict before any
+        new file is published.
+
+        Genuine legacy = no record file at all, or a record that parses (this
+        schema) but has no ``stream_sha256`` key — the two shapes that predate
+        this version. Only those inherit today's implicit trust: the record
+        written here keeps every field an existing record has and adds the
+        key with the hash of the jar on disk *now* (or null). With no record
+        it carries no identity (``channel_id`` null, ``verified`` false) —
+        renewal stays refused exactly as for a record-less session today.
+
+        A record that exists but does not parse, or is of another schema, is
+        NOT legacy: it is replaced by a provisional record that vouches for
+        no jar at all (``stream_sha256`` null) and no identity. Likewise on a
+        fresh install (no auth.json) the provisional record has
+        ``auth_sha256`` null too, so it vouches for nothing that is not yet
+        there.
+        """
+        parsed = _parse_record(record_raw)
+        if parsed is not None and "stream_sha256" in parsed:
+            return
+        invalid = record_raw is not None and parsed is None
+        if parsed is None:
+            slot = "0"
+            if auth_bytes is not None:
+                try:
+                    slot = str(int(json.loads(auth_bytes).get("x-goog-authuser", 0)))
+                except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+                    pass
+            record = {
+                "schema_version": _ACCOUNT_SCHEMA_VERSION,
+                "x-goog-authuser": slot,
+                "channel_id": None,
+                "name": "",
+                "handle": None,
+                "verified": False,
+                "auth_sha256": _sha256(auth_bytes) if auth_bytes is not None else None,
+            }
+        else:
+            record = dict(parsed)
+        jar_sha256: str | None = None
+        if auth_bytes is not None and not invalid:
+            try:
+                jar_sha256 = _sha256(self._stream_cookies_file.read_bytes())
+            except FileNotFoundError:
+                jar_sha256 = None
+        record["stream_sha256"] = jar_sha256
+        _atomic_write(self._account_file, "w", _record_writer(record), encoding="utf-8")
+        if invalid:
+            logger.warning(
+                "%s was malformed; replaced it with a record that vouches for no stream "
+                "cookie file and no account identity",
+                self._account_file.name,
+            )
+        else:
+            logger.info("Recorded the current stream cookie file for the saved sign-in")
 
     # ── Manual header paste (fallback) ───────────────────────────────
 
@@ -976,24 +1576,40 @@ class AuthManager:
             print()
 
         self._config_dir.mkdir(parents=True, exist_ok=True)
-        # The pasted headers are a new session: the previous account record
-        # must not survive to describe it.
-        self._remove_account_file()
         try:
             import ytmusicapi
 
-            ytmusicapi.setup(filepath=str(self._auth_file), headers_raw=normalized)
-            secure_chmod(self._auth_file, SECURE_FILE_MODE)
-            self._record_manual_identity()
-            if cookie_value is not None:
-                self._save_stream_cookiejar(_cookies_from_raw_header(cookie_value))
-            print()
-            print("  Browser authentication saved.")
-            return True
+            headers = json.loads(ytmusicapi.setup(headers_raw=normalized))
+            slot = int(headers.get("x-goog-authuser", 0))
         except Exception as exc:
+            # A rejected paste changes nothing on disk: the previous session
+            # and the record describing it stay exactly as they were.
             logger.error("Failed to parse headers: %s", exc)
             print(f"\n  Error: {exc}")
             return False
+
+        # The bytes probed below are the bytes committed: the slot is
+        # normalised before the single serialisation.
+        headers["x-goog-authuser"] = str(slot)
+        payload = _serialize_headers(headers)
+        cookie_value = headers.get("cookie")
+        jar = _cookies_from_raw_header(cookie_value) if cookie_value else None
+
+        probed = self._probe_payload(payload, slot)
+        verified = probed is not None
+        if probed is None:
+            logger.warning(
+                "Could not verify the pasted session; saving it without an account identity"
+            )
+            probed = _ProbedAccount(slot=slot, name="", handle="", channel_id=None)
+        if not self._commit_session(payload, probed, jar, verified=verified):
+            print("\n  Error: could not save the sign-in. See the log for details.")
+            return False
+        print()
+        print("  Browser authentication saved.")
+        if probed.channel_id is None:
+            print(_NO_RENEWAL_NOTE)
+        return True
 
 
 # ── Header normalization (for manual paste) ──────────────────────────
@@ -1046,7 +1662,7 @@ def _has_control_chars(*values: str) -> bool:
 
     Both cookiejar formats this module writes (Netscape, and the raw-header
     fallback) are line-oriented — an embedded control character in a cookie
-    name/value would corrupt the file. Shared by _save_stream_cookiejar and
+    name/value would corrupt the file. Shared by _build_stream_cookiejar and
     _cookies_from_raw_header, the two places that build Cookie objects from
     untrusted input (browser-extracted and user-pasted, respectively).
     """
