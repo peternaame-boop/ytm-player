@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
-import os
 import re
 import threading
 import time
@@ -53,17 +53,30 @@ def _detect_stream_cookies() -> str | None:
     return str(STREAM_COOKIES_FILE) if STREAM_COOKIES_FILE.exists() else None
 
 
-def _session_cookiejar_signature() -> tuple[str, int, int] | None:
-    """``(path, mtime_ns, size)`` of the stream cookiejar the resolver should be
-    using right now, or None.
+def _detect_session_record() -> tuple[str, str] | None:
+    """``(auth.json path, account.json path)`` the stream cookiejar is checked
+    against — AuthManager's record vouches for the jar by hash (see
+    auth.read_vouched_stream_jar). No existence check: a missing file is
+    part of what the check decides on. Tests point this at a scratch pair.
+    """
+    from ytm_player.config.paths import ACCOUNT_FILE, AUTH_FILE
+
+    return str(AUTH_FILE), str(ACCOUNT_FILE)
+
+
+def _session_cookiejar_signature() -> tuple[Any, ...] | None:
+    """Signature of the stream cookiejar the resolver should be using right
+    now — ``(jar path, jar, auth.json, account.json)`` with each file as an
+    ``(st_ino, st_mtime_ns, st_size)`` triple — or None.
 
     None unless ``[yt_dlp] use_session_cookies`` is on (streaming is anonymous
     by default) and no explicit ``[yt_dlp] cookies_file`` is configured (that
     file is the user's own and goes through yt-dlp's ``cookiefile``), or when
-    the jar file doesn't exist. Compared on every _get_ydl() call so a jar
-    rewritten by ``ytm setup`` or a mid-session auto-refresh is picked up by
-    the next resolve instead of the cached YoutubeDL instance keeping its
-    stale in-memory copy.
+    the jar file doesn't exist. Compared on every _get_ydl() call so a change
+    to ANY of the three files — a jar rewritten by ``ytm setup`` or a
+    mid-session auto-refresh, but also an auth.json or account.json replaced
+    on its own — rebuilds the instance and reruns the vouching check instead
+    of the cached YoutubeDL instance keeping cookies it may no longer use.
     """
     settings = get_settings().yt_dlp
     if not settings.use_session_cookies or normalize_cookiefile(settings.cookies_file):
@@ -71,11 +84,11 @@ def _session_cookiejar_signature() -> tuple[str, int, int] | None:
     path = _detect_stream_cookies()
     if path is None:
         return None
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return (path, st.st_mtime_ns, st.st_size)
+    from ytm_player.services.auth import file_signature
+
+    session = _detect_session_record()
+    auth_path, record_path = session if session is not None else (None, None)
+    return (path, file_signature(path), file_signature(auth_path), file_signature(record_path))
 
 
 class _YtDlpLogger:
@@ -163,7 +176,7 @@ class StreamResolver:
         self._ydl_generation = 0
         # Signature of the stream cookiejar file self._ydl was built against
         # (see _session_cookiejar_signature); None when none was loaded.
-        self._ydl_cookiejar_sig: tuple[str, int, int] | None = None
+        self._ydl_cookiejar_sig: tuple[Any, ...] | None = None
         # YoutubeDL is not thread-safe; a play resolve and a prefetch can run
         # on separate threads against the shared instance, so extract_info()
         # calls are serialized. Only the network call is held under it.
@@ -205,7 +218,7 @@ class StreamResolver:
         }
         return apply_configured_yt_dlp_options(opts, settings)
 
-    def _build_ydl(self, opts: dict) -> tuple[Any, tuple[str, int, int] | None]:
+    def _build_ydl(self, opts: dict) -> tuple[Any, tuple[Any, ...] | None]:
         """Construct a YoutubeDL instance from *opts* and, when
         ``[yt_dlp] use_session_cookies`` is on, load the stream cookiejar into it.
 
@@ -218,7 +231,12 @@ class StreamResolver:
         through ``cookiefile`` — that file is theirs, and write-back is
         yt-dlp's normal behaviour for it.
 
-        Returns the instance and the jar signature it was built against.
+        Only a jar the sign-in record vouches for is loaded (see
+        auth.read_vouched_stream_jar); the bytes loaded are the bytes that
+        were checked, and the signature cached with the instance is the one
+        of that exact snapshot — never a separate stat taken before or after.
+
+        Returns the instance and the signature it was built against.
         """
         import yt_dlp  # Lazy import
 
@@ -227,10 +245,23 @@ class StreamResolver:
         ydl = yt_dlp.YoutubeDL(opts)  # type: ignore[arg-type]
         sig = _session_cookiejar_signature()
         if sig is not None:
-            try:
-                ydl.cookiejar.load(sig[0], ignore_discard=True, ignore_expires=True)
-            except Exception:
-                logger.warning("Could not load stream cookiejar %s", sig[0], exc_info=True)
+            from ytm_player.services.auth import read_vouched_stream_jar
+
+            vouched = read_vouched_stream_jar(sig[0], _detect_session_record())
+            sig = vouched.signature
+            if vouched.payload is not None:
+                try:
+                    # load()'s stub types filename as str | None, but its
+                    # open() accepts a file object directly at runtime
+                    # (non-path-like branch yields it as is) — verified
+                    # against yt-dlp source.
+                    ydl.cookiejar.load(
+                        io.StringIO(vouched.payload.decode("utf-8")),  # type: ignore[arg-type]
+                        ignore_discard=True,
+                        ignore_expires=True,
+                    )
+                except Exception:
+                    logger.warning("Could not load stream cookiejar %s", sig[0], exc_info=True)
         return ydl, sig
 
     def _get_ydl(self) -> Any:

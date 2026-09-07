@@ -259,6 +259,20 @@ def _switch_session_to(auth: AuthManager, slot: str, channel_id: str) -> None:
     _record(auth, slot, channel_id)
 
 
+def _make_record_strict(auth: AuthManager) -> None:
+    """Give the fixture record the keys every record written by this version
+    has, so a commit skips the legacy transition (step 0b)."""
+    record = json.loads(auth._account_file.read_text(encoding="utf-8"))
+    record["stream_sha256"] = None
+    auth._account_file.write_text(json.dumps(record), encoding="utf-8")
+
+
+def _real_atomic_write():
+    from ytm_player.services.auth import _atomic_write
+
+    return _atomic_write
+
+
 @pytest.fixture
 def browser(monkeypatch):
     monkeypatch.setattr(
@@ -529,48 +543,65 @@ class TestSetupRecordsIdentity:
         assert "automatic session renewal is not available" in capsys.readouterr().out
         assert auth.try_auto_refresh() is False
 
-    def test_account_file_write_failure_keeps_session_but_disables_renewal(
+    def test_account_file_write_failure_leaves_an_unbound_session(
         self, tmp_path, browser, monkeypatch, caplog
     ):
+        """The record is the last file written. When only that write fails the
+        new auth.json is already in place: the session works, but without a
+        record describing it renewal is refused until `ytm setup`."""
         auth = _auth(tmp_path, "0")
+        _make_record_strict(auth)
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({0: ME}))
+        real_atomic_write = _real_atomic_write()
+
+        def _fail_record(path, *args, **kwargs):
+            if path == auth._account_file:
+                raise OSError("disk full")
+            return real_atomic_write(path, *args, **kwargs)
 
         with (
-            patch("ytm_player.services.auth._atomic_write", side_effect=OSError("disk full")),
-            caplog.at_level("ERROR", logger="ytm_player.services.auth"),
+            patch("ytm_player.services.auth._atomic_write", side_effect=_fail_record),
+            caplog.at_level("WARNING", logger="ytm_player.services.auth"),
         ):
-            assert auth._save_youtube_cookies([_cookie()], interactive=True) is True
+            assert auth._save_youtube_cookies([_cookie()], interactive=True) is False
         assert _saved_slot(auth) == "0"
-        assert not auth._account_file.exists()
-        assert "automatic session renewal is disabled" in caplog.text
+        assert "Failed to save the sign-in while writing account.json" in caplog.text
+        assert auth._account_file.exists()
+        assert auth._load_recorded_identity() is None  # stale record ignored
+        assert "does not describe the current auth.json" in caplog.text
         assert auth.try_auto_refresh() is False
 
-    def test_auth_write_failure_removes_old_record(self, tmp_path, browser, monkeypatch):
+    def test_auth_write_failure_keeps_the_old_session_and_record(
+        self, tmp_path, browser, monkeypatch
+    ):
+        """auth.json is replaced atomically: a failed write leaves the previous
+        bytes and the record that describes them exactly as they were."""
         auth = _auth(tmp_path, "2")
+        _make_record_strict(auth)  # else step 0b rewrites the record first
+        old_auth = auth.auth_file.read_bytes()
+        old_record = auth._account_file.read_bytes()
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({2: ME}))
-        real_open = auth._auth_file.__class__  # noqa: F841 (documentation)
+        real_atomic_write = _real_atomic_write()
 
-        def _fail_auth_open(path, *args, **kwargs):
-            if str(path) == str(auth._auth_file):
+        def _fail_auth(path, *args, **kwargs):
+            if path == auth.auth_file:
                 raise OSError("read-only")
-            return real_os_open(path, *args, **kwargs)
+            return real_atomic_write(path, *args, **kwargs)
 
-        import os
-
-        real_os_open = os.open
-        with patch("ytm_player.services.auth.os.open", side_effect=_fail_auth_open):
+        with patch("ytm_player.services.auth._atomic_write", side_effect=_fail_auth):
             assert auth.try_auto_refresh() is False
-        assert not auth._account_file.exists()
+        assert auth.auth_file.read_bytes() == old_auth
+        assert auth._account_file.read_bytes() == old_record
+        recorded = auth._load_recorded_identity()
+        assert recorded is not None and recorded.channel_id == ME_ID
 
     def test_manual_setup_replaces_previous_record(self, tmp_path, browser, monkeypatch):
         auth = _auth(tmp_path, "0", record=OTHER_ID)
         responses = iter(["Host: music.youtube.com", "Cookie: SAPISID=abc123", ""])
         monkeypatch.setattr("builtins.input", lambda: next(responses))
 
-        def _fake_setup(filepath, headers_raw):
-            Path(filepath).write_text(
-                '{"cookie": "SAPISID=abc123", "x-goog-authuser": "0"}', encoding="utf-8"
-            )
+        def _fake_setup(headers_raw=None, filepath=None):
+            return '{"cookie": "SAPISID=abc123", "x-goog-authuser": "0"}'
 
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({0: ME}))
         with patch("ytmusicapi.setup", side_effect=_fake_setup):
@@ -579,27 +610,35 @@ class TestSetupRecordsIdentity:
         recorded = auth._load_recorded_identity()
         assert recorded is not None and recorded.channel_id == ME_ID
 
-    def test_manual_setup_probe_failure_leaves_no_record(
+    def test_manual_setup_probe_failure_records_an_unverified_session(
         self, tmp_path, browser, monkeypatch, capsys
     ):
+        """A paste that parses but cannot be verified is saved with a record
+        that carries no identity (`channel_id` null, `verified` false), so
+        the jar association is recorded while renewal stays refused."""
         auth = _auth(tmp_path, "0", record=OTHER_ID)
         responses = iter(["Host: music.youtube.com", "Cookie: SAPISID=abc123", ""])
         monkeypatch.setattr("builtins.input", lambda: next(responses))
 
-        def _fake_setup(filepath, headers_raw):
-            Path(filepath).write_text('{"cookie": "SAPISID=abc123"}', encoding="utf-8")
+        def _fake_setup(headers_raw=None, filepath=None):
+            return '{"cookie": "SAPISID=abc123"}'
 
         monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({}))
         with patch("ytmusicapi.setup", side_effect=_fake_setup):
             assert auth.setup_interactive(manual=True) is True
 
-        assert not auth._account_file.exists()
-        assert "automatic session renewal is not available" in capsys.readouterr().out
+        record = json.loads(auth._account_file.read_text(encoding="utf-8"))
+        assert (record["channel_id"], record["verified"]) == (None, False)
+        assert record["auth_sha256"] == hashlib.sha256(auth.auth_file.read_bytes()).hexdigest()
+        assert auth._load_recorded_identity() is None
+        assert capsys.readouterr().out.count("automatic session renewal is not available") == 1
         assert auth.try_auto_refresh() is False
 
-    def test_cookies_file_refresh_restores_record_on_validate_failure(
+    def test_cookies_file_refresh_refused_by_probe_leaves_files_untouched(
         self, tmp_path, browser, monkeypatch
     ):
+        """No backup/restore any more: the candidate is probed before anything
+        is written, so a refused refresh changes nothing."""
         auth = _auth(tmp_path, "0")
         old_auth = auth.auth_file.read_bytes()
         old_record = auth._account_file.read_bytes()
@@ -607,8 +646,7 @@ class TestSetupRecordsIdentity:
         cookies_file.write_text(
             "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2147483647\tSAPISID\tabc\n"
         )
-        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({0: ME}))
-        monkeypatch.setattr(auth, "validate", lambda: False)
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({}))
 
         assert auth._refresh_from_cookies_file(cookies_file, interactive=True) is False
         assert auth.auth_file.read_bytes() == old_auth
