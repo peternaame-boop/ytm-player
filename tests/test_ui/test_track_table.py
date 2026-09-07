@@ -74,8 +74,8 @@ async def test_columns_match_show_album_show_index_flags():
 
     app = _CaptureColumns()
     async with app.run_test():
-        assert captured["minimal"] == {"title", "artist", "duration"}
-        assert captured["full"] == {"index", "title", "artist", "album", "duration"}
+        assert captured["minimal"] == {"mark", "title", "artist", "duration"}
+        assert captured["full"] == {"mark", "index", "title", "artist", "album", "duration"}
 
 
 async def test_selected_original_index_maps_through_sort_and_filter():

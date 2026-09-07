@@ -99,4 +99,5 @@ def test_removed_actions_are_gone():
     assert km.match(("g", "A")) == (MatchResult.NO_MATCH, None)
     assert km.match(("g", "a")) == (MatchResult.NO_MATCH, None)
     assert km.match(("C-space",)) == (MatchResult.NO_MATCH, None)
-    assert km.match(("escape",)) == (MatchResult.NO_MATCH, None)
+    # Escape is bound again — to clearing marks, not to the retired CLOSE_POPUP.
+    assert km.match(("escape",)) == (MatchResult.EXACT, Action.MARK_CLEAR)

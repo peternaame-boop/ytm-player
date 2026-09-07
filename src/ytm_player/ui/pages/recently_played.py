@@ -458,46 +458,22 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         Re-renders when that source is showing, or when All is showing (it
         draws from both sources). Never steals focus: the change lands from
         playback timers, not user input, and the user may be typing in the
-        filter. The cursor stays on the same track and the filter is
-        reapplied.
+        filter. The table keeps its view across the re-render — sort,
+        filter, cursor and marks — matching rows by video ID, which every
+        view shows once.
         """
         if self._active_tab not in (index, _TAB_ALL):
             return
         if self._active_tab != _TAB_ALL and self._get_cache(index) is None:
             return
-        rows = self._rows_for(self._active_tab)
-        query = ""
-        try:
-            query = self.query_one("#track-filter", Input).value
-        except Exception:
-            logger.debug("Failed to read track filter on tab refresh", exc_info=True)
-        try:
-            table = self.query_one("#recent-table", TrackTable)
-            # Keep the cursor on the SAME TRACK, not the same row number —
-            # the prepend shifts every row down by one. Identity comes from
-            # the highlighted VISIBLE row (mapped through any active sort),
-            # not a backing-list index. The reload below resets the sort, so
-            # the target row is that track's index in the new rows.
-            cursored = table.selected_track
-            keep_row = None
-            if cursored is not None:
-                for i, t in enumerate(rows):
-                    if get_video_id(t) == get_video_id(cursored):
-                        keep_row = i
-                        break
-            self._restore_cursor_row = keep_row
-        except Exception:
-            logger.debug("Failed to preserve cursor on tab refresh", exc_info=True)
-        self._display_tracks(rows, focus=False)
-        if query:
-            try:
-                self.query_one("#recent-table", TrackTable).apply_filter(query)
-            except Exception:
-                logger.debug("Failed to reapply track filter on tab refresh", exc_info=True)
+        self._display_tracks(self._rows_for(self._active_tab), focus=False, refresh=True)
 
     # ── Rendering ────────────────────────────────────────────────────
 
-    def _display_tracks(self, tracks: list[dict], *, focus: bool = True) -> None:
+    def _display_tracks(
+        self, tracks: list[dict], *, focus: bool = True, refresh: bool = False
+    ) -> None:
+        """Show *tracks*; *refresh* re-renders the same list keeping the table's view."""
         table = self.query_one("#recent-table", TrackTable)
         loading = self.query_one("#recent-loading", Label)
 
@@ -512,7 +488,14 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
 
         loading.display = False
         table.display = True
-        table.load_tracks(tracks)
+        # Every load is keyed by video ID (each view shows a track once) so
+        # a later background refresh can carry the marks over; a deliberate
+        # load still starts with none.
+        keys = [get_video_id(t) for t in tracks]
+        if refresh:
+            table.refresh_tracks(tracks, keys=keys)
+        else:
+            table.load_tracks(tracks, keys=keys)
 
         self.track_count = len(tracks)
         self.query_one("#recent-footer", Static).update(self._footer_text(len(tracks)))

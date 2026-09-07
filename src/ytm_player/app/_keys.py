@@ -336,6 +336,9 @@ class KeyHandlingMixin(YTMHostBase):
                 | Action.PICK_COUNTRY
                 | Action.REORDER_DOWN
                 | Action.REORDER_UP
+                | Action.MARK_TOGGLE
+                | Action.MARK_RANGE
+                | Action.MARK_CLEAR
             ):
                 await self._route_navigation_action(action, count)
 

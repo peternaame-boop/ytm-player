@@ -24,6 +24,13 @@ def _make_track(video_id: str, title: str = "T") -> dict:
 class TestRemoveTrack:
     def test_removes_existing_track(self):
         table = TrackTable.__new__(TrackTable)
+        table._marked = set()
+        table._anchor = None
+        table._range_mode = False
+        table._range_base = frozenset()
+        table._selection_generation = 0
+        table._occurrence_keys = None
+        table._update_mark_status = MagicMock()
         table._show_index = True
         table._show_album = True
         table._playing_video_id = None
@@ -61,6 +68,13 @@ class TestRemoveTrack:
 
     def test_returns_false_for_missing_track(self):
         table = TrackTable.__new__(TrackTable)
+        table._marked = set()
+        table._anchor = None
+        table._range_mode = False
+        table._range_base = frozenset()
+        table._selection_generation = 0
+        table._occurrence_keys = None
+        table._update_mark_status = MagicMock()
         table._tracks = [_make_track("v1")]
         table._all_tracks = [_make_track("v1")]
         table._row_keys = ["k0"]
@@ -71,6 +85,13 @@ class TestRemoveTrack:
 
     def test_removes_from_filtered_view(self):
         table = TrackTable.__new__(TrackTable)
+        table._marked = set()
+        table._anchor = None
+        table._range_mode = False
+        table._range_base = frozenset()
+        table._selection_generation = 0
+        table._occurrence_keys = None
+        table._update_mark_status = MagicMock()
         table._show_index = True
         table._show_album = True
         table._playing_video_id = None
@@ -112,6 +133,13 @@ class TestRemoveTrack:
         # _filtered_map rebuild must match by identity, not dict equality, or
         # the surviving duplicate would be dropped/mismapped.
         table = TrackTable.__new__(TrackTable)
+        table._marked = set()
+        table._anchor = None
+        table._range_mode = False
+        table._range_base = frozenset()
+        table._selection_generation = 0
+        table._occurrence_keys = None
+        table._update_mark_status = MagicMock()
         table._show_index = True
         table._show_album = True
         table._playing_video_id = None

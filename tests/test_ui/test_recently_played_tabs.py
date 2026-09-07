@@ -130,6 +130,10 @@ def _loaded(widgets) -> list[dict]:
     return widgets["#recent-table"].load_tracks.call_args.args[0]
 
 
+def _refreshed(widgets) -> list[dict]:
+    return widgets["#recent-table"].refresh_tracks.call_args.args[0]
+
+
 def _footer(widgets) -> str:
     return str(widgets["#recent-footer"].update.call_args.args[0])
 
@@ -671,7 +675,7 @@ def test_optimistic_add_prepends_dedups_and_rerenders(monkeypatch) -> None:
     page.optimistic_add(_TAB_LOCAL, {"video_id": "vid1", "title": "X"})
 
     assert _ids(page._tab_cache[_TAB_LOCAL]) == ["vid1", "a", "b"]
-    widgets["#recent-table"].load_tracks.assert_called_once()
+    widgets["#recent-table"].refresh_tracks.assert_called_once()
 
 
 def test_optimistic_add_noop_without_cache(monkeypatch) -> None:
@@ -696,8 +700,8 @@ def test_optimistic_add_caps_local_but_not_the_account_cache(monkeypatch) -> Non
 
     assert len(page._tab_cache[_TAB_LOCAL]) == _MAX_TRACKS
     assert len(fake_app._ytm_history) == _MAX_TRACKS + 1
-    assert len(_loaded(widgets)) == _MAX_TRACKS  # the view still caps
-    assert _loaded(widgets)[0]["video_id"] == "newacc"
+    assert len(_refreshed(widgets)) == _MAX_TRACKS  # the view still caps
+    assert _refreshed(widgets)[0]["video_id"] == "newacc"
 
 
 def test_local_play_rerenders_all_while_it_is_showing(monkeypatch) -> None:
@@ -706,7 +710,7 @@ def test_local_play_rerenders_all_while_it_is_showing(monkeypatch) -> None:
 
     page.optimistic_add(_TAB_LOCAL, {"video_id": "c"})
 
-    assert _ids(_loaded(widgets)) == ["c", "a", "b"]
+    assert _ids(_refreshed(widgets)) == ["c", "a", "b"]
     assert widgets["#recent-table"].focus.call_count == 0  # background refresh
 
 
@@ -716,7 +720,7 @@ def test_accepted_account_play_rerenders_all_while_it_is_showing(monkeypatch) ->
 
     page._refresh_tab_from_cache(_TAB_YTM)
 
-    assert _ids(_loaded(widgets)) == ["a", "new", "b"]
+    assert _ids(_refreshed(widgets)) == ["a", "new", "b"]
 
 
 def test_background_update_of_another_tab_does_not_render(monkeypatch) -> None:
@@ -726,6 +730,7 @@ def test_background_update_of_another_tab_does_not_render(monkeypatch) -> None:
     page._refresh_tab_from_cache(_TAB_YTM)
 
     widgets["#recent-table"].load_tracks.assert_not_called()
+    widgets["#recent-table"].refresh_tracks.assert_not_called()
 
 
 def test_background_refresh_does_not_steal_focus(monkeypatch) -> None:
@@ -733,7 +738,7 @@ def test_background_refresh_does_not_steal_focus(monkeypatch) -> None:
 
     page._refresh_tab_from_cache(_TAB_LOCAL)
 
-    widgets["#recent-table"].load_tracks.assert_called_once()
+    widgets["#recent-table"].refresh_tracks.assert_called_once()
     widgets["#recent-table"].focus.assert_not_called()
 
 
@@ -745,29 +750,24 @@ def test_initial_display_still_focuses_table(monkeypatch) -> None:
     widgets["#recent-table"].focus.assert_called_once()
 
 
-def test_background_refresh_reapplies_active_filter(monkeypatch) -> None:
-    page, widgets, _ = _page_with_cache(monkeypatch, [{"video_id": "a"}])
+def test_background_refresh_keeps_the_table_view(monkeypatch) -> None:
+    """A background re-render goes through ``refresh_tracks`` keyed by video ID.
+
+    The table carries the sort, filter, cursor and marks across that call
+    itself (see the TrackTable tests), so the page neither reloads nor
+    reapplies the filter nor moves the cursor.
+    """
+    new = [{"video_id": "b", "title": "B"}, {"video_id": "a", "title": "A"}]
+    page, widgets, _ = _page_with_cache(monkeypatch, new)
     widgets["#track-filter"].value = "abc"
 
     page._refresh_tab_from_cache(_TAB_LOCAL)
 
-    widgets["#recent-table"].apply_filter.assert_called_once_with("abc")
-
-
-def test_background_refresh_keeps_cursor_on_same_track(monkeypatch) -> None:
-    """A dedup-move refresh is net-zero: the cursored track keeps its row.
-    Identity comes from ``selected_track`` (the highlighted VISIBLE row,
-    mapped through any active sort) — a backing-list index would restore
-    to the wrong track in a sorted view.
-    """
-    new = [{"video_id": "b", "title": "B"}, {"video_id": "a", "title": "A"}]
-    page, widgets, _ = _page_with_cache(monkeypatch, new)
-    widgets["#recent-table"].selected_track = {"video_id": "a", "title": "A"}
-    widgets["#recent-table"].row_count = 2
-
-    page._refresh_tab_from_cache(_TAB_LOCAL)
-
-    widgets["#recent-table"].move_cursor.assert_called_once_with(row=1)
+    widgets["#recent-table"].refresh_tracks.assert_called_once()
+    assert widgets["#recent-table"].refresh_tracks.call_args.kwargs["keys"] == ["b", "a"]
+    widgets["#recent-table"].load_tracks.assert_not_called()
+    widgets["#recent-table"].apply_filter.assert_not_called()
+    widgets["#recent-table"].move_cursor.assert_not_called()
 
 
 # ── Failure flags stay per source ────────────────────────────────────
