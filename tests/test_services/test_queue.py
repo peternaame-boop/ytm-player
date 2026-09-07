@@ -1,6 +1,8 @@
 """Tests for ytm_player.services.queue.QueueManager."""
 
-from ytm_player.services.queue import RepeatMode
+import random
+
+from ytm_player.services.queue import QueueManager, RepeatMode
 
 
 class TestEmptyQueue:
@@ -640,3 +642,72 @@ class TestAddNextMultiple:
         queue_manager.add_next_multiple([sample_tracks[0]])  # vid_01 already present
         assert queue_manager.length == 6
         assert queue_manager.next_track()["video_id"] == "vid_01"
+
+
+class TestShuffleOffKeepsThePlayingOccurrence:
+    """Turning shuffle off must keep the track reached under shuffle.
+
+    Only ``jump_to`` kept ``_current_index`` in sync while shuffled, so after
+    ``next_track``/``previous_track`` the toggle used to snap back to the
+    track that was playing when shuffle went on.
+    """
+
+    def _same_song(self, n: int) -> list[dict]:
+        return [
+            {"video_id": "same", "title": "Same", "artist": "A", "duration": 100} for _ in range(n)
+        ]
+
+    def test_shuffle_off_keeps_the_track_reached_by_next(self, queue_manager, sample_tracks):
+        for t in sample_tracks:
+            queue_manager.add(t)
+        queue_manager.jump_to(0)
+        queue_manager.toggle_shuffle()
+        reached = queue_manager.next_track()
+        assert reached is not None
+
+        queue_manager.toggle_shuffle()
+
+        assert queue_manager.current_track is reached
+        position = sample_tracks.index(reached)
+        assert queue_manager.current_index == position
+        following = sample_tracks[position + 1] if position + 1 < len(sample_tracks) else None
+        assert queue_manager.next_track() is following
+
+    def test_shuffle_off_keeps_the_track_reached_by_previous(self, queue_manager, sample_tracks):
+        for t in sample_tracks:
+            queue_manager.add(t)
+        queue_manager.jump_to(0)
+        queue_manager.toggle_shuffle()
+        queue_manager.next_track()
+        queue_manager.next_track()
+        reached = queue_manager.previous_track()
+        assert reached is not None
+
+        queue_manager.toggle_shuffle()
+
+        assert queue_manager.current_track is reached
+        assert queue_manager.current_index == sample_tracks.index(reached)
+
+    def test_shuffle_off_keeps_the_occurrence_among_identical_songs(self):
+        """Asserted by entry id: the same song six times, random walks, then off."""
+        for seed in range(40):
+            rng = random.Random(seed)
+            queue = QueueManager()
+            queue.add_multiple(self._same_song(6))
+            queue.jump_to(rng.randrange(6))
+            queue.toggle_shuffle()
+            for _ in range(rng.randrange(1, 12)):
+                step = rng.choice(("next", "previous", "jump"))
+                if step == "next":
+                    queue.next_track()
+                elif step == "previous":
+                    queue.previous_track()
+                else:
+                    queue.jump_to(rng.randrange(6))
+            playing_id, playing = queue.entries[queue.current_index]
+
+            queue.toggle_shuffle()
+
+            entry_id, track = queue.entries[queue.current_index]
+            assert entry_id == playing_id, f"seed {seed}"
+            assert track is playing and queue.current_track is playing

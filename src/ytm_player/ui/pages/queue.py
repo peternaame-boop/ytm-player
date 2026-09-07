@@ -85,7 +85,7 @@ class QueuePage(TrackFilterHost, Widget):
         yield Vertical(id="queue-header", classes="queue-now-playing")
         yield Static("", id="queue-source", classes="queue-source")
         yield Label("Queue is empty.", id="queue-empty", classes="queue-empty")
-        yield TrackTable(show_album=False, id="queue-table")
+        yield TrackTable(show_album=False, id="queue-table", queue_entry_keys=True)
         yield Static("", id="queue-footer", classes="queue-footer")
         yield Input(placeholder="/ Filter tracks...", id="track-filter", classes="track-filter")
 
@@ -298,10 +298,12 @@ class QueuePage(TrackFilterHost, Widget):
 
         The destination is clamped to the queue bounds, so a ``count`` larger
         than the remaining distance simply moves the track to the top/bottom
-        (e.g. ``15 J`` near the end lands it at the bottom). In a sorted or
-        filtered view the move still happens in queue order; the view keeps
-        its sort and the cursor stays on the moved entry (the refresh finds
-        it again by its queue entry id).
+        (e.g. ``15 J`` near the end lands it at the bottom). The move is in
+        queue positions: an active sort is cleared first, so the table shows
+        queue order and the row is seen to move. A filter stays; hidden rows
+        still count as positions, so a short move past one may leave the
+        visible order unchanged. Marks stay, and the cursor stays on the
+        moved entry (the refresh finds it again by its queue entry id).
         """
         from_idx = table.selected_original_index
         if from_idx is None:
@@ -309,5 +311,6 @@ class QueuePage(TrackFilterHost, Widget):
         to_idx = max(0, min(from_idx + direction * count, queue.length - 1))
         if to_idx == from_idx:
             return
+        table.clear_sort()
         queue.move(from_idx, to_idx)
         self._refresh_queue()

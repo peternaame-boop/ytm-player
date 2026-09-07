@@ -230,6 +230,7 @@ class _ShuffleButton(Widget):
             return
         app = cast("YTMHostBase", self.app)
         app.queue.toggle_shuffle()
+        app._refresh_queue_page()
         enabled = app.queue.shuffle_enabled
         try:
             bar = app.query_one("#playback-bar", PlaybackBar)

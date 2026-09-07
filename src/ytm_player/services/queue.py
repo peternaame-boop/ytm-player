@@ -284,34 +284,55 @@ class QueueManager:
     def remove(self, index: int) -> None:
         """Remove the track at the given index (in visible/playback order)."""
         with self._lock:
-            if not 0 <= index < len(self._tracks):
-                return
+            self._remove_unlocked(index)
 
-            if self._shuffle:
-                if index >= len(self._shuffle_order):
-                    return
-                real_idx = self._shuffle_order[index]
-                del self._shuffle_order[index]
-                # Shift indices that pointed beyond the removed track.
-                self._shuffle_order = [(i - 1 if i > real_idx else i) for i in self._shuffle_order]
-                del self._tracks[real_idx]
-                del self._entry_ids[real_idx]
-                if index < self._shuffle_position:
-                    self._shuffle_position -= 1
-                elif index == self._shuffle_position:
-                    # Current track removed; clamp position (mirrors the
-                    # non-shuffle branch: current() lands on the next track).
-                    if self._shuffle_position >= len(self._shuffle_order):
-                        self._shuffle_position = len(self._shuffle_order) - 1
-            else:
-                del self._tracks[index]
-                del self._entry_ids[index]
-                if index < self._current_index:
-                    self._current_index -= 1
-                elif index == self._current_index:
-                    # Current track removed; clamp index.
-                    if self._current_index >= len(self._tracks):
-                        self._current_index = len(self._tracks) - 1
+    def remove_entry(self, entry_id: int) -> bool:
+        """Remove the one occurrence *entry_id* names (see :attr:`entries`).
+
+        Returns False and changes nothing when no entry carries that id any
+        more — it was removed, or the queue was rebuilt, after the id was
+        read. The caller decides what that means; this never falls back to
+        another occurrence of the same track.
+        """
+        with self._lock:
+            try:
+                real_idx = self._entry_ids.index(entry_id)
+                index = self._shuffle_order.index(real_idx) if self._shuffle else real_idx
+            except ValueError:
+                return False
+            self._remove_unlocked(index)
+            return True
+
+    def _remove_unlocked(self, index: int) -> None:
+        """Remove the entry at visible/playback *index* (caller must hold the lock)."""
+        if not 0 <= index < len(self._tracks):
+            return
+
+        if self._shuffle:
+            if index >= len(self._shuffle_order):
+                return
+            real_idx = self._shuffle_order[index]
+            del self._shuffle_order[index]
+            # Shift indices that pointed beyond the removed track.
+            self._shuffle_order = [(i - 1 if i > real_idx else i) for i in self._shuffle_order]
+            del self._tracks[real_idx]
+            del self._entry_ids[real_idx]
+            if index < self._shuffle_position:
+                self._shuffle_position -= 1
+            elif index == self._shuffle_position:
+                # Current track removed; clamp position (mirrors the
+                # non-shuffle branch: current() lands on the next track).
+                if self._shuffle_position >= len(self._shuffle_order):
+                    self._shuffle_position = len(self._shuffle_order) - 1
+        else:
+            del self._tracks[index]
+            del self._entry_ids[index]
+            if index < self._current_index:
+                self._current_index -= 1
+            elif index == self._current_index:
+                # Current track removed; clamp index.
+                if self._current_index >= len(self._tracks):
+                    self._current_index = len(self._tracks) - 1
 
     def clear(self) -> None:
         """Remove all tracks from the queue.
@@ -474,12 +495,15 @@ class QueueManager:
     def toggle_shuffle(self) -> None:
         """Toggle shuffle mode on or off."""
         with self._lock:
+            # Resolve the playing occurrence under the mode being left. Once
+            # the flag flips, _real_index() reads the other mode's pointer,
+            # and _current_index is stale after next/previous under shuffle.
+            real = self._real_index()
             self._shuffle = not self._shuffle
             if self._shuffle:
                 self._rebuild_shuffle(keep_current=True)
             else:
-                # Exiting shuffle: restore the real index as the current position.
-                real = self._real_index()
+                # Exiting shuffle: the real index becomes the current position.
                 self._current_index = real if 0 <= real < len(self._tracks) else -1
                 self._shuffle_order.clear()
                 self._shuffle_position = -1

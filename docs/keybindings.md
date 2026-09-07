@@ -26,7 +26,7 @@
 | `Ctrl+w l` | Focus the main content, then the lyrics sidebar if it's open |
 | `Ctrl+w w` | Cycle focus through the visible panes |
 | `tab` / `Shift+tab` | Focus next / previous section — track table, result panel, Browse tab label, or any visible sidebar (then `j`/`k` move within it, `enter` activates). On Browse, `tab` highlights a tab label and `enter` opens it. |
-| `J` / `K` | Queue: move the selected track down / up (count-aware, e.g. `15 J` moves down 15) |
+| `J` / `K` | Queue: move the selected track down / up in queue order (count-aware, e.g. `15 J` moves down 15). Clears an active sort so the move is visible; a filter stays, and hidden rows still count as positions |
 | `a` | Track actions menu |
 | `v` | Mark / unmark the highlighted track (marks survive sorting and filtering; a marked track the filter hides still counts) |
 | `V` | Start a range of marks that follows the cursor; `V` again ends it, keeping the marks |

@@ -127,3 +127,69 @@ def test_clear_empties_the_entries():
     # Ids keep counting up after a clear — a new entry never reuses an old id.
     queue.add(_track("c"))
     assert _ids(queue) == [3]
+
+
+def test_remove_entry_removes_only_that_occurrence():
+    queue = QueueManager()
+    same = _track("x")
+    queue.add(_track("a"))
+    queue.add(same)
+    queue.add(_track("b"))
+    queue.add(same)  # the very same dict object, queued twice
+    ids = _ids(queue)
+
+    assert queue.remove_entry(ids[3]) is True
+
+    assert _ids(queue) == ids[:3]
+    assert queue.tracks[1] is same
+    assert _aligned(queue)
+
+
+def test_remove_entry_under_shuffle_keeps_the_playing_occurrence():
+    queue = QueueManager()
+    same = _track("x")
+    for _ in range(4):
+        queue.add(same)
+    queue.jump_to(1)
+    queue.toggle_shuffle()
+    playing_id = queue.entries[queue.current_index][0]
+    victim = next(entry_id for entry_id, _ in queue.entries if entry_id != playing_id)
+
+    assert queue.remove_entry(victim) is True
+
+    assert victim not in _ids(queue)
+    assert queue.entries[queue.current_index][0] == playing_id
+    assert queue.length == 3
+    assert _aligned(queue)
+
+
+def test_remove_entry_unknown_id_changes_nothing():
+    queue = QueueManager()
+    queue.add(_track("a"))
+    queue.add(_track("b"))
+    queue.jump_to(1)
+    before = queue.entries
+
+    assert queue.remove_entry(999) is False
+
+    assert queue.entries == before
+    assert queue.current_index == 1
+
+
+def test_remove_entry_is_false_once_the_entry_is_gone():
+    """A removed entry, or a rebuilt queue holding the same song, never resolves again."""
+    queue = QueueManager()
+    same = _track("x")
+    queue.add(same)
+    queue.add(same)
+    first, second = _ids(queue)
+    assert queue.remove_entry(second) is True
+    assert queue.remove_entry(second) is False
+    assert _ids(queue) == [first]
+
+    queue.clear()
+    queue.add_multiple([same, same])
+    rebuilt = _ids(queue)
+    assert first not in rebuilt
+    assert queue.remove_entry(first) is False
+    assert _ids(queue) == rebuilt

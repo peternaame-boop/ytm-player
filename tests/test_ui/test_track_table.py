@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from textual.app import App, ComposeResult
 
+from ytm_player.config.keymap import Action
 from ytm_player.ui.widgets.track_table import TrackTable
 
 
@@ -131,3 +132,72 @@ async def test_apply_filter_keeps_filter_active_truthful():
         assert table._filter_active is True
         table.apply_filter("")
         assert table._filter_active is False
+
+
+def _titled_tracks() -> list[dict]:
+    return [
+        {"video_id": f"t{i}", "title": title, "artist": "A", "duration": 60}
+        for i, title in enumerate(["d", "c", "b", "a"])
+    ]
+
+
+async def test_clear_sort_returns_to_load_order_keeping_marks_filter_and_cursor():
+    class _WithTable(_Host):
+        def compose(self) -> ComposeResult:
+            yield TrackTable(show_index=True, show_album=False)
+
+    app = _WithTable()
+    async with app.run_test():
+        table = app.query_one(TrackTable)
+        table.load_tracks(_titled_tracks(), keys=["k0", "k1", "k2", "k3"])
+        table.sort_by("title")  # visible: a,b,c,d = original 3,2,1,0
+        table.move_cursor(row=1)  # "b" = original 2
+        await table.handle_action(Action.MARK_TOGGLE)
+        assert [t["video_id"] for t in table.marked_tracks()] == ["t2"]
+
+        table.clear_sort()
+
+        assert [t["video_id"] for t in table.visible_tracks] == ["t0", "t1", "t2", "t3"]
+        assert table.selected_original_index == 2
+        assert table.occurrence_key(2) == "k2"
+        assert [t["video_id"] for t in table.marked_tracks()] == ["t2"]
+        assert table._sort_column is None
+
+        # Filter survives too (bypass the debounce timer).
+        table.sort_by("title")
+        table._filter_text = "b"
+        table._execute_filter()
+        table.clear_sort()
+        assert [t["video_id"] for t in table.visible_tracks] == ["t2"]
+        assert table._filter_text == "b"
+
+
+async def test_clear_sort_is_a_noop_when_unsorted():
+    class _WithTable(_Host):
+        def compose(self) -> ComposeResult:
+            yield TrackTable(show_index=True, show_album=False)
+
+    app = _WithTable()
+    async with app.run_test():
+        table = app.query_one(TrackTable)
+        table.load_tracks(_titled_tracks())
+        table.move_cursor(row=2)
+
+        table.clear_sort()
+
+        assert [t["video_id"] for t in table.visible_tracks] == ["t0", "t1", "t2", "t3"]
+        assert table.selected_original_index == 2
+        assert table.occurrence_key(2) is None  # loaded without keys
+
+
+async def test_queue_entry_keys_is_off_unless_asked_for():
+    class _WithTable(_Host):
+        def compose(self) -> ComposeResult:
+            yield TrackTable(show_album=False)
+            yield TrackTable(show_album=False, queue_entry_keys=True, id="queue-like")
+
+    app = _WithTable()
+    async with app.run_test():
+        plain, queue_like = app.query(TrackTable)
+        assert plain.queue_entry_keys is False
+        assert queue_like.queue_entry_keys is True
