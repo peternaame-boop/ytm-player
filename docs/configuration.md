@@ -73,6 +73,8 @@ prefetch_next = true         # resolve next track's stream URL in background for
 location = ""                # blank = default cache dir; set a path to override
 ```
 
+Tracks saved with **Download for Offline** live in this cache and count toward `max_size_mb`. When the limit is reached, the least recently accessed files are removed — downloads included. A download that doesn't fit within the limit on its own is reported as not retained. A download interrupted by the app being killed starts again from the beginning the next time you download that track.
+
 ### `[yt_dlp]`
 
 ```toml
