@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 class TestChartRegions:
     def test_module_imports(self):
@@ -80,18 +82,35 @@ class TestNormaliseRegion:
         assert normalise_region("gb") == "GB"
 
     def test_locale_dash_stripped(self):
-        """ES-ES, en-GB, es-MX → ES, EN, ES (locale tail discarded)."""
+        """Locale territory, not language, determines the chart region."""
         from ytm_player.services.regions import normalise_region
 
         assert normalise_region("ES-ES") == "ES"
-        assert normalise_region("ES-MX") == "ES"
-        assert normalise_region("en-GB") == "EN"
+        assert normalise_region("ES-MX") == "MX"
+        assert normalise_region("en-GB") == "GB"
 
     def test_locale_underscore_stripped(self):
         """es_ES (POSIX locale) → ES."""
         from ytm_player.services.regions import normalise_region
 
         assert normalise_region("es_ES") == "ES"
+        assert normalise_region("en_GB") == "GB"
+
+    @pytest.mark.parametrize("value", ["en-GB", "en_GB", " EN_gb "])
+    async def test_charts_receives_territory_not_language(self, ytmusic_service, value):
+        ytmusic_service._ytm.get_charts.return_value = {"songs": []}
+
+        assert await ytmusic_service.get_charts(value) == {"songs": []}
+        ytmusic_service._ytm.get_charts.assert_called_once_with(country="GB")
+
+    def test_existing_bare_values_are_preserved(self):
+        from ytm_player.services.regions import CHART_REGIONS, normalise_region
+
+        for code, name in CHART_REGIONS:
+            assert normalise_region(code.lower()) == code
+            assert normalise_region(name) == name.upper()
+        assert normalise_region("auto") == "AUTO"
+        assert normalise_region("  ") == ""
 
     def test_whitespace_trimmed(self):
         from ytm_player.services.regions import normalise_region

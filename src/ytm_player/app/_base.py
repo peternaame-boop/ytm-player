@@ -121,6 +121,8 @@ if TYPE_CHECKING:
         # ── Pending resume from prior session ──────────────────────────
         _pending_resume_video_id: str | None
         _pending_resume_position: float
+        _loaded_resume: dict | None
+        _session_restored: bool
 
         # ── Lifecycle / IPC ────────────────────────────────────────────
         _poll_timer: Any

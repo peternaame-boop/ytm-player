@@ -11,6 +11,7 @@ These guard against bugs confirmed in practice during development:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,10 +21,20 @@ from ytm_player.services.stream import StreamResolver, _detect_stream_cookies
 
 
 @pytest.fixture(autouse=True)
-def _no_real_cookie_detection(monkeypatch):
+def _no_real_cookie_detection(monkeypatch, tmp_path):
     """_get_ydl() stats the real stream cookiejar path unless stubbed; tests
-    that want a jar patch _detect_stream_cookies explicitly."""
+    that want a jar patch _detect_stream_cookies explicitly. The sign-in
+    files a jar is checked against are pointed at a scratch pair shaped like
+    an install that has not committed since upgrading (auth.json present, no
+    account.json), so an injected jar is accepted under the legacy rule."""
     monkeypatch.setattr("ytm_player.services.stream._detect_stream_cookies", lambda: None)
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "auth.json").write_text('{"cookie": "SAPISID=x"}', encoding="utf-8")
+    monkeypatch.setattr(
+        "ytm_player.services.stream._detect_session_record",
+        lambda: (str(session_dir / "auth.json"), str(session_dir / "account.json")),
+    )
 
 
 class TestDetectStreamCookies:
@@ -305,9 +316,13 @@ class TestStreamCookiejarLoading:
             resolver = StreamResolver()
             ydl = resolver._get_ydl()
         assert "cookiefile" not in fake_class.call_args.args[0]
-        ydl.cookiejar.load.assert_called_once_with(
-            str(jar), ignore_discard=True, ignore_expires=True
-        )
+        # Loaded from the bytes that were checked, not by re-reading the path.
+        ydl.cookiejar.load.assert_called_once()
+        loaded, kwargs = ydl.cookiejar.load.call_args
+        assert loaded[0].getvalue() == jar.read_bytes().decode(
+            "utf-8"
+        )  # exact bytes, no newline translation
+        assert kwargs == {"ignore_discard": True, "ignore_expires": True}
         assert resolver._ydl_cookiejar_sig is not None
         assert resolver._ydl_cookiejar_sig[0] == str(jar)
 
@@ -361,8 +376,9 @@ class TestStreamCookiejarLoading:
 
         assert second is not first
         first.close.assert_called_once()
-        second.cookiejar.load.assert_called_once_with(
-            str(jar), ignore_discard=True, ignore_expires=True
+        second.cookiejar.load.assert_called_once()
+        assert second.cookiejar.load.call_args.args[0].getvalue() == jar.read_bytes().decode(
+            "utf-8"
         )
 
     def test_rewritten_jar_is_ignored_when_anonymous(self, tmp_path, monkeypatch):
@@ -462,3 +478,141 @@ class TestClientAndFormatSelection:
         ydl = yt_dlp.YoutubeDL({"quiet": True})
         for selector in QUALITY_FORMATS.values():
             ydl.build_format_selector(selector)  # raises SyntaxError if malformed
+
+
+class TestStreamCookiejarVouching:
+    """With ``[yt_dlp] use_session_cookies`` on, the resolver loads the jar
+    only when the sign-in record for the current auth.json vouches for it by
+    hash (auth.read_vouched_stream_jar). The cached signature covers all
+    three files, so a change to any one of them — auth.json alone included —
+    rebuilds the instance and reruns the check; and it is the signature of
+    the exact snapshot that was checked, never a separate stat."""
+
+    AUTH = b'{"cookie": "SAPISID=x", "x-goog-authuser": "0"}'
+    JAR = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2147483647\tSAPISID\tabc\n"
+
+    def _pair(self, tmp_path, monkeypatch, *, vouched=True):
+        import hashlib
+
+        session_dir = tmp_path / "vouched"
+        session_dir.mkdir()
+        jar = session_dir / "stream_cookies.txt"
+        auth = session_dir / "auth.json"
+        record = session_dir / "account.json"
+        jar.write_bytes(self.JAR.encode("utf-8"))  # exact bytes on every platform
+        auth.write_bytes(self.AUTH)
+        record.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "auth_sha256": hashlib.sha256(self.AUTH).hexdigest(),
+                    "stream_sha256": hashlib.sha256(jar.read_bytes()).hexdigest()
+                    if vouched
+                    else "00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        settings = Settings()
+        settings.yt_dlp.use_session_cookies = True
+        monkeypatch.setattr("ytm_player.services.stream.get_settings", lambda: settings)
+        monkeypatch.setattr("ytm_player.services.stream._detect_stream_cookies", lambda: str(jar))
+        monkeypatch.setattr(
+            "ytm_player.services.stream._detect_session_record",
+            lambda: (str(auth), str(record)),
+        )
+        return jar, auth, record
+
+    def _resolver(self):
+        fake_class = MagicMock(side_effect=lambda opts: MagicMock())
+        patcher = patch("yt_dlp.YoutubeDL", fake_class)
+        patcher.start()
+        return StreamResolver(), patcher
+
+    @staticmethod
+    def _loaded(ydl) -> str | None:
+        if not ydl.cookiejar.load.called:
+            return None
+        return ydl.cookiejar.load.call_args.args[0].getvalue()
+
+    def test_vouched_jar_is_loaded_from_the_checked_bytes(self, tmp_path, monkeypatch):
+        jar, auth, record = self._pair(tmp_path, monkeypatch)
+        resolver, patcher = self._resolver()
+        try:
+            ydl = resolver._get_ydl()
+        finally:
+            patcher.stop()
+        assert self._loaded(ydl) == self.JAR
+        from ytm_player.services.auth import read_vouched_stream_jar
+
+        checked = read_vouched_stream_jar(str(jar), (str(auth), str(record)))
+        assert resolver._ydl_cookiejar_sig == checked.signature
+
+    def test_unvouched_jar_is_refused_once_and_the_instance_reused(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        self._pair(tmp_path, monkeypatch, vouched=False)
+        resolver, patcher = self._resolver()
+        try:
+            with caplog.at_level("WARNING", logger="ytm_player.services.auth"):
+                first = resolver._get_ydl()
+                resolver._active_resolves -= 1
+                second = resolver._get_ydl()
+        finally:
+            patcher.stop()
+        assert second is first
+        assert self._loaded(first) is None
+        assert caplog.text.count("Stream cookie file") == 1  # no rebuild churn
+        assert resolver._ydl_cookiejar_sig is not None
+
+    @pytest.mark.parametrize("changed", ["auth", "record", "jar"])
+    def test_a_change_to_any_sign_in_file_rebuilds_and_rechecks(
+        self, tmp_path, monkeypatch, changed
+    ):
+        jar, auth, record = self._pair(tmp_path, monkeypatch)
+        resolver, patcher = self._resolver()
+        try:
+            first = resolver._get_ydl()
+            resolver._active_resolves -= 1
+            assert self._loaded(first) == self.JAR
+            if changed == "auth":
+                auth.write_bytes(b'{"cookie": "SAPISID=other", "x-goog-authuser": "0"}')
+            elif changed == "record":
+                record.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+            else:
+                jar.write_bytes((self.JAR + "# extra\n").encode("utf-8"))
+            second = resolver._get_ydl()
+        finally:
+            patcher.stop()
+        assert second is not first
+        assert self._loaded(second) is None  # rechecked: no longer vouched
+
+    def test_cached_signature_is_the_reads_own_snapshot(self, tmp_path, monkeypatch):
+        """A commit landing between the vouching read and the cache update
+        must not be described by the cached signature: the next _get_ydl
+        sees a difference and rebuilds instead of keeping a stale jar."""
+        jar, auth, record = self._pair(tmp_path, monkeypatch)
+        from ytm_player.services import auth as auth_module
+
+        real_read = auth_module.read_vouched_stream_jar
+        snapshots = []
+
+        def read_then_commit(jar_path, session):
+            result = real_read(jar_path, session)
+            snapshots.append(result.signature)
+            record.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")  # lands now
+            return result
+
+        monkeypatch.setattr(auth_module, "read_vouched_stream_jar", read_then_commit)
+        resolver, patcher = self._resolver()
+        try:
+            first = resolver._get_ydl()
+            resolver._active_resolves -= 1
+            assert resolver._ydl_cookiejar_sig == snapshots[0]
+            monkeypatch.setattr(auth_module, "read_vouched_stream_jar", real_read)
+            second = resolver._get_ydl()
+        finally:
+            patcher.stop()
+        assert self._loaded(first) == self.JAR
+        assert second is not first
+        assert self._loaded(second) is None

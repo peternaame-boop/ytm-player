@@ -12,7 +12,7 @@ from ytm_player.services.stream import StreamInfo, StreamResolver
 
 
 @pytest.fixture(autouse=True)
-def _no_real_cookie_detection(monkeypatch):
+def _no_real_cookie_detection(monkeypatch, tmp_path):
     """_build_ydl_opts() calls _detect_stream_cookies() for real whenever
     cookiefile isn't already configured (the default — see
     YtDlpSettings.cookies_file) — and that function checks whether
@@ -22,9 +22,17 @@ def _no_real_cookie_detection(monkeypatch):
     yt_dlp.YoutubeDL mocked, so without stubbing this out, a routine test
     run could pick up a real cookiejar file from the developer's actual
     ~/.config/ytm-player/ — the side effect this project's test suite is
-    built to avoid.
+    built to avoid. The sign-in files a jar would be checked against are
+    pointed at a scratch pair for the same reason.
     """
     monkeypatch.setattr("ytm_player.services.stream._detect_stream_cookies", lambda: None)
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "auth.json").write_text('{"cookie": "SAPISID=x"}', encoding="utf-8")
+    monkeypatch.setattr(
+        "ytm_player.services.stream._detect_session_record",
+        lambda: (str(session_dir / "auth.json"), str(session_dir / "account.json")),
+    )
 
 
 def _make_info(video_id: str = "test123", ttl: float = 18000) -> StreamInfo:
