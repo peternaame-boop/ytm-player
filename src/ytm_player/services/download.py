@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,7 +40,7 @@ class DownloadService:
     def __init__(self, download_dir: Path | None = None) -> None:
         settings = get_settings()
         self._download_dir = download_dir or settings.cache_dir
-        self._active: set[str] = set()
+        self._active: dict[str, asyncio.Task[DownloadResult]] = {}
 
     def _ensure_dir(self) -> None:
         self._download_dir.mkdir(parents=True, exist_ok=True)
@@ -72,20 +74,40 @@ class DownloadService:
             return DownloadResult(video_id=video_id, success=False, error="Invalid video ID")
 
         self._ensure_dir()
-        output_template = str(self._download_dir / f"{video_id}.%(ext)s")
         url = f"https://music.youtube.com/watch?v={video_id}"
 
         try:
-            opts = self._build_opts(output_template)
-            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[arg-type]
-                ydl.download([url])
+            # FFmpeg can leave its final extension behind on failure. Keep all
+            # job output private until yt-dlp and its context finish successfully.
+            # Staging on the same filesystem allows atomic publication below.
+            with tempfile.TemporaryDirectory(
+                prefix=f".{video_id}-", dir=self._download_dir
+            ) as stage:
+                output_template = str(Path(stage) / f"{video_id}.%(ext)s")
+                opts = self._build_opts(output_template)
+                with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[arg-type]
+                    status = ydl.download([url])
+                if status != 0:
+                    return DownloadResult(
+                        video_id=video_id, success=False, error="yt-dlp reported a download failure"
+                    )
 
-            # Find the downloaded file (extension may vary).
-            for ext in ("opus", "webm", "m4a", "mp3", "ogg"):
-                path = self._download_dir / f"{video_id}.{ext}"
-                if path.exists():
-                    secure_chmod(path, SECURE_FILE_MODE)
-                    return DownloadResult(video_id=video_id, success=True, file_path=path)
+                # Find the downloaded file (extension may vary).
+                for ext in ("opus", "webm", "m4a", "mp3", "ogg"):
+                    path = Path(stage) / f"{video_id}.{ext}"
+                    if path.is_file():
+                        secure_chmod(path, SECURE_FILE_MODE)
+                        dest = self._download_dir / path.name
+                        if os.path.lexists(dest):
+                            return DownloadResult(
+                                video_id=video_id,
+                                success=False,
+                                error="Download destination already exists",
+                            )
+                        # The active-ID owner excludes other writers in this service.
+                        # This check/replace is not an external-writer no-clobber lock.
+                        os.replace(path, dest)
+                        return DownloadResult(video_id=video_id, success=True, file_path=dest)
 
             return DownloadResult(
                 video_id=video_id,
@@ -98,15 +120,37 @@ class DownloadService:
             return DownloadResult(video_id=video_id, success=False, error=str(exc))
 
     async def download(self, video_id: str) -> DownloadResult:
-        """Download a single track asynchronously."""
+        """Download or reuse a completed track, retaining ownership until its thread exits.
+
+        Cancelling the caller does not stop yt-dlp. Shield the owned task so
+        retries cannot start another writer while that thread is still running.
+        """
+        if not VALID_VIDEO_ID.match(video_id):
+            return DownloadResult(video_id=video_id, success=False, error="Invalid video ID")
         if video_id in self._active:
             return DownloadResult(video_id=video_id, success=False, error="Already downloading")
 
-        self._active.add(video_id)
-        try:
-            return await asyncio.to_thread(self._download_sync, video_id)
-        finally:
-            self._active.discard(video_id)
+        existing = self.get_path(video_id)
+        if existing is not None:
+            return DownloadResult(video_id=video_id, success=True, file_path=existing)
+
+        task = asyncio.create_task(asyncio.to_thread(self._download_sync, video_id))
+        self._active[video_id] = task
+        task.add_done_callback(lambda completed: self._download_done(video_id, completed))
+        return await asyncio.shield(task)
+
+    def _download_done(self, video_id: str, task: asyncio.Task[DownloadResult]) -> None:
+        """Release the writer and observe errors even when its caller was cancelled."""
+        if self._active.get(video_id) is task:
+            del self._active[video_id]
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                logger.error(
+                    "Download worker failed for %s",
+                    video_id,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
 
     async def download_multiple(
         self,
@@ -140,7 +184,9 @@ class DownloadService:
         return self.get_path(video_id) is not None
 
     def get_path(self, video_id: str) -> Path | None:
-        """Return the path to a downloaded file, or None."""
+        """Return a completed download, never a file its worker may still be writing."""
+        if video_id in self._active:
+            return None
         for ext in ("opus", "webm", "m4a", "mp3", "ogg"):
             path = self._download_dir / f"{video_id}.{ext}"
             if path.exists():

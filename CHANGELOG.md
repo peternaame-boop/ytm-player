@@ -22,6 +22,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Downloaded audio is indexed for playback** — files already in the configured cache directory are no longer copied onto themselves. Retrying Download repairs an existing unindexed file without downloading it again, and indexing failures are reported.
+- **Cancelled downloads retain their writer until completion** — retries cannot start another writer for the same track while yt-dlp is still running. New downloads publish their final cache file only after downloading and postprocessing succeed, so failed conversion output cannot be reused as a completed download.
 - **Double-clicking a sidebar playlist loaded it three times** — one double-click fired two single-click selections plus the double-click, starting three concurrent playlist fetches. It now fires exactly one selection and one double-click.
 - **Playback failed with `HTTP error 403 Forbidden` on every track** (#140, #142) — YouTube started rejecting streams from yt-dlp's former default client on 2026-08-17; yt-dlp 2026.08.19 dropped that client. ytm-player now requires `yt-dlp>=2026.8.19`, so upgrading ytm-player pulls in the fix. Per-installer upgrade steps: [Troubleshooting](docs/troubleshooting.md#playback-fails-with-http-error-403-forbidden).
 - **Explicit play inherited last session's shuffle** — double-clicking a playlist (or playing any album, artist, or page selection) kept whatever shuffle state was left over, so the queue showed a shuffled order with no hint why. Explicit play now starts unshuffled unless that collection has a saved shuffle preference; the toast reads `Playing: <name> (shuffled)` when shuffle is on.
