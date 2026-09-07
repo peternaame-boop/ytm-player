@@ -13,6 +13,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from ytm_player.app._mpris import MPRISMixin
 from ytm_player.app._playback import _MAX_CONSECUTIVE_FAILURES, PlaybackMixin
 
@@ -58,6 +60,70 @@ def _fresh_playback_host():
     p._local_history_claim = None
     p._play_lock = asyncio.Lock()
     return p
+
+
+def _stream_info(video_id: str):
+    from ytm_player.services.stream import StreamInfo
+
+    return StreamInfo(
+        url=f"http://stream/{video_id}",
+        video_id=video_id,
+        format="opus",
+        bitrate=0,
+        duration=180,
+        expires_at=float("inf"),
+        thumbnail_url=None,
+    )
+
+
+class TestResumeInvalidationHook:
+    """The resume point read from session.json is a fallback for the session
+    save only until a track's load is accepted (not proof audio started —
+    stream errors still arrive later as ERROR events)."""
+
+    _RESUME = {"video_id": "A", "position": 42.0, "playlist_id": None}
+
+    @pytest.mark.parametrize("video_id", ["A", "B"])
+    async def test_accepted_load_invalidates_the_disk_resume(self, video_id):
+        host = _fresh_playback_host()
+        host._loaded_resume = dict(self._RESUME)
+        host.stream_resolver.resolve = AsyncMock(return_value=_stream_info(video_id))
+
+        async def _accept_load(url, track, attempt=None):
+            host.player.current_track = track
+
+        host.player.play = AsyncMock(side_effect=_accept_load)
+        host.player.seek_absolute = AsyncMock()
+
+        await host.play_track({"video_id": video_id, "title": "X"})
+
+        assert host._loaded_resume is None
+
+    async def test_failed_load_keeps_the_disk_resume(self):
+        host = _fresh_playback_host()
+        host._loaded_resume = dict(self._RESUME)
+        host.stream_resolver.resolve = AsyncMock(return_value=_stream_info("B"))
+        # play() swallows a load failure: current_track stays None.
+        host.player.play = AsyncMock()
+
+        await host.play_track({"video_id": "B", "title": "X"})
+
+        assert host._loaded_resume == self._RESUME
+
+    async def test_superseded_play_keeps_the_disk_resume(self):
+        host = _fresh_playback_host()
+        host._loaded_resume = dict(self._RESUME)
+
+        async def _resolve_and_supersede(video_id):
+            host._play_generation += 1  # a newer play_track landed meanwhile
+            return _stream_info(video_id)
+
+        host.stream_resolver.resolve = AsyncMock(side_effect=_resolve_and_supersede)
+
+        await host.play_track({"video_id": "B", "title": "X"})
+
+        host.player.play.assert_not_awaited()
+        assert host._loaded_resume == self._RESUME
 
 
 class TestPlayTrackDebounce:

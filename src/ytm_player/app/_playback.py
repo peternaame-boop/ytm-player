@@ -199,6 +199,10 @@ class PlaybackMixin(YTMHostBase):
         # swallows load failures (clears current_track and reports an ERROR
         # event), so reaching here doesn't mean playback is on.
         if self.player.current_track is not None:
+            # Load accepted (stream errors still arrive later as ERROR
+            # events): the resume point read from session.json is no longer
+            # a fallback for _save_session_state.
+            self._loaded_resume = None
             self._schedule_local_history_log(track, video_id, generation)
             self._schedule_ytm_history_report(track, video_id, generation)
 

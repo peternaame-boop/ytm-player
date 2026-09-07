@@ -7,14 +7,24 @@ launch the app at all after one bad shutdown.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from ytm_player.app._mpris import MPRISMixin
+from ytm_player.app._playback import PlaybackMixin
 from ytm_player.app._session import SessionMixin
-from ytm_player.services.queue import RepeatMode
+from ytm_player.services.queue import QueueManager, RepeatMode
+from ytm_player.services.stream import StreamInfo
 
 
 def _fresh_session_host():
     h = SessionMixin()
+    # Every existing save test models a host whose restore already ran.
+    h._session_restored = True
+    h._loaded_resume = None
     h.player = MagicMock()
     h.player.set_volume = AsyncMock()
     h.queue = MagicMock()
@@ -231,6 +241,325 @@ class TestSaveSessionResumeGuard:
         assert written["resume"] is not None
         assert written["resume"]["video_id"] == "abc"
         assert written["resume"]["position"] == 42.5
+
+
+_RESUME_A = {"video_id": "A", "position": 42.0, "playlist_id": "PL"}
+
+
+def _track(video_id: str) -> dict:
+    return {
+        "video_id": video_id,
+        "title": f"song-{video_id}",
+        "artist": "Artist",
+        "artists": [{"name": "Artist", "id": "1"}],
+        "album": "",
+        "album_id": None,
+        "duration": 180,
+        "thumbnail_url": None,
+        "is_video": False,
+    }
+
+
+def _write_session(path, *, queue_ids=("A", "B"), resume=_RESUME_A) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "volume": 80,
+                "repeat": "off",
+                "shuffle": False,
+                "queue_tracks": [_track(v) for v in queue_ids],
+                "queue_index": 0,
+                "resume": resume,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _restore_host(tmp_path, monkeypatch, *, resume_on_launch: bool, queue_ids=("A", "B")):
+    """A session host with a real QueueManager and a session file on disk."""
+    h = _fresh_session_host()
+    h._session_restored = False
+    h.settings.playback.resume_on_launch = resume_on_launch
+    h.queue = QueueManager()
+    h.player.current_track = None
+    h.player.position = 0.0
+    h.player.volume = 80
+    h._get_transliteration_state = lambda: False
+    target = tmp_path / "session.json"
+    _write_session(target, queue_ids=queue_ids)
+    monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", target, raising=False)
+    return h, target
+
+
+def _saved(target) -> dict:
+    return json.loads(target.read_text(encoding="utf-8"))
+
+
+class TestUntouchedSessionPreserved:
+    """The resume point read from disk is written back until a track's load
+    is accepted this session; after that only the live rule applies."""
+
+    @pytest.mark.parametrize("resume_on_launch", [True, False])
+    async def test_save_without_playback_writes_the_disk_resume_back(
+        self, tmp_path, monkeypatch, resume_on_launch
+    ):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=resume_on_launch)
+        await h._restore_session_state()
+
+        h._save_session_state()
+
+        saved = _saved(target)
+        assert saved["resume"] == _RESUME_A
+        assert [t["video_id"] for t in saved["queue_tracks"]] == ["A", "B"]
+
+    async def test_resume_track_missing_from_queue_is_still_preserved(self, tmp_path, monkeypatch):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=True, queue_ids=("C",))
+        await h._restore_session_state()
+        assert h._pending_resume_video_id is None  # nothing staged
+
+        h._save_session_state()
+
+        assert _saved(target)["resume"] == _RESUME_A
+
+    @pytest.mark.parametrize("resume_on_launch", [True, False])
+    async def test_play_resumed_track_then_stop_saves_no_resume(
+        self, tmp_path, monkeypatch, resume_on_launch
+    ):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=resume_on_launch)
+        await h._restore_session_state()
+        # What play_track does once A's load is accepted, then Stop.
+        h._loaded_resume = None
+        h._pending_resume_video_id = None
+        h._pending_resume_position = 0.0
+        h.player.current_track = None
+        h.player.position = 0.0
+
+        h._save_session_state()
+
+        assert _saved(target)["resume"] is None
+
+    @pytest.mark.parametrize("resume_on_launch", [True, False])
+    async def test_play_other_track_then_stop_saves_no_resume(
+        self, tmp_path, monkeypatch, resume_on_launch
+    ):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=resume_on_launch)
+        await h._restore_session_state()
+        h._loaded_resume = None  # B's load accepted; the staged A seek stays in-session only
+        h.player.current_track = None
+        h.player.position = 0.0
+
+        h._save_session_state()
+
+        assert _saved(target)["resume"] is None
+
+    async def test_other_track_still_playing_saves_its_live_position(self, tmp_path, monkeypatch):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=True)
+        await h._restore_session_state()
+        h._loaded_resume = None
+        h.player.current_track = {"video_id": "B", "title": "song-B"}
+        h.player.position = 30.0
+
+        h._save_session_state()
+
+        assert _saved(target)["resume"] == {"video_id": "B", "position": 30.0, "playlist_id": "PL"}
+
+
+class _SequenceHost(SessionMixin, PlaybackMixin, MPRISMixin):
+    """Real mixin code end to end: restore → play_track → Stop handler → save."""
+
+
+def _sequence_host(tmp_path, monkeypatch, *, resume_on_launch: bool):
+    h = _SequenceHost()
+    h.settings = MagicMock()
+    h.settings.playback.default_volume = 80
+    h.settings.playback.resume_on_launch = resume_on_launch
+    h.settings.notifications.enabled = False
+    h.player = MagicMock()
+    h.player.set_volume = AsyncMock()
+    h.player.seek_absolute = AsyncMock()
+    h.player.current_track = None
+    h.player.position = 0.0
+    h.player.volume = 80
+
+    async def _accept_load(url, track, attempt=None):
+        h.player.current_track = track
+
+    h.player.play = AsyncMock(side_effect=_accept_load)
+
+    async def _stop():
+        # Mirrors Player.stop(): nothing is current and mpv reads position 0.
+        h.player.current_track = None
+        h.player.position = 0.0
+
+    h.player.stop = AsyncMock(side_effect=_stop)
+    h.queue = QueueManager()
+    h.stream_resolver = MagicMock()
+    h.stream_resolver.clear_cache = MagicMock()
+
+    async def _resolve(video_id):
+        return StreamInfo(
+            url=f"http://stream/{video_id}",
+            video_id=video_id,
+            format="opus",
+            bitrate=0,
+            duration=180,
+            expires_at=float("inf"),
+            thumbnail_url=None,
+        )
+
+    h.stream_resolver.resolve = AsyncMock(side_effect=_resolve)
+    h.history = None
+    h.cache = None
+    h.discord = None
+    h.lastfm = None
+    h.mpris = None
+    h.mac_media = None
+    h.ytmusic = None
+    h.notify = MagicMock()
+    h.call_later = MagicMock()
+    h.run_worker = MagicMock()
+    h.set_timer = MagicMock()
+    h.query_one = MagicMock(side_effect=Exception("no widget in test"))
+    h._sidebar_per_page = {}
+    h._sidebar_default = True
+    h._lyrics_sidebar_open = False
+    h._active_library_playlist_id = None
+    h._pending_resume_video_id = None
+    h._pending_resume_position = 0.0
+    h._first_run_hint_shown = False
+    h._mpris_hint_shown = False
+    h._session_restored = False
+    h._loaded_resume = None
+    h._last_play_video_id = None
+    h._last_play_time = 0.0
+    h._consecutive_failures = 0
+    h._track_start_position = 0.0
+    h._advancing = False
+    h._play_generation = 0
+    h._recovery_generation = None
+    h._handled_error_attempt = 0
+    h._local_history_claim = None
+    h._play_lock = asyncio.Lock()
+    h._get_transliteration_state = lambda: False
+    target = tmp_path / "session.json"
+    _write_session(target)
+    monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", target, raising=False)
+    return h, target
+
+
+class TestRestorePlayStopSaveSequence:
+    """End to end through the real mixins, not by clearing _loaded_resume by hand.
+
+    Stop goes through the real ``MPRISMixin._mpris_stop``; only ``Player.stop``
+    underneath it is mocked.
+    """
+
+    @pytest.mark.parametrize("resume_on_launch", [True, False])
+    @pytest.mark.parametrize("played", ["A", "B"], ids=["resumed-track", "other-track"])
+    async def test_restore_play_stop_save_sequence(
+        self, tmp_path, monkeypatch, resume_on_launch, played
+    ):
+        h, target = _sequence_host(tmp_path, monkeypatch, resume_on_launch=resume_on_launch)
+        await h._restore_session_state()
+        assert h._loaded_resume == _RESUME_A
+        assert (h._pending_resume_video_id == "A") is resume_on_launch
+
+        await h.play_track(_track(played))
+        h.player.play.assert_awaited_once()
+        assert h._loaded_resume is None
+        generation = h._play_generation
+
+        await h._mpris_stop()
+        h.player.stop.assert_awaited_once()
+        assert h._play_generation == generation + 1
+
+        h._save_session_state()
+
+        saved = _saved(target)
+        assert saved["resume"] is None
+        assert [t["video_id"] for t in saved["queue_tracks"]] == ["A", "B"]
+
+    @pytest.mark.parametrize("resume_on_launch", [True, False])
+    async def test_restore_then_save_untouched(self, tmp_path, monkeypatch, resume_on_launch):
+        h, target = _sequence_host(tmp_path, monkeypatch, resume_on_launch=resume_on_launch)
+        await h._restore_session_state()
+
+        h._save_session_state()
+
+        saved = _saved(target)
+        assert saved["resume"] == _RESUME_A
+        assert [t["video_id"] for t in saved["queue_tracks"]] == ["A", "B"]
+        h.player.play.assert_not_awaited()
+
+
+class TestSaveGatedOnRestore:
+    """No restore this run → nothing in memory is authoritative → no save."""
+
+    def test_save_before_restore_leaves_the_file_untouched(self, tmp_path, monkeypatch, caplog):
+        target = tmp_path / "session.json"
+        _write_session(target)
+        before = target.read_bytes()
+        monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", target, raising=False)
+        h = _save_session_host(tmp_path)
+        h._session_restored = False
+        h.player.position = 42.0  # would have been saved as a live resume
+
+        with caplog.at_level("WARNING"):
+            h._save_session_state()
+
+        assert target.read_bytes() == before
+        assert not target.with_suffix(".json.tmp").exists()
+        assert "never restored" in caplog.text
+
+    async def test_deliberate_queue_clear_after_restore_is_saved(self, tmp_path, monkeypatch):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=True)
+        await h._restore_session_state()
+        assert h.queue.length == 2
+
+        h.queue.clear()
+        h._save_session_state()
+
+        assert _saved(target)["queue_tracks"] == []
+
+    @pytest.mark.parametrize("resume_on_launch", [True, False])
+    async def test_restore_sets_the_flag_on_both_exit_paths(
+        self, tmp_path, monkeypatch, resume_on_launch
+    ):
+        h, _ = _restore_host(tmp_path, monkeypatch, resume_on_launch=resume_on_launch)
+        assert h._session_restored is False
+
+        await h._restore_session_state()
+
+        assert h._session_restored is True
+
+    async def test_restore_that_raises_leaves_the_flag_false(self, tmp_path, monkeypatch):
+        h, _ = _restore_host(tmp_path, monkeypatch, resume_on_launch=True)
+        h.queue = MagicMock()
+        h.queue.add_multiple = MagicMock(side_effect=RuntimeError("boom"))
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await h._restore_session_state()
+
+        assert h._session_restored is False
+
+
+class TestSessionShape:
+    @pytest.mark.parametrize("content", ["[]", '"x"', "42"])
+    async def test_non_object_json_is_treated_as_empty(self, tmp_path, monkeypatch, content):
+        h = _fresh_session_host()
+        h._session_restored = False
+        bad = tmp_path / "session.json"
+        bad.write_text(content, encoding="utf-8")
+        monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", bad, raising=False)
+
+        await h._restore_session_state()
+
+        h.player.set_volume.assert_awaited_once_with(80)
+        h.queue.set_repeat.assert_called_once_with(RepeatMode.OFF)
+        assert h._loaded_resume is None
+        assert h._session_restored is True
 
 
 class TestMprisHintFlag:

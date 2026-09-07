@@ -109,6 +109,9 @@ class QueuePage(TrackFilterHost, Widget):
 
     def _register_player_events(self) -> None:
         player = self.app.player  # type: ignore[attr-defined]
+        if player is None:
+            # Startup stopped before the player existed; the page still shows.
+            return
         self._track_change_callback = self._on_track_change
         player.on(PlayerEvent.TRACK_CHANGE, self._track_change_callback)
 

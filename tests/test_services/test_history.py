@@ -1,6 +1,9 @@
 """Tests for ytm_player.services.history.HistoryManager."""
 
+import asyncio
+import os
 import sqlite3
+from collections.abc import Callable
 from unittest.mock import Mock
 
 import aiosqlite
@@ -283,3 +286,116 @@ class TestSqliteErrorsWrapped:
         with pytest.raises(RuntimeError, match="Failed to write to history database"):
             await history_manager.init()
         await history_manager.close()
+
+
+class _CapturingConnect:
+    """``aiosqlite.connect`` wrapper exposing the connection a test created.
+
+    Cleanup is asserted against that connection — its ``close`` awaited once
+    and its worker thread finished — never against the absence of every
+    SQLite thread in the process.
+    """
+
+    def __init__(self, on_connect: Callable[[aiosqlite.Connection], None] | None = None) -> None:
+        self.conn: aiosqlite.Connection | None = None
+        self.close_calls = 0
+        self._on_connect = on_connect
+        self._real = aiosqlite.connect
+
+    async def __call__(self, path, *args, **kwargs):
+        conn = await self._real(path, *args, **kwargs)
+        real_close = conn.close
+
+        async def close():
+            self.close_calls += 1
+            await real_close()
+
+        conn.close = close
+        self.conn = conn
+        if self._on_connect is not None:
+            self._on_connect(conn)
+        return conn
+
+    def assert_released(self) -> None:
+        assert self.conn is not None, "no connection was created"
+        assert self.close_calls == 1
+        self.conn._thread.join(timeout=2.0)
+        assert not self.conn._thread.is_alive()
+
+
+class TestInitCleanup:
+    """A failed or cancelled ``init()`` closes its connection and does not delete or
+    replace the file (SQLite itself may still touch journal/WAL state).
+    """
+
+    async def test_garbage_file_raises_runtime_error_keeps_bytes_and_closes_the_connection(
+        self, tmp_path, monkeypatch
+    ):
+        db_path = tmp_path / "history.db"
+        garbage = os.urandom(64)
+        db_path.write_bytes(garbage)
+        capture = _CapturingConnect()
+        monkeypatch.setattr("ytm_player.services.history.aiosqlite.connect", capture)
+        manager = HistoryManager(db_path=db_path)
+
+        with pytest.raises(RuntimeError, match="Failed to open history database"):
+            await manager.init()
+
+        # This fixture only: a 64-byte non-database file stays byte-identical.
+        assert db_path.read_bytes() == garbage
+        assert manager._db is None
+        capture.assert_released()
+        await manager.close()  # no-op after a failed init
+
+    async def test_directory_path_raises_runtime_error(self, tmp_path):
+        manager = HistoryManager(db_path=tmp_path)  # an existing directory
+
+        with pytest.raises(RuntimeError, match="Failed to open history database"):
+            await manager.init()
+
+        assert manager._db is None
+        assert tmp_path.is_dir()
+
+    async def test_prune_failure_closes_the_connection(self, history_manager, monkeypatch):
+        def poison_prune(conn: aiosqlite.Connection) -> None:
+            real_execute = conn.execute
+
+            def execute_wrapper(sql, *a, **k):
+                if "DELETE FROM play_history" in sql:
+                    raise sqlite3.OperationalError("database is locked")
+                return real_execute(sql, *a, **k)
+
+            conn.execute = execute_wrapper
+
+        capture = _CapturingConnect(on_connect=poison_prune)
+        monkeypatch.setattr("ytm_player.services.history.aiosqlite.connect", capture)
+
+        with pytest.raises(RuntimeError, match="Failed to write to history database"):
+            await history_manager.init()
+
+        assert history_manager._db is None
+        capture.assert_released()
+
+    async def test_cancellation_during_init_releases_the_connection(
+        self, history_manager, monkeypatch
+    ):
+        reached_schema = asyncio.Event()
+
+        def block_schema(conn: aiosqlite.Connection) -> None:
+            async def blocked(*_args, **_kwargs):
+                reached_schema.set()
+                await asyncio.Event().wait()  # never set: init() hangs here
+
+            conn.executescript = blocked
+
+        capture = _CapturingConnect(on_connect=block_schema)
+        monkeypatch.setattr("ytm_player.services.history.aiosqlite.connect", capture)
+        task = asyncio.create_task(history_manager.init())
+        await reached_schema.wait()
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert history_manager._db is None
+        capture.assert_released()
