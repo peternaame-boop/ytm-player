@@ -17,6 +17,7 @@ else:
     # Python 3.10 backport via PyPI
     import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
+import requests.exceptions
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 
@@ -29,7 +30,10 @@ from ytm_player.app._session import SessionMixin
 from ytm_player.app._sidebar import SidebarMixin
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.config import KeyMap, get_keymap
-from ytm_player.config.paths import THEME_FILE  # noqa: F401  # module-level for monkeypatch
+from ytm_player.config.paths import (  # noqa: F401  # THEME_FILE module-level for monkeypatch
+    HISTORY_DB,
+    THEME_FILE,
+)
 from ytm_player.config.settings import Settings, get_settings
 from ytm_player.ipc import IPCServer, remove_pid
 from ytm_player.services.auth import AuthManager
@@ -294,6 +298,13 @@ class YTMPlayerApp(
         # Cleared on first matching play_track call.
         self._pending_resume_video_id: str | None = None
         self._pending_resume_position: float = 0.0
+        # Resume point read from session.json. _save_session_state writes it
+        # back until a track's load is accepted (play_track clears it).
+        self._loaded_resume: dict | None = None
+        # Set once _restore_session_state ran to completion. The session is
+        # never saved before that, so a start that fails part-way can't
+        # overwrite the previous session with empty state.
+        self._session_restored: bool = False
 
         # Reference to the position poll timer (for cleanup).
         self._poll_timer = None
@@ -619,9 +630,22 @@ class YTMPlayerApp(
             self.set_timer(2.0, self.exit)
             return
 
-        # Validate auth actually works (not just file exists).
-        auth_valid = await asyncio.to_thread(auth.validate)
-        if not auth_valid:
+        # Validate auth actually works (not just file exists). validate()
+        # re-raises connection errors and timeouts so an outage is never
+        # mistaken for an expired session: start without the check, and
+        # without touching the browser's cookies.
+        auth_valid: bool | None
+        try:
+            auth_valid = await asyncio.to_thread(auth.validate)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            logger.warning("YouTube Music unreachable during startup validation: %s", exc)
+            auth_valid = None
+            self.notify(
+                "YouTube Music couldn't be reached. Starting without validating your sign-in.",
+                severity="warning",
+                timeout=8,
+            )
+        if auth_valid is False:
             # Try to auto-refresh from the browser's cookies.
             logger.info("Auth expired, attempting auto-refresh from browser...")
             refreshed = await asyncio.to_thread(auth.try_auto_refresh)
@@ -655,8 +679,33 @@ class YTMPlayerApp(
             self.player = Player()
             self.player.set_event_loop(asyncio.get_running_loop())
             self.stream_resolver = StreamResolver(self.settings.playback.audio_quality)
-            self.history = HistoryManager()
+        except Exception as exc:
+            logger.exception("Failed to initialize services")
+            self.notify(
+                f"Could not start player services: {exc}",
+                severity="error",
+                timeout=10,
+            )
+            self.set_timer(2.0, self.exit)
+            return
+
+        # Play history is optional for this session: a history.db that can't
+        # be opened or prepared disables it instead of stopping the app. The
+        # manager has already closed its connection; the file stays as it is.
+        self.history = HistoryManager()
+        try:
             await self.history.init()
+        except RuntimeError:
+            logger.exception("Play history disabled for this session")
+            self.history = None
+            self.notify(
+                f"Play history is unavailable this session — couldn't open {HISTORY_DB}. "
+                "The database was not deleted or replaced. See ytm.log.",
+                severity="warning",
+                timeout=10,
+            )
+
+        try:
             self.cache = CacheManager()
             await self.cache.init()
         except Exception as exc:

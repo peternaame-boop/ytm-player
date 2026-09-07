@@ -47,6 +47,46 @@ class TestIsNewer:
         assert _is_newer("1.6.0", "1.6.0rc1") is True
 
 
+class TestCacheShape:
+    """A wrong-shape update_check.json is discarded, never raised on."""
+
+    def test_list_cache_is_ignored(self, tmp_path):
+        cache = tmp_path / "update_check.json"
+        cache.write_text("[]", encoding="utf-8")
+        with patch(
+            "ytm_player.services.update_check._fetch_latest_from_pypi",
+            return_value="1.7.0",
+        ) as fetch:
+            result = check_for_update("1.6.0", cache)
+        assert result == "1.7.0"
+        fetch.assert_called_once()
+
+    def test_bad_checked_at_is_ignored(self, tmp_path):
+        cache = tmp_path / "update_check.json"
+        cache.write_text(
+            json.dumps({"checked_at": "bad", "latest": "9.9.9"}),
+            encoding="utf-8",
+        )
+        with patch(
+            "ytm_player.services.update_check._fetch_latest_from_pypi",
+            return_value="1.7.0",
+        ) as fetch:
+            result = check_for_update("1.6.0", cache)
+        assert result == "1.7.0"
+        fetch.assert_called_once()
+
+    def test_non_string_latest_is_ignored(self, tmp_path):
+        cache = tmp_path / "update_check.json"
+        cache.write_text(
+            json.dumps({"checked_at": time.time(), "latest": 5}),
+            encoding="utf-8",
+        )
+        with patch("ytm_player.services.update_check._fetch_latest_from_pypi") as fetch:
+            result = check_for_update("1.6.0", cache)
+        assert result is None
+        fetch.assert_not_called()
+
+
 class TestCheckForUpdate:
     def test_cache_within_24h_skips_network(self, tmp_path):
         cache = tmp_path / "update_check.json"
