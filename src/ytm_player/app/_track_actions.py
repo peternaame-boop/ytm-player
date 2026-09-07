@@ -99,7 +99,30 @@ class TrackActionsMixin(YTMHostBase):
         self._play_track_next(track)
 
     async def _open_add_to_playlist(self) -> None:
-        """Open PlaylistPicker for the currently playing track."""
+        """Open PlaylistPicker for the marked tracks, else the playing track.
+
+        Marks are read from the current page's tables whether or not one
+        has focus — the table shows them (check marks and its status line).
+        A page with marks in more than one table gets a warning instead of
+        a guess. Success clears the marks that were submitted and only
+        those: the table's selection generation is captured now and
+        compared when the picker returns, so a selection that changed
+        underneath (a marked row gone in a background refresh, a reloaded
+        list) stays put. Cancel and failure keep the marks.
+        """
+        page = self._get_current_page()
+        marked = [t for t in page.query(TrackTable) if t.marked_count] if page else []
+        if len(marked) > 1:
+            self.notify(
+                "Tracks are marked in more than one list — clear one first (Esc).",
+                severity="warning",
+                timeout=3,
+            )
+            return
+        if marked:
+            self._add_marked_to_playlist(marked[0])
+            return
+
         track = None
 
         # Prefer the currently playing track.
@@ -116,6 +139,35 @@ class TrackActionsMixin(YTMHostBase):
             return
 
         self.push_screen(PlaylistPicker(video_ids=[video_id], tracks=[track]))
+
+    def _add_marked_to_playlist(self, table: TrackTable) -> None:
+        """Push the picker for *table*'s marks, in displayed order.
+
+        Hidden marked rows are included (the table orders them by the same
+        sort). Every marked occurrence is submitted, so two marked copies of
+        a song go through the picker's duplicate confirmation as two copies.
+        A range in progress ends first — its marks stay — so cancelling and
+        moving on doesn't extend it. The marks are cleared only on success
+        and only if the selection is still the one that was submitted.
+        """
+        table.end_range_mode()
+        video_ids: list[str] = []
+        submitted: list[dict] = []
+        for track in table.marked_tracks():
+            video_id = get_video_id(track)
+            if video_id:
+                video_ids.append(video_id)
+                submitted.append(track)
+        if not video_ids:
+            self.notify("The marked tracks have no video IDs.", severity="warning", timeout=2)
+            return
+        generation = table.selection_generation
+
+        def _on_picker_closed(playlist_id: str | None) -> None:
+            if playlist_id and table.is_attached and table.selection_generation == generation:
+                table.clear_marks()
+
+        self.push_screen(PlaylistPicker(video_ids=video_ids, tracks=submitted), _on_picker_closed)
 
     async def _open_track_actions(self) -> None:
         """Open ActionsPopup for the focused track."""

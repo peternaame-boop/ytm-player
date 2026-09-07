@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from typing import Any
 
 from textual.events import Click, MouseDown, MouseMove, MouseUp
@@ -19,11 +21,23 @@ from ytm_player.utils.formatting import extract_artist, extract_duration, format
 
 logger = logging.getLogger(__name__)
 
+_MARK_GLYPH = "✓"
+
+# Sort key per sortable column, shared by the visible sort and by
+# ``marked_tracks`` (which orders the whole backing list the same way).
+_SORT_KEYS: dict[str, Callable[[dict], Any]] = {
+    "index": lambda t: t.get("_original_index", 0),
+    "title": lambda t: (t.get("title") or "").lower(),
+    "artist": lambda t: extract_artist(t).lower(),
+    "album": lambda t: (t.get("album") or "").lower(),
+    "duration": lambda t: extract_duration(t),
+}
+
 
 class TrackTable(DataTable):
     """A DataTable subclass for displaying lists of tracks.
 
-    Columns: #, Title, Artist, Album, Duration.
+    Columns: mark, #, Title, Artist, Album, Duration.
 
     Tracks are stored as dicts matching the queue/search result format:
         {
@@ -35,6 +49,14 @@ class TrackTable(DataTable):
             "duration_seconds": int | None,
             ...
         }
+
+    Marks: rows can be marked for a bulk action (``v``/``V``/Escape, Ctrl-
+    click, Shift-click, or a click on the mark column). A mark belongs to
+    one occurrence — the row's position in the loaded list — not to a video
+    ID, so two rows of the same track are marked independently. Marks live
+    until the table is reloaded (``load_tracks``), cleared, or the page is
+    left; ``refresh_tracks`` carries them across a background reload. While
+    any row is marked the table draws its own status line underneath.
     """
 
     DEFAULT_CSS = """
@@ -44,6 +66,11 @@ class TrackTable(DataTable):
     }
     TrackTable > .datatable--cursor {
         background: $selected-item;
+    }
+    TrackTable.-marked {
+        border-bottom: hkey $accent;
+        border-subtitle-align: left;
+        border-subtitle-color: $text;
     }
     """
 
@@ -136,6 +163,19 @@ class TrackTable(DataTable):
         self._resize_start_x: int = 0
         self._resize_start_width: int = 0
         self._title_manual_width: bool = False
+        # Selection state. Every index here is an ``_original_index`` into
+        # ``_all_tracks`` (one occurrence), never a visible row number.
+        self._marked: set[int] = set()
+        self._anchor: int | None = None
+        self._range_mode: bool = False
+        self._range_base: frozenset[int] = frozenset()
+        # Bumped whenever the marked set changes or the list is replaced;
+        # a bulk action captures it when it starts and only clears the
+        # marks on completion if it still matches.
+        self._selection_generation: int = 0
+        # One key per loaded track (load order) naming its occurrence for
+        # ``refresh_tracks``; None when the list was loaded without keys.
+        self._occurrence_keys: list[Hashable] | None = None
         # Set up columns at construction time, not on_mount. Otherwise a
         # caller that mounts the table and immediately calls load_tracks()
         # synchronously (e.g. context._build_artist's nested-mount chain)
@@ -177,6 +217,37 @@ class TrackTable(DataTable):
             return self._filtered_map[self.cursor_row] if self._filtered_map else self.cursor_row
         return None
 
+    @property
+    def marked_count(self) -> int:
+        """Number of marked rows, hidden (filtered-out) ones included."""
+        return len(self._marked)
+
+    @property
+    def hidden_marked_count(self) -> int:
+        """Marked rows the active filter currently hides."""
+        visible = set(self._filtered_map)
+        return sum(1 for i in self._marked if i not in visible)
+
+    @property
+    def selection_generation(self) -> int:
+        """Changes whenever the marked set changes or the list is replaced."""
+        return self._selection_generation
+
+    def marked_tracks(self) -> list[dict]:
+        """Marked tracks in the displayed order, hidden ones included.
+
+        Under a sort the whole backing list is ordered by that sort, so a
+        marked track the filter hides lands where it would show without
+        the filter; otherwise the load order applies.
+        """
+        if not self._marked:
+            return []
+        ordered = list(self._all_tracks)
+        key_fn = _SORT_KEYS.get(self._sort_column or "")
+        if key_fn is not None:
+            ordered.sort(key=key_fn, reverse=self._sort_reverse)
+        return [t for t in ordered if t["_original_index"] in self._marked]
+
     # -- Setup ------------------------------------------------------------
 
     def on_mount(self) -> None:
@@ -202,6 +273,8 @@ class TrackTable(DataTable):
         def w(v: int) -> int | None:
             return v if v > 0 else None
 
+        # Mark column first: one cell, blank or a check mark.
+        self.add_column(" ", width=1, key="mark")
         if self._show_index:
             self.add_column("#", width=w(ui.col_index), key="index")
         self.add_column("Title", width=w(ui.col_title), key="title")
@@ -212,8 +285,18 @@ class TrackTable(DataTable):
 
     # -- Data loading -----------------------------------------------------
 
-    def load_tracks(self, tracks: list[dict]) -> None:
-        """Replace the table contents with a new list of tracks."""
+    def load_tracks(self, tracks: list[dict], *, keys: Sequence[Hashable] | None = None) -> None:
+        """Replace the table contents with a new list of tracks.
+
+        This is the deliberate replacement: the sort, filter and every mark
+        go. *keys*, when given, name each track's occurrence (one per
+        track, in order) so a later ``refresh_tracks`` can carry marks
+        across a background reload of the same list.
+        """
+        if keys is not None and len(keys) != len(tracks):
+            raise ValueError("keys must have one entry per track")
+        self._occurrence_keys = list(keys) if keys is not None else None
+        self._reset_selection()
         self.clear()
         # Stamp each track with its original playlist position.
         self._all_tracks = []
@@ -243,10 +326,112 @@ class TrackTable(DataTable):
         self._invalidate_table()
 
         self._highlight_playing()
+        self._update_mark_status()
 
-    def append_tracks(self, tracks: list[dict]) -> None:
-        """Append additional tracks without clearing existing ones."""
+    def refresh_tracks(self, tracks: list[dict], keys: Sequence[Hashable]) -> None:
+        """Re-render the same list after a background change, keeping the view.
+
+        For reloads the user didn't ask for (a play landing in Recently
+        Played, a queue entry added from elsewhere): the active sort and
+        filter, the cursor, the marks, the range anchor and the range
+        baseline all carry over to the occurrences that survive. *keys*
+        names each row's occurrence, one per track and unique, in the same
+        scheme the previous load used — queue entry ids, or video IDs where
+        the list holds each track once. A key that is missing, or that
+        appears more than once, resolves nothing: the mark on it is dropped
+        rather than moved to another row.
+
+        Dropping a marked occurrence, or ending up with a different marked
+        set, advances the selection generation so a bulk action started
+        before the refresh won't clear marks it didn't submit. A refresh
+        that keeps every marked occurrence leaves the generation alone.
+        Use ``load_tracks`` for a deliberate replacement.
+        """
+        if len(keys) != len(tracks):
+            raise ValueError("keys must have one entry per track")
+        old_keys = self._occurrence_keys
+        if old_keys is None or len(old_keys) != len(self._all_tracks):
+            self.load_tracks(tracks, keys=keys)
+            return
+
+        old_counts = Counter(old_keys)
+
+        def key_at(index: int) -> Hashable | None:
+            key = old_keys[index]
+            return key if old_counts[key] == 1 else None
+
+        marked_keys = [key_at(i) for i in self._marked]
+        base_keys = [key_at(i) for i in self._range_base]
+        anchor_key = key_at(self._anchor) if self._anchor is not None else None
+        cursor_index = self.selected_original_index
+        cursor_key = key_at(cursor_index) if cursor_index is not None else None
+        range_mode = self._range_mode
+        sort_column, sort_reverse = self._sort_column, self._sort_reverse
+        filter_text, filter_active = self._filter_text, self._filter_active
+        generation = self._selection_generation
+
+        self.load_tracks(tracks, keys=keys)
+
+        new_counts = Counter(keys)
+        position = {k: i for i, k in enumerate(keys) if new_counts[k] == 1}
+
+        def resolve(candidates: Iterable[Hashable | None]) -> set[int]:
+            return {position[k] for k in candidates if k is not None and k in position}
+
+        # The view first, so the rows exist in their final order before
+        # marks are painted and the cursor is placed.
+        self._filter_text, self._filter_active = filter_text, filter_active
+        self._sort_column, self._sort_reverse = sort_column, sort_reverse
+        if filter_text or sort_column is not None:
+            self._rebuild_view()
+
+        resolved = resolve(marked_keys)
+        dropped = len(resolved) < len(marked_keys)
+        self._range_base = frozenset(resolve(base_keys))
+        self._anchor = next(iter(resolve([anchor_key])), None)
+        self._range_mode = range_mode and self._anchor is not None
+        self._set_marks(resolved, bump=False)
+
+        target = resolve([cursor_key])
+        if target:
+            try:
+                self.move_cursor(row=self._filtered_map.index(next(iter(target))))
+            except ValueError:
+                pass
+        if self._range_mode:
+            self._apply_range(bump=False)
+
+        same_selection = not dropped and self._marked == resolved
+        self._selection_generation = generation if same_selection else generation + 1
+        self._update_mark_status()
+
+    def append_tracks(self, tracks: list[dict], *, keys: Sequence[Hashable] | None = None) -> None:
+        """Append additional tracks without clearing existing ones.
+
+        The new rows join the view as it is: filtered like the rest and, under
+        an active sort, placed where the sort puts them (the whole view is
+        rebuilt then, with the cursor kept on its occurrence). Marks are
+        untouched either way. A keyed table stays keyed only when *keys*
+        arrives with one entry per track; otherwise the keys are dropped and
+        the next ``refresh_tracks`` reloads instead of carrying marks over.
+        """
+        if self._occurrence_keys is not None:
+            if keys is not None and len(keys) == len(tracks):
+                self._occurrence_keys.extend(keys)
+            else:
+                self._occurrence_keys = None
         start_idx = len(self._all_tracks)
+        if self._sort_column is not None:
+            for i, track in enumerate(tracks, start=start_idx):
+                t = dict(track)
+                t["_original_index"] = i
+                self._all_tracks.append(t)
+            current = self.selected_original_index
+            self._rebuild_view()
+            self._place_cursor_on(current)
+            self._fill_title_column()
+            self._invalidate_table()
+            return
         for i, track in enumerate(tracks, start=start_idx):
             t = dict(track)
             t["_original_index"] = i
@@ -298,21 +483,22 @@ class TrackTable(DataTable):
                 for all_idx, t in enumerate(self._all_tracks):
                     if _matches(t):
                         self._all_tracks.pop(all_idx)
-                        # Rebuild filtered map from scratch — simplest correct
-                        # approach. Match by identity (id()), not dict equality:
-                        # two genuinely identical track dicts would otherwise
-                        # mismatch the map, and `in` is O(n) per item (O(n²)
-                        # overall) on large playlists.
-                        visible_ids = {id(trk) for trk in self._tracks}
-                        self._filtered_map = [
-                            i for i, trk in enumerate(self._all_tracks) if id(trk) in visible_ids
-                        ]
+                        if self._occurrence_keys is not None and all_idx < len(
+                            self._occurrence_keys
+                        ):
+                            self._occurrence_keys.pop(all_idx)
+                        self._shift_selection_after_removal(all_idx)
                         break
 
                 # Re-number all remaining tracks so the # column stays
                 # contiguous after the removal.
                 for new_idx, t in enumerate(self._all_tracks):
                     t["_original_index"] = new_idx
+
+                # Rebuild the visible→original map in VISIBLE order. The
+                # visible list may be sorted, so walking _all_tracks would
+                # put the entries in the wrong slots.
+                self._filtered_map = [t["_original_index"] for t in self._tracks]
 
                 # Refresh the # cell for every visible row that shifted.
                 for vis_idx, (rk, t) in enumerate(zip(self._row_keys, self._tracks)):
@@ -323,6 +509,7 @@ class TrackTable(DataTable):
 
                 self._fill_title_column()
                 self._invalidate_table()
+                self._update_mark_status()
                 return True
         return False
 
@@ -335,7 +522,7 @@ class TrackTable(DataTable):
 
         from ytm_player.utils.bidi import isolate_bidi, reorder_rtl_line
 
-        cells: list[str | int] = []
+        cells: list[str | int] = [self._mark_glyph(track.get("_original_index", index))]
         if self._show_index:
             # Always show original playlist position, not current row number.
             orig = track.get("_original_index", index)
@@ -426,6 +613,7 @@ class TrackTable(DataTable):
             album = track.get("album") or ""
             duration = _extract_duration(track)
             cells: dict[str, Any] = {}
+            cells["mark"] = self._mark_glyph(track.get("_original_index", row_index))
             cells["index"] = str(track.get("_original_index", row_index) + 1)
             cells["title"] = isolate_bidi(reorder_rtl_line(title))
             cells["artist"] = isolate_bidi(reorder_rtl_line(artist))
@@ -495,6 +683,126 @@ class TrackTable(DataTable):
             _set_row_label(row_key, Text("▶", style=f"bold {text_hex}"))
 
         self._playing_index = new_index
+
+    # -- Marks ------------------------------------------------------------
+
+    def clear_marks(self) -> None:
+        """Drop every mark, the anchor and range mode."""
+        self._range_mode = False
+        self._range_base = frozenset()
+        self._anchor = None
+        self._set_marks(set())
+
+    def end_range_mode(self) -> None:
+        """Leave range mode keeping the marks as they are; later movement won't extend them."""
+        self._range_mode = False
+        self._range_base = frozenset()
+
+    def _reset_selection(self) -> None:
+        """Forget the selection without repainting (the rows are being rebuilt)."""
+        self._marked = set()
+        self._anchor = None
+        self._range_mode = False
+        self._range_base = frozenset()
+        self._selection_generation += 1
+
+    def _mark_glyph(self, original: int) -> str:
+        return _MARK_GLYPH if original in self._marked else " "
+
+    def _set_marks(self, marks: set[int], *, bump: bool = True) -> None:
+        """Make *marks* the marked set, repainting only the rows that changed."""
+        changed = self._marked ^ marks
+        if not changed:
+            return
+        self._marked = set(marks)
+        if bump:
+            self._selection_generation += 1
+        self._paint_marks(changed)
+        self._update_mark_status()
+
+    def _paint_marks(self, originals: Iterable[int]) -> None:
+        """Rewrite the mark cell of each visible row among *originals*."""
+        row_of = {orig: row for row, orig in enumerate(self._filtered_map)}
+        for original in originals:
+            row = row_of.get(original)
+            if row is None or row >= len(self._row_keys):
+                continue
+            try:
+                self.update_cell(self._row_keys[row], "mark", self._mark_glyph(original))
+            except Exception:
+                logger.debug("Failed to paint mark on row %d", row, exc_info=True)
+
+    def _toggle_mark(self, original: int) -> None:
+        self._anchor = original
+        self._set_marks(self._marked ^ {original})
+
+    def _extend_to(self, original: int) -> None:
+        """Shift-click: mark the displayed run from the anchor to *original*.
+
+        Existing marks outside the run stay. With no anchor, or an anchor
+        the filter hides, the row is marked and becomes the anchor — a run
+        never reaches a row that isn't shown.
+        """
+        if self._anchor is None or self._anchor not in self._filtered_map:
+            self._anchor = original
+            self._set_marks(self._marked | {original})
+            return
+        self._set_marks(self._marked | self._run(self._anchor, original))
+
+    def _run(self, start: int, end: int) -> set[int]:
+        """Original indices of the visible rows from *start* to *end*, inclusive.
+
+        A *start* the filter hides counts as no start: the run is *end*
+        alone, so an invisible row is never marked through a run.
+        """
+        try:
+            lo, hi = sorted((self._filtered_map.index(start), self._filtered_map.index(end)))
+        except ValueError:
+            return {end}
+        return set(self._filtered_map[lo : hi + 1])
+
+    def _apply_range(self, *, bump: bool = True) -> None:
+        """Range mode: marks are the baseline plus the anchor-to-cursor run."""
+        if self._anchor is None:
+            return
+        cursor = self.selected_original_index
+        run = set() if cursor is None else self._run(self._anchor, cursor)
+        self._set_marks(set(self._range_base) | run, bump=bump)
+
+    def _shift_selection_after_removal(self, removed: int) -> None:
+        """Keep marks on their rows when the occurrence *removed* leaves the list."""
+
+        def shift(original: int) -> int:
+            return original - 1 if original > removed else original
+
+        if removed in self._marked:
+            self._selection_generation += 1
+        self._marked = {shift(i) for i in self._marked if i != removed}
+        self._range_base = frozenset(shift(i) for i in self._range_base if i != removed)
+        if self._anchor is not None:
+            self._anchor = None if self._anchor == removed else shift(self._anchor)
+        if self._anchor is None and self._range_mode:
+            self._range_mode = False
+            self._range_base = frozenset()
+
+    def _update_mark_status(self) -> None:
+        """Show the count on the table's own bottom line while anything is marked.
+
+        The line is the table's border subtitle on a border that only
+        exists while the ``-marked`` class is set, so it costs a row only
+        then and doesn't depend on the optional selection-info bar.
+        """
+        count = len(self._marked)
+        if count == 0:
+            self.border_subtitle = ""
+            self.remove_class("-marked")
+            return
+        hidden = self.hidden_marked_count
+        text = f"{count} selected"
+        if hidden:
+            text += f" ({hidden} hidden)"
+        self.border_subtitle = text + " · A: add · Esc: clear"
+        self.add_class("-marked")
 
     # -- Column resize (drag header border) ------------------------------
 
@@ -645,6 +953,11 @@ class TrackTable(DataTable):
         track = self._tracks[row_idx] if 0 <= row_idx < len(self._tracks) else None
         self.post_message(self.TrackHighlighted(track, row_idx))
 
+        # Range mode follows the cursor: the marks are the baseline plus
+        # whatever now lies between the anchor and the highlighted row.
+        if self._range_mode:
+            self._apply_range()
+
         if not self.has_focus:
             return
 
@@ -675,7 +988,37 @@ class TrackTable(DataTable):
             self.post_message(SelectionChanged(""))
 
     def on_click(self, event: Click) -> None:
-        """Handle right-click — emit column-specific message."""
+        """Selection gestures on left-click; column-specific messages on right-click.
+
+        Ctrl-click toggles the row, Shift-click marks the run from the
+        anchor to the row (displayed order, on top of existing marks) and a
+        click on the mark column toggles the row. Each moves the highlight
+        to that row and never starts playback: ``prevent_default`` keeps
+        DataTable from moving the cursor itself and from posting the
+        RowSelected that a click on the highlighted row would raise. Plain
+        clicks fall through unchanged. Whether Ctrl-click or Shift-click
+        arrives with its modifier is up to the terminal; ``v``/``V`` are the
+        keyboard route.
+        """
+        if event.button == 1:
+            meta = event.style.meta
+            row_idx = meta.get("row") if meta else None
+            if row_idx is None or not (0 <= row_idx < len(self._tracks)):
+                return
+            on_mark_column = meta.get("column") == 0
+            if not (event.ctrl or event.shift or on_mark_column):
+                return
+            event.stop()
+            event.prevent_default()
+            self._range_mode = False
+            self._range_base = frozenset()
+            original = self._filtered_map[row_idx]
+            if event.shift and not event.ctrl:
+                self._extend_to(original)
+            else:
+                self._toggle_mark(original)
+            self.move_cursor(row=row_idx)
+            return
         if event.button == 3:
             event.stop()
             event.prevent_default()
@@ -713,21 +1056,31 @@ class TrackTable(DataTable):
             except Exception:
                 pass
         if not self._filter_text:
-            self._tracks = list(self._all_tracks)
-            self._filtered_map = list(range(len(self._all_tracks)))
-            self._reload_sorted()
+            self._rebuild_view()
             return
         self._filter_timer = self.set_timer(0.15, self._execute_filter)
 
     def _execute_filter(self) -> None:
         """Rebuild the table with only matching tracks (debounced)."""
         self._filter_timer = None
-        self._tracks = []
-        self._filtered_map = []
-        for i, track in enumerate(self._all_tracks):
-            if self._matches_filter(track, self._filter_text):
-                self._tracks.append(track)
-                self._filtered_map.append(i)
+        self._rebuild_view()
+
+    def _rebuild_view(self) -> None:
+        """Recompute the visible rows from the backing list: the filter, then the sort.
+
+        One path for filtering, sorting and ``refresh_tracks``, so the
+        rows come out the same whichever order the user applied them in
+        — a filter typed on a sorted list keeps the sort.
+        """
+        query = self._filter_text
+        if query:
+            self._tracks = [t for t in self._all_tracks if self._matches_filter(t, query)]
+        else:
+            self._tracks = list(self._all_tracks)
+        key_fn = _SORT_KEYS.get(self._sort_column or "")
+        if key_fn is not None:
+            self._tracks.sort(key=key_fn, reverse=self._sort_reverse)
+        self._filtered_map = [t["_original_index"] for t in self._tracks]
         self._reload_sorted()
 
     @staticmethod
@@ -747,9 +1100,7 @@ class TrackTable(DataTable):
         """Remove the filter, restoring all tracks."""
         self._filter_text = ""
         self._filter_active = False
-        self._tracks = list(self._all_tracks)
-        self._filtered_map = list(range(len(self._all_tracks)))
-        self._reload_sorted()
+        self._rebuild_view()
         self.post_message(self.FilterClosed())
 
     # -- Sorting ----------------------------------------------------------
@@ -759,34 +1110,28 @@ class TrackTable(DataTable):
         if not self._tracks:
             return
 
+        if column not in _SORT_KEYS:
+            return
         if self._sort_column == column:
             self._sort_reverse = not self._sort_reverse
         else:
             self._sort_column = column
             self._sort_reverse = False
 
-        key_funcs = {
-            "index": lambda t: t.get("_original_index", 0),
-            "title": lambda t: (t.get("title") or "").lower(),
-            "artist": lambda t: extract_artist(t).lower(),
-            "album": lambda t: (t.get("album") or "").lower(),
-            "duration": lambda t: extract_duration(t),
-        }
-        key_fn = key_funcs.get(column)
-        if key_fn is None:
+        # Restore by occurrence, not video ID: with the same track listed
+        # twice, the cursor stays on the copy it was on.
+        current = self.selected_original_index
+        self._rebuild_view()
+        self._place_cursor_on(current)
+
+    def _place_cursor_on(self, original: int | None) -> None:
+        """Move the cursor to the visible row of occurrence *original*, if shown."""
+        if original is None:
             return
-
-        current_track = self.selected_track
-        self._tracks.sort(key=key_fn, reverse=self._sort_reverse)
-        self._filtered_map = [t["_original_index"] for t in self._tracks]
-        self._reload_sorted()
-
-        if current_track:
-            vid = current_track.get("video_id")
-            for i, t in enumerate(self._tracks):
-                if t.get("video_id") == vid:
-                    self.move_cursor(row=i)
-                    break
+        try:
+            self.move_cursor(row=self._filtered_map.index(original))
+        except ValueError:
+            pass
 
     def _reload_sorted(self) -> None:
         """Rebuild table rows from the current _tracks order."""
@@ -799,6 +1144,7 @@ class TrackTable(DataTable):
             self._row_keys.append(row_key)
         self._highlight_playing()
         self.scroll_x = saved_scroll_x
+        self._update_mark_status()
 
     # -- Vim-style navigation ---------------------------------------------
 
@@ -833,6 +1179,25 @@ class TrackTable(DataTable):
                     )
             case Action.FILTER:
                 self.show_filter()
+            case Action.MARK_TOGGLE:
+                # A range in progress ends first (its marks stay), then the
+                # highlighted row toggles.
+                self.end_range_mode()
+                original = self.selected_original_index
+                if original is not None:
+                    self._toggle_mark(original)
+            case Action.MARK_RANGE:
+                if self._range_mode:
+                    self.end_range_mode()
+                    return
+                original = self.selected_original_index
+                if original is not None:
+                    self._range_base = frozenset(self._marked)
+                    self._anchor = original
+                    self._range_mode = True
+                    self._apply_range()
+            case Action.MARK_CLEAR:
+                self.clear_marks()
             case Action.JUMP_TO_CURRENT:
                 self._jump_to_current()
             case Action.SORT_TITLE:
@@ -846,13 +1211,6 @@ class TrackTable(DataTable):
             case Action.REVERSE_SORT:
                 if self._sort_column and self._tracks:
                     self._sort_reverse = not self._sort_reverse
-                    current_track = self.selected_track
-                    self._tracks.reverse()
-                    self._filtered_map = [t["_original_index"] for t in self._tracks]
-                    self._reload_sorted()
-                    if current_track:
-                        vid = current_track.get("video_id")
-                        for i, t in enumerate(self._tracks):
-                            if t.get("video_id") == vid:
-                                self.move_cursor(row=i)
-                                break
+                    current = self.selected_original_index
+                    self._rebuild_view()
+                    self._place_cursor_on(current)

@@ -278,8 +278,53 @@ class PlaylistPicker(BasePopup[str | None]):
                 return
 
             status.update(f"Adding tracks to '{name}'...")
+            await self._add_to_created(playlist_id, name)
 
-            result = await ytmusic.add_playlist_items(playlist_id, self.video_ids)
+        except Exception:
+            logger.exception("Failed to create playlist and add tracks")
+            self.notify("Failed to create playlist", severity="error")
+            status.update("Error")
+
+    async def _add_to_created(self, playlist_id: str, name: str, duplicates: bool = False) -> None:
+        """Add the tracks to the playlist just created, then finish.
+
+        A ``"duplicate"`` answer asks the same question as for an existing
+        playlist; accepting retries against this same *playlist_id* (never
+        a second playlist), declining closes the picker with nothing added,
+        which keeps the caller's marks. Any other failure leaves the picker
+        open with the marks as well.
+        """
+        status = self.query_one("#picker-status", Static)
+        try:
+            ytmusic = cast("YTMHostBase", self.app).ytmusic
+            assert ytmusic is not None
+            from ytm_player.services.ytmusic import mutation_failure_suffix
+
+            result = await ytmusic.add_playlist_items(
+                playlist_id, self.video_ids, duplicates=duplicates
+            )
+            if result == "duplicate":
+                status.update("Already in playlist")
+                track_word = "track is" if len(self.video_ids) == 1 else "tracks are"
+
+                def _on_duplicate_confirm(confirmed: bool | None) -> None:
+                    if confirmed:
+                        self.run_worker(
+                            self._add_to_created(playlist_id, name, duplicates=True),
+                            name="create_playlist",
+                        )
+                    else:
+                        self.dismiss(None)
+
+                self.app.push_screen(
+                    ConfirmPopup(
+                        f"This {track_word} already in '{name}'.\nAdd anyway?",
+                        confirm_label="Add anyway",
+                        cancel_label="Cancel",
+                    ),
+                    _on_duplicate_confirm,
+                )
+                return
             if result != "success":
                 self.notify(
                     f"Created '{name}' but couldn't add tracks — {mutation_failure_suffix(result)}",
@@ -288,6 +333,16 @@ class PlaylistPicker(BasePopup[str | None]):
                 status.update("Add failed")
                 return
 
+            await self._finish_created(playlist_id, name)
+
+        except Exception:
+            logger.exception("Failed to add tracks to the created playlist %r", playlist_id)
+            self.notify(f"Created '{name}' but couldn't add tracks", severity="error")
+            status.update("Error")
+
+    async def _finish_created(self, playlist_id: str, name: str) -> None:
+        """The completion path after tracks landed in a newly created playlist."""
+        try:
             _record_recent(playlist_id)
 
             # Full sidebar refresh — the new playlist doesn't exist in the
@@ -323,9 +378,9 @@ class PlaylistPicker(BasePopup[str | None]):
             self.dismiss(playlist_id)
 
         except Exception:
-            logger.exception("Failed to create playlist and add tracks")
-            self.notify("Failed to create playlist", severity="error")
-            status.update("Error")
+            logger.exception("Failed to finish adding tracks to the created playlist")
+            self.notify(f"Created '{name}' but couldn't finish adding tracks", severity="error")
+            self.query_one("#picker-status", Static).update("Error")
 
     def _tracks_for_append(self, set_video_ids: dict[str, str]) -> list[dict[str, Any]]:
         """Build the track dicts to append to the open playlist's table.
@@ -428,7 +483,17 @@ class PlaylistPicker(BasePopup[str | None]):
                     current_pid
                 ) == strip_vl_prefix(playlist_id):
                     library = self.app.query_one(LibraryPage)
-                    if self.tracks:
+                    if len(set(self.video_ids)) != len(self.video_ids):
+                        # Two copies of one video were added. The response
+                        # maps videoId -> setVideoId, one per video, so the
+                        # copies can't be told apart; reload rather than
+                        # stamp both rows with the same setVideoId.
+                        library.run_worker(
+                            library.load_playlist(current_pid),
+                            name="load-playlist",
+                            exclusive=True,
+                        )
+                    elif self.tracks:
                         table = library.query_one("#library-tracks", TrackTable)
                         table.append_tracks(
                             self._tracks_for_append(ytmusic.last_added_set_video_ids)

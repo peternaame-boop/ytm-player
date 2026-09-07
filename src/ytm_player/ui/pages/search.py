@@ -1003,6 +1003,9 @@ class SearchPage(Widget):
                 | Action.GO_TOP
                 | Action.GO_BOTTOM
                 | Action.SELECT
+                | Action.MARK_TOGGLE
+                | Action.MARK_RANGE
+                | Action.MARK_CLEAR
             ):
                 # Delegate to whichever focusable child has focus.
                 focused = self.app.focused

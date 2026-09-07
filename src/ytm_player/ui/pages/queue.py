@@ -160,9 +160,17 @@ class QueuePage(TrackFilterHost, Widget):
     # ── Queue rendering ───────────────────────────────────────────────
 
     def _refresh_queue(self) -> None:
-        """Rebuild the entire queue display from the QueueManager state."""
+        """Re-render the queue display from the QueueManager state.
+
+        The table keeps its sort, filter, cursor and marks across the
+        re-render: each row is keyed by its queue entry id, so a mark stays
+        on the very occurrence it was put on even when the same track is
+        queued twice, and goes away with that entry. An empty queue clears
+        the table — marks included — before hiding it.
+        """
         queue = self.app.queue  # type: ignore[attr-defined]
-        tracks = list(queue.tracks)
+        entries = queue.entries
+        tracks = [track for _, track in entries]
         current_track = queue.current_track
 
         # Update the "Now Playing" header.
@@ -180,12 +188,13 @@ class QueuePage(TrackFilterHost, Widget):
         table = self.query_one("#queue-table", TrackTable)
 
         if not tracks:
+            table.load_tracks([])
             table.display = False
             self.query_one("#queue-empty").display = True
         else:
             table.display = True
             self.query_one("#queue-empty").display = False
-            table.load_tracks(tracks)
+            table.refresh_tracks(tracks, keys=[entry_id for entry_id, _ in entries])
 
             # Set the playing indicator on the current track.
             video_id = current_track.get("video_id", "") if current_track else None
@@ -271,14 +280,15 @@ class QueuePage(TrackFilterHost, Widget):
         # longer matches the queue position, so map it through the table's
         # view first (the same mapping track selection uses).
         idx = table.selected_original_index
+        visible_row = table.cursor_row
         if idx is not None and 0 <= idx < queue.length:
             queue.remove(idx)
             self._refresh_queue()
-            # _refresh_queue reloads the table in queue order (sort/filter
-            # reset), so the queue index doubles as the cursor row here.
+            # The removed entry can't keep the cursor, so the row that took
+            # its place in the displayed order gets it (the view — sort and
+            # filter — survives the refresh).
             if table.row_count > 0:
-                new_row = min(idx, table.row_count - 1)
-                table.move_cursor(row=new_row)
+                table.move_cursor(row=min(visible_row, table.row_count - 1))
 
     def _move_track(self, table: TrackTable, queue: Any, direction: int, count: int = 1) -> None:
         """Move the highlighted track ``count`` queue positions up or down.
@@ -286,8 +296,9 @@ class QueuePage(TrackFilterHost, Widget):
         The destination is clamped to the queue bounds, so a ``count`` larger
         than the remaining distance simply moves the track to the top/bottom
         (e.g. ``15 J`` near the end lands it at the bottom). In a sorted or
-        filtered view the move still happens in queue order; the refresh
-        below resets the view to queue order so the result is visible.
+        filtered view the move still happens in queue order; the view keeps
+        its sort and the cursor stays on the moved entry (the refresh finds
+        it again by its queue entry id).
         """
         from_idx = table.selected_original_index
         if from_idx is None:
@@ -297,4 +308,3 @@ class QueuePage(TrackFilterHost, Widget):
             return
         queue.move(from_idx, to_idx)
         self._refresh_queue()
-        table.move_cursor(row=to_idx)

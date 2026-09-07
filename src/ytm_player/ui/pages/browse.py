@@ -1728,6 +1728,11 @@ class BrowsePage(Widget):
                 elif isinstance(focused, TrackTable):
                     await focused.handle_action(action, count)
 
+            case Action.MARK_TOGGLE | Action.MARK_RANGE | Action.MARK_CLEAR:
+                focused = self.app.focused
+                if isinstance(focused, TrackTable):
+                    await focused.handle_action(action, count)
+
             case Action.PICK_COUNTRY:
                 # Charts sub-tab only — index 1 in the (For You, Charts,
                 # Releases, Playlists, Subs) tab order. No-op on other

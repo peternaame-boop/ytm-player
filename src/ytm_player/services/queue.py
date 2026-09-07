@@ -39,6 +39,13 @@ class QueueManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._tracks: list[dict] = []
+        # One internal id per queue occurrence, parallel to ``_tracks``. An
+        # id is minted when a track is inserted and dies with that entry, so
+        # it identifies "this occurrence" even when the same track — or the
+        # very same dict object — sits in the queue twice. Never stored in
+        # the track dicts, so it can't leak into session files or API calls.
+        self._entry_ids: list[int] = []
+        self._next_entry_id: int = 0
         self._current_index: int = -1
         self._repeat: RepeatMode = RepeatMode.OFF
         self._shuffle: bool = False
@@ -77,6 +84,21 @@ class QueueManager:
             if self._shuffle:
                 return tuple(self._tracks[i] for i in self._shuffle_order)
             return tuple(self._tracks)
+
+    @property
+    def entries(self) -> tuple[tuple[int, dict], ...]:
+        """``(entry_id, track)`` pairs in the current playback order.
+
+        The entry id names one queue occurrence: it stays with the entry
+        through moves and shuffle and disappears when that entry is
+        removed. Two occurrences of the same track never share an id. Read
+        both halves from this one call — reading ``tracks`` and the ids
+        separately could interleave with a mutation on another thread.
+        """
+        with self._lock:
+            if self._shuffle:
+                return tuple((self._entry_ids[i], self._tracks[i]) for i in self._shuffle_order)
+            return tuple(zip(self._entry_ids, self._tracks))
 
     @property
     def is_empty(self) -> bool:
@@ -129,6 +151,12 @@ class QueueManager:
             return self._shuffle_order[self._shuffle_position]
         return self._current_index
 
+    def _new_entry_ids(self, count: int) -> list[int]:
+        """Mint *count* fresh entry ids (caller must hold the lock)."""
+        start = self._next_entry_id + 1
+        self._next_entry_id += count
+        return list(range(start, start + count))
+
     def _rebuild_shuffle(self, keep_current: bool = True) -> None:
         """Rebuild the shuffle order, optionally keeping the current track first."""
         indices = list(range(len(self._tracks)))
@@ -153,12 +181,15 @@ class QueueManager:
 
     def _add_unlocked(self, track: dict, position: int | None = None) -> None:
         """Add a track without acquiring the lock (caller must hold it)."""
+        (entry_id,) = self._new_entry_ids(1)
         if position is None or position >= len(self._tracks):
             self._tracks.append(track)
+            self._entry_ids.append(entry_id)
             new_idx = len(self._tracks) - 1
         else:
             position = max(0, position)
             self._tracks.insert(position, track)
+            self._entry_ids.insert(position, entry_id)
             new_idx = position
             # Adjust current index if we inserted before it.
             if not self._shuffle and position <= self._current_index:
@@ -182,6 +213,7 @@ class QueueManager:
             if self._shuffle:
                 # Insert into _tracks and put it next in shuffle order.
                 self._tracks.append(track)
+                self._entry_ids.extend(self._new_entry_ids(1))
                 new_idx = len(self._tracks) - 1
                 insert_pos = self._shuffle_position + 1
                 self._shuffle_order.insert(insert_pos, new_idx)
@@ -201,9 +233,11 @@ class QueueManager:
         if not tracks:
             return
         with self._lock:
+            entry_ids = self._new_entry_ids(len(tracks))
             if self._shuffle:
                 start_idx = len(self._tracks)
                 self._tracks.extend(tracks)
+                self._entry_ids.extend(entry_ids)
                 new_indices = range(start_idx, start_idx + len(tracks))
                 insert_pos = self._shuffle_position + 1
                 for offset, new_idx in enumerate(new_indices):
@@ -211,6 +245,7 @@ class QueueManager:
             else:
                 insert_pos = self._current_index + 1 if self._current_index >= 0 else 0
                 self._tracks[insert_pos:insert_pos] = tracks
+                self._entry_ids[insert_pos:insert_pos] = entry_ids
 
     def _add_multiple_unlocked(self, tracks: list[dict]) -> None:
         """Append *tracks* to the queue and update shuffle order.
@@ -222,6 +257,7 @@ class QueueManager:
         was_empty = len(self._tracks) == 0
         start_idx = len(self._tracks)
         self._tracks.extend(tracks)
+        self._entry_ids.extend(self._new_entry_ids(len(tracks)))
         new_indices = list(range(start_idx, start_idx + len(tracks)))
 
         if self._shuffle:
@@ -259,6 +295,7 @@ class QueueManager:
                 # Shift indices that pointed beyond the removed track.
                 self._shuffle_order = [(i - 1 if i > real_idx else i) for i in self._shuffle_order]
                 del self._tracks[real_idx]
+                del self._entry_ids[real_idx]
                 if index < self._shuffle_position:
                     self._shuffle_position -= 1
                 elif index == self._shuffle_position:
@@ -268,6 +305,7 @@ class QueueManager:
                         self._shuffle_position = len(self._shuffle_order) - 1
             else:
                 del self._tracks[index]
+                del self._entry_ids[index]
                 if index < self._current_index:
                     self._current_index -= 1
                 elif index == self._current_index:
@@ -285,6 +323,7 @@ class QueueManager:
         """
         with self._lock:
             self._tracks.clear()
+            self._entry_ids.clear()
             self._current_index = -1
             self._shuffle_order.clear()
             self._shuffle_position = -1
@@ -315,6 +354,7 @@ class QueueManager:
             else:
                 track = self._tracks.pop(from_idx)
                 self._tracks.insert(to_idx, track)
+                self._entry_ids.insert(to_idx, self._entry_ids.pop(from_idx))
                 # Update current_index if it was affected.
                 if from_idx == self._current_index:
                     self._current_index = to_idx

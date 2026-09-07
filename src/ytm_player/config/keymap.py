@@ -81,6 +81,9 @@ class Action(str, Enum):
     PLAY_NEXT = "play_next"
     ADD_TO_QUEUE = "add_to_queue"
     ADD_TO_PLAYLIST = "add_to_playlist"
+    MARK_TOGGLE = "mark_toggle"
+    MARK_RANGE = "mark_range"
+    MARK_CLEAR = "mark_clear"
     DISCOVERY_MIX = "discovery_mix"
     FILTER = "filter"
     PICK_COUNTRY = "pick_country"
@@ -158,6 +161,12 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
     "play_next": ["X", "C-x"],
     "add_to_queue": ["Z", "C-z"],
     "add_to_playlist": ["A"],
+    # Marks (multi-select): v toggles the highlighted track, V starts a
+    # range that follows the cursor, Escape clears. A then adds every
+    # marked track to a playlist.
+    "mark_toggle": ["v"],
+    "mark_range": ["V"],
+    "mark_clear": ["escape"],
     "discovery_mix": ["D"],
     "filter": ["/"],
     "pick_country": ["c"],
