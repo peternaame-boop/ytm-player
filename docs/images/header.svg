@@ -6,6 +6,9 @@
     }
   </style>
   <defs>
+    <filter id="ytm-wordmark-shadow" x="-10%" y="-30%" width="120%" height="160%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#0f0f0f" flood-opacity="0.9"/>
+    </filter>
     <filter id="ytm-logo-halo" x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur in="SourceGraphic" stdDeviation="7"/>
     </filter>
@@ -15,7 +18,7 @@
       <animate attributeName="opacity" values="0.4;1;0.4" dur="2.6s" repeatCount="indefinite"/>
     </polygon>
     <polygon points="0,12 56,42 0,72" fill="#ff4e45"/>
-    <text class="wordmark" x="80" y="65" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="56" font-weight="600" letter-spacing="-1" textLength="320" lengthAdjust="spacingAndGlyphs">ytm-player</text>
+    <text class="wordmark" x="80" y="65" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="56" font-weight="600" letter-spacing="-1" textLength="320" lengthAdjust="spacingAndGlyphs" filter="url(#ytm-wordmark-shadow)">ytm-player</text>
   </g>
   <text x="360" y="148" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" fill="#9ca3af">YouTube Music in your terminal — synced lyrics, vim keys, mpv backend.</text>
   <text x="360" y="190" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#6b7280">Linux · macOS · Windows · Free-tier supported</text>
