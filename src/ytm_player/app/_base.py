@@ -201,7 +201,7 @@ if TYPE_CHECKING:
             tracks: list[dict],
             *,
             entity_id: str | None = None,
-            start_index: int = 0,
+            start_index: int | None = 0,
             shuffle: bool | None = None,
             autoplay: bool = True,
         ) -> None: ...

@@ -676,3 +676,58 @@ async def test_sidebar_playlist_double_click_plays_without_leaving_library():
     assert h.queue.current_track["video_id"] == "A"
     assert h._active_library_playlist_id == "PL"
     h.navigate_to.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "global_shuffle,saved_shuffle,expected_order",
+    [
+        (False, None, "ABC"),
+        (True, None, "CBA"),
+        (False, True, "CBA"),
+        (True, True, "CBA"),
+        (True, False, "ABC"),
+    ],
+)
+async def test_playlist_double_click_starts_at_front_of_effective_play_order(
+    monkeypatch, global_shuffle, saved_shuffle, expected_order
+):
+    from ytm_player.app._sidebar import SidebarMixin
+
+    # Deterministic shuffle: prove the source's first song is not pinned, and
+    # playback starts at shuffled position zero rather than skipping a prefix.
+    monkeypatch.setattr("ytm_player.services.queue.random.shuffle", lambda items: items.reverse())
+    h = collection_host()
+    h.navigate_to = AsyncMock()
+    if global_shuffle:
+        h.queue.toggle_shuffle()
+    if saved_shuffle is not None:
+        h.shuffle_prefs["PL"] = saved_shuffle
+    h.ytmusic.get_playlist = AsyncMock(
+        return_value={
+            "tracks": [{"videoId": vid, "title": vid} for vid in "ABC"],
+            "trackCount": 3,
+        }
+    )
+    message = SimpleNamespace(item_data={"playlistId": "PL", "title": "Playlist"})
+
+    await SidebarMixin.on_playlist_sidebar_playlist_double_clicked(h, message)
+
+    assert h.player.play.await_args.args[1]["video_id"] == expected_order[0]
+    assert h.queue.current_index == 0
+    assert h.queue.shuffle_enabled == (expected_order == "CBA")
+    played = [h.queue.current_track["video_id"]]
+    while (next_track := h.queue.next_track()) is not None:
+        played.append(next_track["video_id"])
+    assert "".join(played) == expected_order
+    h.navigate_to.assert_not_awaited()
+
+
+async def test_explicit_track_selection_keeps_chosen_song_with_shuffle_lock(monkeypatch):
+    monkeypatch.setattr("ytm_player.services.queue.random.shuffle", lambda items: items.reverse())
+    h = collection_host()
+    h.shuffle_prefs["PL"] = True
+
+    await h._replace_queue_and_play([track(vid) for vid in "ABC"], entity_id="PL", start_index=1)
+
+    assert h.player.play.await_args.args[1]["video_id"] == "B"
+    assert h.queue.shuffle_enabled

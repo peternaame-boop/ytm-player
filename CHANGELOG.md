@@ -23,6 +23,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Playlist shuffle includes the first song played** — double-clicking a playlist follows the active shuffle setting unless the playlist has a saved preference. Shuffled playback starts at the beginning of the randomized queue rather than forcing the playlist's original first song; clicking a specific track still plays that track.
+
 - **Double-clicking a sidebar playlist keeps its Library view open** — playback starts without automatically switching to Queue.
 
 - **Click then Shift-click selects the whole range** — a normal track-row click now sets the start of a range, so Shift-clicking another row marks both endpoints and every visible row between them. Other marks and normal click-to-play behaviour are preserved.
@@ -62,7 +64,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **A download that can't create its directory no longer closes the app** — a permission or directory failure while starting a download is reported as "Download failed" like any other download error. Pressing Download on a track that is already downloading shows one "Already downloading" notice instead of a second "Downloading" notice followed by an error.
 - **Double-clicking a sidebar playlist loaded it three times** — one double-click fired two single-click selections plus the double-click, starting three concurrent playlist fetches. It now fires exactly one selection and one double-click.
 - **Playback failed with `HTTP error 403 Forbidden` on every track** (#140, #142) — YouTube started rejecting streams from yt-dlp's former default client on 2026-08-17; yt-dlp 2026.08.19 dropped that client. ytm-player now requires `yt-dlp>=2026.8.19`, so upgrading ytm-player pulls in the fix. Per-installer upgrade steps: [Troubleshooting](docs/troubleshooting.md#playback-fails-with-http-error-403-forbidden).
-- **Explicit play inherited last session's shuffle** — double-clicking a playlist (or playing any album, artist, or page selection) kept whatever shuffle state was left over, so the queue showed a shuffled order with no hint why. Explicit play now starts unshuffled unless that collection has a saved shuffle preference; the toast reads `Playing: <name> (shuffled)` when shuffle is on.
+- **Explicit track and album selection respects saved shuffle preferences** — these selections start unshuffled unless the collection has a saved preference. Whole-playlist starts follow the active shuffle setting instead; the toast reads `Playing: <name> (shuffled)` when shuffle is on.
 - **Opening and quitting without playing no longer loses the resume point** — the saved track, position and queue were rewritten on every quit that didn't play anything, and on every start that failed before the session was restored (not signed in, a service that couldn't start). The resume point read at startup is now written back until a track's load is accepted, and nothing is saved at all when the session was never restored. Clearing the queue on purpose still saves an empty queue.
 - **`ytm` starts when YouTube Music can't be reached** — a connection error or timeout while validating the sign-in at startup crashed the app. It now starts with the notice "YouTube Music couldn't be reached. Starting without validating your sign-in." and doesn't touch the browser's cookies.
 - **An unreadable `history.db` no longer stops the app from starting** — play history is disabled for that session with a notice naming the file; the database is not deleted or replaced.

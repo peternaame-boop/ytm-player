@@ -362,7 +362,7 @@ class TrackActionsMixin(YTMHostBase):
         tracks: list[dict],
         *,
         entity_id: str | None = None,
-        start_index: int = 0,
+        start_index: int | None = 0,
         shuffle: bool | None = None,
         autoplay: bool = True,
     ) -> None:
@@ -384,12 +384,17 @@ class TrackActionsMixin(YTMHostBase):
             # saved OFF must clear a currently-ON shuffle, not just force ON.
             if self.queue.shuffle_enabled != saved_pref:
                 self.queue.toggle_shuffle()
-        elif shuffle is None or shuffle is False:
-            # Without a per-collection preference, explicit play starts unshuffled so a
-            # previous session's or collection's global flag cannot leak into the new queue.
+        elif shuffle is False or (shuffle is None and start_index is not None):
+            # A chosen row retains the explicit-play policy. A whole-playlist
+            # start (no source index) instead follows the active shuffle mode.
             if self.queue.shuffle_enabled:
                 self.queue.toggle_shuffle()
-        self.queue.jump_to_real(start_index)
+        if start_index is None:
+            # Start at the front of the effective playback order, not source
+            # row zero (which may sit anywhere inside the shuffled queue).
+            self.queue.jump_to(0)
+        else:
+            self.queue.jump_to_real(start_index)
         self._refresh_queue_page()
         self._sync_shuffle_bar()
         if autoplay and self.queue.current_track is not None:
@@ -920,7 +925,9 @@ class TrackActionsMixin(YTMHostBase):
             if not tracks:
                 self.notify("Playlist is empty", severity="warning")
                 return
-            await self._replace_queue_and_play(tracks, entity_id=playlist_id, shuffle=shuffle)
+            await self._replace_queue_and_play(
+                tracks, entity_id=playlist_id, start_index=None, shuffle=shuffle
+            )
             if not owns_request(self):
                 return
             suffix = " (shuffled)" if self.queue.shuffle_enabled else ""
