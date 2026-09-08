@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 if TYPE_CHECKING:
@@ -612,10 +613,10 @@ class ContextPage(TrackFilterHost, Widget):
             suffix = mutation_failure_suffix(result)
             self.app.notify(f"Failed to add to library — {suffix}", severity="error", timeout=4)
 
-    async def _start_radio(self) -> None:
+    def _start_radio(self) -> Coroutine[Any, Any, None]:
         """Start radio seeded from the current playlist."""
         item = {**self._data, "playlistId": self._data.get("playlistId") or self.context_id}
-        await cast("YTMHostBase", self.app)._start_playlist_radio(item)
+        return cast("YTMHostBase", self.app)._start_playlist_radio(item)
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected track and enqueue remaining tracks."""

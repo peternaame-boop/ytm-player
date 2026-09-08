@@ -963,17 +963,7 @@ class SearchPage(Widget):
                 return
 
             if action_id in ("play_all", "shuffle_play"):
-
-                async def _play_and_navigate() -> None:
-                    prev = host.queue.current_track
-                    await host._dispatch_entity_action(action_id, item, item_type)
-                    if (
-                        host.queue.current_track is not None
-                        and host.queue.current_track is not prev
-                    ):
-                        await host.navigate_to("queue")
-
-                host.run_worker(_play_and_navigate())
+                host.run_worker(host._play_entity_and_navigate(action_id, item, item_type))
                 return
 
             if action_id == "toggle_subscribe":

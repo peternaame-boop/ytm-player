@@ -37,6 +37,11 @@ class MPRISMixin(YTMHostBase):
         await self._toggle_play_pause()
 
     async def _mpris_stop(self) -> None:
+        from ytm_player.app._ownership import invalidate_requests
+
+        invalidate_requests(self)
+        self._last_play_video_id = ""
+        self._last_play_time = 0.0
         if self.player:
             # Stop supersedes the current play attempt: a stream error
             # arriving for it afterwards must not restart playback.

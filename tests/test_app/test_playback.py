@@ -76,6 +76,15 @@ def _stream_info(video_id: str):
     )
 
 
+def _accept_playback(host):
+    """Model load acceptance explicitly; an idle return models a failed load."""
+
+    async def accept(url, track, attempt=None):
+        host.player.current_track = track
+
+    host.player.play = AsyncMock(side_effect=accept)
+
+
 class TestResumeInvalidationHook:
     """The resume point read from session.json is a fallback for the session
     save only until a track's load is accepted (not proof audio started —
@@ -248,6 +257,7 @@ def _resume_capable_host():
     from ytm_player.services.stream import StreamInfo
 
     host = _fresh_playback_host()
+    _accept_playback(host)
     host.player.seek_absolute = AsyncMock()
     host.stream_resolver.resolve = AsyncMock(
         return_value=StreamInfo(
@@ -590,6 +600,7 @@ class TestCrossTrackRace:
         host.discord = MagicMock()
         host.discord.is_connected = True
         host.discord.update = AsyncMock()
+        _accept_playback(host)
 
         a_resolving = asyncio.Event()
         release_a = asyncio.Event()
@@ -642,6 +653,7 @@ class TestCrossTrackRace:
         host.discord = MagicMock()
         host.discord.is_connected = True
         host.discord.update = discord_update
+        _accept_playback(host)
         host.lastfm = MagicMock()
         host.lastfm.is_connected = True
         host.lastfm.now_playing = AsyncMock()
@@ -773,7 +785,7 @@ class TestTrackEndFinalize:
         host._play_next = AsyncMock()
         host.player.current_track = {"video_id": "new"}
 
-        await host._on_track_end({"track": {"video_id": "old"}})
+        await host._on_track_end({"track": {"video_id": "old"}, "attempt": 0})
 
         host._log_listen_for.assert_not_awaited()
         host._play_next.assert_not_awaited()
@@ -785,7 +797,7 @@ class TestTrackEndFinalize:
         host._play_next = AsyncMock()
         host.player.current_track = None
 
-        await host._on_track_end({"track": {"video_id": "old"}})
+        await host._on_track_end({"track": {"video_id": "old"}, "attempt": 0})
 
         host._log_listen_for.assert_awaited_once_with({"video_id": "old"})
         host._play_next.assert_awaited_once()
@@ -1062,6 +1074,7 @@ class TestPlayerErrorRecovery:
         host._recovery_generation = 4
         host.player.is_playing = True
         host.player.position = 12.5
+        host.player.current_attempt = host._play_generation
 
         host._poll_position()
 

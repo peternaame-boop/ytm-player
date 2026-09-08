@@ -300,15 +300,15 @@ class TestFetchRemainingArtistSongs:
         host._refresh_queue_page.assert_called_once()
 
     async def test_bails_when_queue_replaced(self):
-        """Skips enrichment if the queue no longer contains initial tracks."""
+        """A replacement during the fetch invalidates its captured lifetime."""
         host = _make_host()
-        host.ytmusic.get_playlist = AsyncMock(
-            return_value={
-                "tracks": [
-                    {"videoId": "s1", "title": "Old", "artists": [{"name": "A", "id": "a"}]},
-                ]
-            }
-        )
+        host.queue.generation = 1
+
+        async def replace_during_fetch(*args):
+            host.queue.generation = 2
+            return {"tracks": [{"videoId": "s1", "title": "Old"}]}
+
+        host.ytmusic.get_playlist = AsyncMock(side_effect=replace_during_fetch)
         host.queue.tracks = ({"video_id": "different", "title": "New Content"},)
         initial = [{"video_id": "s1", "title": "Old"}]
         await TrackActionsMixin._fetch_remaining_artist_songs(host, "VLPLfull", initial)

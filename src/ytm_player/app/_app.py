@@ -263,14 +263,16 @@ class YTMPlayerApp(
         # Consecutive stream failure counter (prevents infinite skip loops).
         self._consecutive_failures: int = 0
 
-        # Guard against duplicate end-file events advancing twice.
-        self._advancing: bool = False
         # Debounce rapid play_track calls (e.g. double-click).
         self._last_play_video_id: str = ""
         self._last_play_time: float = 0.0
         # Cross-track supersede counter: each committed play_track call
         # bumps it; older in-flight calls abort at their next check.
         self._play_generation: int = 0
+        self._play_request: int = 0
+        self._active_stop_generation: int = 0
+        self._queue_stop_generation: int = 0
+        self._handled_end_attempt: int = -1
         # Generation of the one retry a failed play attempt gets, and the
         # highest attempt whose ERROR was handled (see _on_player_error).
         self._recovery_generation: int | None = None

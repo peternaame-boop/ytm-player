@@ -46,6 +46,11 @@ class QueueManager:
         # the track dicts, so it can't leak into session files or API calls.
         self._entry_ids: list[int] = []
         self._next_entry_id: int = 0
+        self._generation = 0
+        # A removed audible occurrence can finish outside the queue. Keep
+        # its successor by occurrence, never pretend that successor is playing.
+        self._removed_current = False
+        self._removed_next_id: int | None = None
         self._current_index: int = -1
         self._repeat: RepeatMode = RepeatMode.OFF
         self._shuffle: bool = False
@@ -66,9 +71,17 @@ class QueueManager:
     # -- Properties -------------------------------------------------------
 
     @property
+    def generation(self) -> int:
+        """Lifetime of this queue; ordinary navigation/insertion keeps it."""
+        with self._lock:
+            return self._generation
+
+    @property
     def current_index(self) -> int:
         """Index of the currently playing track in the visible order."""
         with self._lock:
+            if self._removed_current:
+                return -1
             if self._shuffle:
                 return self._shuffle_position
             return self._current_index
@@ -122,6 +135,8 @@ class QueueManager:
     def real_index(self) -> int:
         """Current index into _tracks regardless of shuffle mode."""
         with self._lock:
+            if self._removed_current:
+                return -1
             return self._real_index()
 
     @property
@@ -139,11 +154,20 @@ class QueueManager:
     def remaining_tracks(self) -> int:
         """Number of tracks remaining after the current position (shuffle-aware)."""
         with self._lock:
+            if self._removed_current:
+                return len(self._tracks) - self._removed_next_position()
             if self._shuffle:
                 return len(self._shuffle_order) - self._shuffle_position - 1
             return len(self._tracks) - self._current_index - 1
 
     # -- Helpers ----------------------------------------------------------
+
+    def _removed_next_position(self) -> int:
+        """Visible position of the removed occurrence's successor, or end."""
+        if self._removed_next_id in self._entry_ids:
+            real = self._entry_ids.index(self._removed_next_id)
+            return self._shuffle_order.index(real) if self._shuffle else real
+        return len(self._tracks)
 
     def _real_index(self) -> int:
         """Current index into _tracks (resolving shuffle indirection)."""
@@ -162,7 +186,7 @@ class QueueManager:
         indices = list(range(len(self._tracks)))
         current_real = self._real_index()
 
-        if keep_current and 0 <= current_real < len(self._tracks):
+        if keep_current and not self._removed_current and 0 <= current_real < len(self._tracks):
             indices.remove(current_real)
             random.shuffle(indices)
             self._shuffle_order = [current_real, *indices]
@@ -182,6 +206,8 @@ class QueueManager:
     def _add_unlocked(self, track: dict, position: int | None = None) -> None:
         """Add a track without acquiring the lock (caller must hold it)."""
         (entry_id,) = self._new_entry_ids(1)
+        if self._removed_current and self._removed_next_id is None:
+            self._removed_next_id = entry_id
         if position is None or position >= len(self._tracks):
             self._tracks.append(track)
             self._entry_ids.append(entry_id)
@@ -210,6 +236,9 @@ class QueueManager:
     def add_next(self, track: dict) -> None:
         """Insert a track immediately after the currently playing track."""
         with self._lock:
+            if self._removed_current:
+                self._add_next_removed([track])
+                return
             if self._shuffle:
                 # Insert into _tracks and put it next in shuffle order.
                 self._tracks.append(track)
@@ -233,6 +262,9 @@ class QueueManager:
         if not tracks:
             return
         with self._lock:
+            if self._removed_current:
+                self._add_next_removed(tracks)
+                return
             entry_ids = self._new_entry_ids(len(tracks))
             if self._shuffle:
                 start_idx = len(self._tracks)
@@ -247,6 +279,20 @@ class QueueManager:
                 self._tracks[insert_pos:insert_pos] = tracks
                 self._entry_ids[insert_pos:insert_pos] = entry_ids
 
+    def _add_next_removed(self, tracks: list[dict]) -> None:
+        """Insert at the removed audible row's boundary (lock held)."""
+        position = self._removed_next_position()
+        ids = self._new_entry_ids(len(tracks))
+        if self._shuffle:
+            start = len(self._tracks)
+            self._tracks.extend(tracks)
+            self._entry_ids.extend(ids)
+            self._shuffle_order[position:position] = range(start, start + len(tracks))
+        else:
+            self._tracks[position:position] = tracks
+            self._entry_ids[position:position] = ids
+        self._removed_next_id = ids[0]
+
     def _add_multiple_unlocked(self, tracks: list[dict]) -> None:
         """Append *tracks* to the queue and update shuffle order.
 
@@ -258,6 +304,8 @@ class QueueManager:
         start_idx = len(self._tracks)
         self._tracks.extend(tracks)
         self._entry_ids.extend(self._new_entry_ids(len(tracks)))
+        if tracks and self._removed_current and self._removed_next_id is None:
+            self._removed_next_id = self._entry_ids[start_idx]
         new_indices = list(range(start_idx, start_idx + len(tracks)))
 
         if self._shuffle:
@@ -308,6 +356,17 @@ class QueueManager:
         if not 0 <= index < len(self._tracks):
             return
 
+        order = self._shuffle_order if self._shuffle else list(range(len(self._tracks)))
+        real_idx = order[index]
+        current_pos = self._shuffle_position if self._shuffle else self._current_index
+        if (not self._removed_current and index == current_pos) or (
+            self._removed_current and self._entry_ids[real_idx] == self._removed_next_id
+        ):
+            self._removed_current = True
+            self._removed_next_id = (
+                self._entry_ids[order[index + 1]] if index + 1 < len(order) else None
+            )
+
         if self._shuffle:
             if index >= len(self._shuffle_order):
                 return
@@ -343,6 +402,9 @@ class QueueManager:
         automatically when new tracks are added.
         """
         with self._lock:
+            self._generation += 1
+            self._removed_current = False
+            self._removed_next_id = None
             self._tracks.clear()
             self._entry_ids.clear()
             self._current_index = -1
@@ -389,6 +451,8 @@ class QueueManager:
     def current(self) -> dict | None:
         """Return the currently selected track, or None."""
         with self._lock:
+            if self._removed_current:
+                return None
             real = self._real_index()
             if 0 <= real < len(self._tracks):
                 return self._tracks[real]
@@ -403,6 +467,20 @@ class QueueManager:
         with self._lock:
             if len(self._tracks) == 0:
                 return None
+
+            if self._removed_current:
+                pos = self._removed_next_position()
+                if pos == len(self._tracks):
+                    if self._repeat != RepeatMode.ALL:
+                        return None
+                    pos = 0
+                self._removed_current = False
+                self._removed_next_id = None
+                if self._shuffle:
+                    self._shuffle_position = pos
+                else:
+                    self._current_index = pos
+                return self._tracks[self._real_index()]
 
             if self._repeat == RepeatMode.ONE:
                 real = self._real_index()
@@ -444,6 +522,20 @@ class QueueManager:
         with self._lock:
             if len(self._tracks) == 0:
                 return None
+
+            if self._removed_current:
+                pos = self._removed_next_position() - 1
+                if pos < 0:
+                    if self._repeat != RepeatMode.ALL:
+                        return None
+                    pos = len(self._tracks) - 1
+                self._removed_current = False
+                self._removed_next_id = None
+                if self._shuffle:
+                    self._shuffle_position = pos
+                else:
+                    self._current_index = pos
+                return self._tracks[self._real_index()]
 
             if self._repeat == RepeatMode.ONE:
                 real = self._real_index()
@@ -515,6 +607,8 @@ class QueueManager:
         with self._lock:
             if len(self._tracks) == 0:
                 return None
+            self._removed_current = False
+            self._removed_next_id = None
             idx = random.randrange(len(self._tracks))
             if self._shuffle:
                 # Find or set position in shuffle order.
@@ -551,6 +645,15 @@ class QueueManager:
             if len(self._tracks) == 0:
                 return None
 
+            if self._removed_current:
+                pos = self._removed_next_position()
+                if pos == len(self._tracks):
+                    if self._repeat != RepeatMode.ALL:
+                        return None
+                    pos = 0
+                real = self._shuffle_order[pos] if self._shuffle else pos
+                return self._tracks[real]
+
             if self._repeat == RepeatMode.ONE:
                 real = self._real_index()
                 if 0 <= real < len(self._tracks):
@@ -578,9 +681,27 @@ class QueueManager:
 
     # -- Utility ----------------------------------------------------------
 
+    def jump_to_entry(self, entry_id: int) -> dict | None:
+        """Resolve and select an occurrence atomically, including under shuffle."""
+        with self._lock:
+            try:
+                real = self._entry_ids.index(entry_id)
+            except ValueError:
+                return None
+            self._removed_current = False
+            self._removed_next_id = None
+            self._current_index = real
+            if self._shuffle:
+                self._shuffle_position = self._shuffle_order.index(real)
+            return self._tracks[real]
+
     def jump_to(self, index: int) -> dict | None:
         """Jump to a specific index in the visible order and return the track."""
         with self._lock:
+            if not 0 <= index < len(self._tracks):
+                return None
+            self._removed_current = False
+            self._removed_next_id = None
             if self._shuffle:
                 if not 0 <= index < len(self._shuffle_order):
                     return None
@@ -606,6 +727,8 @@ class QueueManager:
         with self._lock:
             if not 0 <= real_index < len(self._tracks):
                 return None
+            self._removed_current = False
+            self._removed_next_id = None
             if self._shuffle:
                 try:
                     pos = self._shuffle_order.index(real_index)

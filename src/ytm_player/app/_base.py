@@ -105,10 +105,13 @@ if TYPE_CHECKING:
         # ── Playback state tracking ────────────────────────────────────
         _track_start_position: float
         _consecutive_failures: int
-        _advancing: bool
         _last_play_video_id: str
         _last_play_time: float
         _play_generation: int
+        _play_request: int
+        _active_stop_generation: int
+        _queue_stop_generation: int
+        _handled_end_attempt: int
         _recovery_generation: int | None
         _handled_error_attempt: int
         _ytm_reported_generation: int
@@ -190,6 +193,9 @@ if TYPE_CHECKING:
         ) -> None: ...
         def _refresh_queue_page(self) -> None: ...
         def _sync_shuffle_bar(self) -> None: ...
+        async def _play_entity_and_navigate(
+            self, action_id: str, item: dict, item_type: str, *, sidebar: bool = False
+        ) -> None: ...
         async def _replace_queue_and_play(
             self,
             tracks: list[dict],
