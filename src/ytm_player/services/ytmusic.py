@@ -62,14 +62,20 @@ _EXPECTED_MUTATION_EXCEPTIONS = (
 # - "success":       server accepted the mutation
 # - "auth_required": user has no auth set up at all (run `ytm setup`)
 # - "auth_expired":  HTTP 401/403 from the server (cookies/session stale)
-# - "network":       requests.RequestException or asyncio.TimeoutError
-# - "server_error":  any other YTMusicServerError (4xx/5xx other than auth)
+# - "network":       requests.RequestException other than a read timeout
+# - "timeout":       no confirmation in time (asyncio.TimeoutError from wait_for,
+#                    or a requests ReadTimeout): the change may have gone through
+# - "rejected":      the server answered STATUS_FAILED (remove_playlist_items only)
+# - "server_error":  any other YTMusicServerError (4xx/5xx other than auth), or
+#                    a malformed answer
 # - "duplicate":     track already exists in the playlist (add_playlist_items only)
 MutationResult = Literal[
     "success",
     "auth_required",
     "auth_expired",
     "network",
+    "timeout",
+    "rejected",
     "server_error",
     "duplicate",
 ]
@@ -99,7 +105,11 @@ def _classify_mutation_failure(exc: BaseException) -> MutationResult:
         # server-side problem, not connectivity — classifying it "network"
         # would wrongly tell the user to "check your connection".
         return "server_error"
-    if isinstance(exc, (requests.exceptions.RequestException, asyncio.TimeoutError)):
+    if isinstance(exc, (asyncio.TimeoutError, requests.exceptions.ReadTimeout)):
+        # No confirmation arrived in time. The thread behind ``_run`` is not
+        # cancelled and the server may still apply the change.
+        return "timeout"
+    if isinstance(exc, requests.exceptions.RequestException):
         return "network"
     if isinstance(exc, YTMusicUserError):
         # _check_auth() raises this when auth_type is UNAUTHORIZED — i.e.
@@ -126,6 +136,11 @@ _MUTATION_TOAST_SUFFIX: dict[MutationResult, str] = {
     "auth_required": "sign in first (run `ytm setup`)",
     "auth_expired": "session expired, run `ytm setup` to sign in again",
     "network": "check your connection",
+    "timeout": (
+        "No confirmation in time; the change may have gone through. "
+        "Reload to check before retrying."
+    ),
+    "rejected": "the playlist has changed or you can't edit it; reload and check",
     "server_error": "YouTube Music had a problem, try again",
     "duplicate": "track already in playlist",
 }
@@ -1173,13 +1188,28 @@ class YTMusicService:
                 must contain ``videoId`` and ``setVideoId``.
 
         Returns:
-            ``"success"`` if the server accepted the remove, otherwise one
-            of ``"auth_required"``, ``"auth_expired"``, ``"network"``,
+            ``"success"`` if the server accepted the remove, ``"rejected"``
+            if it answered ``STATUS_FAILED`` (the row is gone, or the account
+            can't edit the playlist), otherwise one of ``"auth_required"``,
+            ``"auth_expired"``, ``"network"``, ``"timeout"``,
             ``"server_error"``. Unexpected exceptions propagate.
         """
         try:
-            await self._call(self.client.remove_playlist_items, playlist_id, videos)
-            return "success"
+            result = await self._call(self.client.remove_playlist_items, playlist_id, videos)
+            # ytmusicapi returns the response's status string, or the whole
+            # response when it carries none. An explicit "STATUS_FAILED" is
+            # the server refusing the removal (the row is no longer in the
+            # playlist, or the account can't edit it) — HTTP 200, no
+            # exception. Anything else is a malformed answer.
+            if result == "STATUS_SUCCEEDED":
+                return "success"
+            if result == "STATUS_FAILED":
+                logger.warning("remove_playlist_items rejected for %r", playlist_id)
+                return "rejected"
+            logger.warning(
+                "remove_playlist_items returned no usable status for %r: %r", playlist_id, result
+            )
+            return "server_error"
         except _EXPECTED_MUTATION_EXCEPTIONS as exc:
             kind = _classify_mutation_failure(exc)
             logger.exception(
