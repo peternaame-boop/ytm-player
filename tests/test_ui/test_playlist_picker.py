@@ -4,7 +4,31 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, PropertyMock, patch
 
-from ytm_player.ui.popups.playlist_picker import PlaylistPicker, _CreateNewItem
+import pytest
+from textual.app import App
+from textual.widgets import Label, ListView
+
+from ytm_player.ui.popups.playlist_picker import PlaylistPicker, _CreateNewItem, _PlaylistItem
+
+
+@pytest.mark.parametrize("title", ["[/]", "[bold]literal[/bold]", "音楽 🎵"])
+async def test_playlist_titles_render_literally_and_select_the_same_id(title):
+    class Host(App):
+        selected = None
+
+        def compose(self):
+            yield ListView(_PlaylistItem("PL_literal", title, "12 tracks"))
+
+        def on_list_view_selected(self, event):
+            self.selected = event.item.playlist_id
+
+    app = Host()
+    async with app.run_test() as pilot:
+        label = app.query_one(Label)
+        assert str(label.render()) == f"{title}  (12 tracks)"
+        app.query_one(ListView).focus()
+        await pilot.press("enter")
+        assert app.selected == "PL_literal"
 
 
 class TestOnCreateResult:

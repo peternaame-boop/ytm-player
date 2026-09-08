@@ -24,6 +24,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Stop and newer playback requests supersede older work** — delayed native loads, radio requests and queue population can no longer take playback back or fill a replacement queue. End-file events are matched to their native load, so a stale event cannot advance a newer selection. An unsuccessful selection leaves the currently playing song's completion and recovery intact.
+- **Queue actions follow the selected occurrence** — popup Play on a queue row selects that exact copy; a stale row refuses instead of playing another copy. Removing the playing row lets its song finish, then continues with the surviving successor. Clearing the queue without stopping playback still lets the song finish and follows the current queue or autoplay setting.
+- **Failed playback preserves resume and reports exhaustion** — a load that was not accepted does not consume the staged resume position, and an older seek cannot clear a newer resume. Failed recovery stops in repeat-one mode and reports when there is no next track.
+- **Shutdown attempts every cleanup step** — a failure saving the session or closing one service is logged without preventing the remaining services from being closed. Cancellation is re-raised after the remaining cleanup attempts.
+- **`ytm doctor` hides stream URLs** — HTTP(S) and TCP URLs, including embedded IP addresses and signed playback parameters, are removed from the diagnostic report while surrounding error information is retained. This does not promise to remove arbitrary secrets from log text.
+- **Playlist titles and artist-album rows render safely** — markup-like titles are shown literally, and duplicate artist-album IDs or titles no longer crash the album list.
+
 - **Removing a track the playlist no longer has is reported as a failure** — a refused removal came back as "Track removed" while the row stayed. The message now says the playlist has changed or you can't edit it, reload and check.
 - **A track just added to the open playlist no longer points at the row it came from** — the appended row reused the source row's id when the server's answer carried none, so "Remove from Playlist" on it removed the original row. It now asks for a reload instead.
 - **Playlist picker: typing in the filter keeps the cursor in the filter** — focus jumped to the list after the first character.
