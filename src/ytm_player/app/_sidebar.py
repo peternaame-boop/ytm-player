@@ -282,7 +282,7 @@ class SidebarMixin(YTMHostBase):
     async def on_playlist_sidebar_playlist_double_clicked(
         self, message: PlaylistSidebar.PlaylistDoubleClicked
     ) -> None:
-        """Queue all tracks from double-clicked playlist and start playback."""
+        """Start the double-clicked playlist without leaving its Library view."""
         item = message.item_data
         playlist_id = item.get("playlistId") or item.get("browseId")
         name = item.get("title", "playlist")
@@ -295,7 +295,6 @@ class SidebarMixin(YTMHostBase):
                 and self.queue.current_track is not prev
             ):
                 self._active_library_playlist_id = playlist_id
-                await self.navigate_to("queue")
 
     def on_playlist_sidebar_playlist_right_clicked(
         self, message: PlaylistSidebar.PlaylistRightClicked

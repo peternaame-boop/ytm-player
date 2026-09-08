@@ -1032,7 +1032,9 @@ class TrackTable(DataTable):
         to that row and never starts playback: ``prevent_default`` keeps
         DataTable from moving the cursor itself and from posting the
         RowSelected that a click on the highlighted row would raise. Plain
-        clicks fall through unchanged. Whether Ctrl-click or Shift-click
+        clicks set the range anchor without changing their playback behaviour;
+        in keyboard range mode they extend the existing range instead.
+        Whether Ctrl-click or Shift-click
         arrives with its modifier is up to the terminal; ``v``/``V`` are the
         keyboard route.
         """
@@ -1046,6 +1048,8 @@ class TrackTable(DataTable):
             # click on the mark column.
             on_mark_column = meta.get("column") == 0 and not meta.get("out_of_bounds")
             if not (event.ctrl or event.shift or on_mark_column):
+                if not self._range_mode:
+                    self._anchor = self._filtered_map[row_idx]
                 return
             event.stop()
             event.prevent_default()

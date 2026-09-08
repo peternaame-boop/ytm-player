@@ -61,9 +61,9 @@
 | Right-click | Track row | Open context menu (play, queue, add to playlist, etc.). Works on every track-listing page including Queue / Liked Songs / Recently Played. |
 | Click | Mark column (leftmost cell of a track row) | Mark / unmark that track. Never starts playback. |
 | Ctrl+click | Track row | Mark / unmark that track and move the highlight there. Never starts playback. |
-| Shift+click | Track row | Mark every row from the last marked or Ctrl-clicked row to this one, keeping other marks. |
+| Shift+click | Track row | Mark every row from the range's starting row to this one, keeping other marks. A normal click, Ctrl+click, or `v` sets the starting row. |
 
-Whether Ctrl+click and Shift+click reach the app with their modifier depends on the terminal — some keep them for their own text selection or link handling. The keyboard alternative always works: `v` marks the highlighted track and `V` marks a range that follows the cursor.
+Whether Ctrl+click and Shift+click reach the app with their modifier depends on the terminal — some keep them for their own text selection or link handling. The keyboard alternative is `v` to mark the highlighted track and `V` to mark a range that follows the cursor.
 
 ## Custom keybindings
 
