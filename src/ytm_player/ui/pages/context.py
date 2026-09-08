@@ -6,6 +6,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from rich.text import Text
+
 if TYPE_CHECKING:
     from ytm_player.app._base import YTMHostBase
 
@@ -66,7 +68,9 @@ class _ArtistAlbumList(DataTable):
         for album in self._albums:
             title = album.get("title", "Unknown")
             year = str(album.get("year", ""))
-            self.add_row(title, year, key=album.get("browseId", title))
+            # Feed entries can repeat IDs/titles. Generated keys identify rows;
+            # cursor position still selects the corresponding source album.
+            self.add_row(Text(str(title)), Text(year))
 
     @property
     def selected_album(self) -> dict | None:

@@ -66,7 +66,7 @@ class _PlaylistItem(ListItem):
         text = self._title
         if self._count:
             text = f"{self._title}  ({self._count})"
-        yield Label(text)
+        yield Label(text, markup=False)
 
 
 class _CreateNewItem(ListItem):
