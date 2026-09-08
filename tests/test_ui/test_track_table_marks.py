@@ -7,6 +7,7 @@ the optional selection-info bar.
 
 from __future__ import annotations
 
+import pytest
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Static
@@ -295,6 +296,61 @@ async def test_removing_a_marked_row_drops_its_mark_and_bumps_the_generation():
 
 
 # ── Mouse ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("start,end", [(0, 2), (2, 0)])
+@pytest.mark.parametrize("sorted_view", [False, True])
+async def test_plain_click_then_shift_click_marks_inclusive_range(start, end, sorted_view):
+    app = _Host()
+    async with app.run_test() as pilot:
+        table = app.table
+        table.load_tracks(_tracks())
+        if sorted_view:
+            table.sort_by("title")
+        await pilot.pause()
+        x = _x_of(table, "title")
+
+        await pilot.click(TrackTable, offset=(x, start + 1))
+        assert table.marked_count == 0
+        selected_before_shift = list(app.selected)
+        await pilot.click(TrackTable, offset=(x, end + 1), shift=True)
+        await pilot.pause()
+
+        assert _glyphs(table) == "✓✓✓  "
+        assert table.cursor_row == end
+        assert app.selected == selected_before_shift
+
+
+async def test_plain_click_reanchors_without_discarding_other_marks():
+    app = _Host()
+    async with app.run_test() as pilot:
+        table = app.table
+        table.load_tracks(_tracks())
+        table.move_cursor(row=4)
+        await table.handle_action(Action.MARK_TOGGLE)
+        await pilot.pause()
+        x = _x_of(table, "title")
+
+        await pilot.click(TrackTable, offset=(x, 1))
+        await pilot.click(TrackTable, offset=(x, 3), shift=True)
+        await pilot.pause()
+
+        assert _glyphs(table) == "✓✓✓ ✓"
+
+
+async def test_plain_click_during_keyboard_range_keeps_original_anchor():
+    app = _Host()
+    async with app.run_test() as pilot:
+        table = app.table
+        table.load_tracks(_tracks())
+        await table.handle_action(Action.MARK_RANGE)
+        await pilot.pause()
+
+        await pilot.click(TrackTable, offset=(_x_of(table, "title"), 3))
+        await pilot.pause()
+
+        assert table._anchor == 0
+        assert _glyphs(table) == "✓✓✓  "
 
 
 async def test_ctrl_click_toggles_moves_the_highlight_and_never_selects():

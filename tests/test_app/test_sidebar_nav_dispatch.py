@@ -32,11 +32,11 @@ class TestNavDispatch:
         host._start_discovery_mix.assert_called_once()
         host.navigate_to.assert_not_called()
 
-    async def test_browse_navigates_directly(self):
+    async def test_recently_played_navigates_directly(self):
         host = _make_host()
-        await _dispatch(host, "browse")
+        await _dispatch(host, "recently_played")
 
-        host.navigate_to.assert_awaited_once_with("browse")
+        host.navigate_to.assert_awaited_once_with("recently_played")
         host.run_worker.assert_not_called()
 
     async def test_liked_songs_navigates_directly(self):

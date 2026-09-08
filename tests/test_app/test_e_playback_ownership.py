@@ -654,3 +654,25 @@ async def test_stale_sidebar_load_cannot_change_active_playlist_or_navigate():
     await SidebarMixin.on_playlist_sidebar_playlist_double_clicked(h, message)
     assert h._active_library_playlist_id == "CURRENT"
     h.navigate_to.assert_not_awaited()
+
+
+async def test_sidebar_playlist_double_click_plays_without_leaving_library():
+    from ytm_player.app._sidebar import SidebarMixin
+
+    h = collection_host()
+    h.navigate_to = AsyncMock()
+    h.ytmusic.get_playlist = AsyncMock(
+        return_value={"tracks": [{"videoId": "A", "title": "A"}], "trackCount": 1}
+    )
+    message = SimpleNamespace(item_data={"playlistId": "PL", "title": "Playlist"})
+
+    # The sidebar emits Selected on the first click, then DoubleClicked.
+    await SidebarMixin.on_playlist_sidebar_playlist_selected(h, message)
+    h.navigate_to.assert_awaited_once_with("library", playlist_id="PL")
+    h.navigate_to.reset_mock()
+    await SidebarMixin.on_playlist_sidebar_playlist_double_clicked(h, message)
+
+    h.player.play.assert_awaited_once()
+    assert h.queue.current_track["video_id"] == "A"
+    assert h._active_library_playlist_id == "PL"
+    h.navigate_to.assert_not_awaited()

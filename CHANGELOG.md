@@ -12,7 +12,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Mark tracks and add them to a playlist in one go** (#159) — on every track list, `v` marks or unmarks the highlighted track, `V` starts a range that follows the cursor, and `Escape` clears the marks; A click on the new leftmost column marks a row with the mouse; Ctrl+click marks a row and Shift+click marks a run where the terminal passes those modifiers on, with `v` and `V` as the keyboard alternative. `A` then adds every marked track through the playlist picker, in the order shown. Marks belong to the row, not the song: marking one of two copies of a track marks only that copy, and marking both submits both. They survive sorting, filtering, and the list re-rendering underneath you when a play lands in Recently Played or the queue changes. While anything is marked the table shows a line underneath with the count, including marks the filter hides. Filtering a sorted list now keeps the sort.
 
-- **Browse in the sidebar** — a pinned "Browse" item next to Liked Songs, Recently Played and Discovery Mix opens the Browse page, which was only reachable through the footer button or `g b`. Thanks @ThePhatLeee (#125).
 - **Playlists tab on Browse** — every playlist the home feed offers, in one list: YouTube Music's own mixes (Discover Mix, New Release Mix, My Supermix, ...), curated and community playlists, recaps and Liked Music, read up to 25 shelves deep, one row per playlist. Albums and songs stay out. Selecting a row opens the playlist. For You and Playlists share one home feed per visit: For You alone fetches its configured `home_shelves`; opening Playlists deepens the feed once, and For You reuses it. (#125)
 - **Subscriptions tab on Browse** — the artists you're subscribed to, all of them, each opening its artist page. (#125)
 
@@ -23,6 +22,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Recently Played: All / Local / YT Music tabs** (#115) — the YT Music tab now shows your account's complete play history instead of hiding every track ever played in this app, and a new All tab (the default) shows local history first, followed by additional account history, one row per track. A line under the tabs says what each shows, and the footer says when a source couldn't be loaded. A play the account accepts appears on the YT Music and All tabs right away. Thanks @Villoh for the tabs and the discussion.
 
 **Fixes**
+
+- **Double-clicking a sidebar playlist keeps its Library view open** — playback starts without automatically switching to Queue.
+
+- **Click then Shift-click selects the whole range** — a normal track-row click now sets the start of a range, so Shift-clicking another row marks both endpoints and every visible row between them. Other marks and normal click-to-play behaviour are preserved.
 
 - **Stop and newer playback requests supersede older work** — delayed native loads, radio requests and queue population can no longer take playback back or fill a replacement queue. End-file events are matched to their native load, so a stale event cannot advance a newer selection. An unsuccessful selection leaves the currently playing song's completion and recovery intact.
 - **Queue actions follow the selected occurrence** — popup Play on a queue row selects that exact copy; a stale row refuses instead of playing another copy. Removing the playing row lets its song finish, then continues with the surviving successor. Clearing the queue without stopping playback still lets the song finish and follows the current queue or autoplay setting.
