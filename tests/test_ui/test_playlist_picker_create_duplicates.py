@@ -1,9 +1,11 @@
 """Create-new-playlist path: a ``"duplicate"`` answer gets the same confirmation.
 
 Accepting retries against the playlist that was just created — never a
-second one — and then runs the normal completion. Declining closes the
-picker with ``None`` (the caller keeps its marks). A failed retry leaves
-the picker open with the created playlist and no dismissal.
+second one — and then runs the normal completion. Declining reports the
+playlist as created with nothing added, shows it in the sidebar and closes
+the picker with ``None`` (the caller keeps its marks; nothing was added, so
+it is not a recent target). A failed retry leaves the picker open with the
+created playlist and no dismissal.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ class _Run:
         self.app.push_screen.assert_called_once()
         popup, callback = self.app.push_screen.call_args.args
         assert isinstance(popup, ConfirmPopup)
+        self.question = popup._message
         return callback
 
     async def answer(self, confirmed: bool) -> None:
@@ -61,10 +64,11 @@ class _Run:
             patch.object(
                 type(self.picker), "app", new_callable=PropertyMock, return_value=self.app
             ),
-            patch("ytm_player.ui.popups.playlist_picker._record_recent"),
+            patch("ytm_player.ui.popups.playlist_picker._record_recent") as recent,
         ):
             for coro in self.workers:
                 await coro
+        self.recorded_recent = recent.called
 
 
 async def test_duplicate_then_accept_retries_the_same_playlist_and_completes():
@@ -84,7 +88,7 @@ async def test_duplicate_then_accept_retries_the_same_playlist_and_completes():
     assert "Added 2 tracks to 'Fresh'" in run.picker.notify.call_args.args[0]
 
 
-async def test_duplicate_then_decline_closes_with_nothing_added():
+async def test_duplicate_then_decline_reports_the_empty_playlist_and_closes():
     run = _Run(["duplicate"])
     await run.create()
 
@@ -92,7 +96,21 @@ async def test_duplicate_then_decline_closes_with_nothing_added():
 
     run.app.ytmusic.create_playlist.assert_awaited_once()
     run.app.ytmusic.add_playlist_items.assert_awaited_once_with("NEWPL", IDS, duplicates=False)
+    run.sidebar.refresh_playlists.assert_awaited_once()
+    assert run.picker.notify.call_args.args[0] == "Created 'Fresh' with nothing added"
     run.picker.dismiss.assert_called_once_with(None)
+    assert run.recorded_recent is False
+
+
+async def test_the_duplicate_question_names_the_selection():
+    """With more than one track the server rejects the whole request when
+    any of them is already there, so the question is about the selection."""
+    run = _Run(["duplicate"])
+    await run.create()
+
+    run.confirmation()
+
+    assert run.question == "Duplicate tracks detected. Add all 2 selected tracks to 'Fresh' anyway?"
 
 
 async def test_duplicate_then_failed_retry_keeps_the_picker_open():

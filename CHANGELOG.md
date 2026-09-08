@@ -24,6 +24,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Removing a track the playlist no longer has is reported as a failure** — a refused removal came back as "Track removed" while the row stayed. The message now says the playlist has changed or you can't edit it, reload and check.
+- **A track just added to the open playlist no longer points at the row it came from** — the appended row reused the source row's id when the server's answer carried none, so "Remove from Playlist" on it removed the original row. It now asks for a reload instead.
+- **Playlist picker: typing in the filter keeps the cursor in the filter** — focus jumped to the list after the first character.
+- **Playlist picker: one submission at a time** — a second Enter, even one already queued, sent the tracks again and could show a second "already in playlist" prompt after the picker had closed; two queued Create New selections opened two dialogs.
+- **Playlist picker: an unconfirmed change stops the picker** — when no confirmation arrives in time the change may still have gone through; the picker says so, tells you what to reload and check (the playlist, or your playlist list after an unconfirmed creation), and takes no further submission.
+- **Playlist picker wording** — the bulk duplicate prompt reads "Duplicate tracks detected. Add all N selected tracks to 'X' anyway?"; declining it after a new playlist was created reports the playlist as created with nothing added and shows it in the sidebar.
+- **A playlist change that times out is reported as unconfirmed** — "No confirmation in time; the change may have gone through. Reload to check before retrying." instead of "check your connection".
 - **Turning shuffle off keeps the playing track** — after skipping under shuffle, turning shuffle off jumped the position back to the track that was playing when shuffle went on, so Next continued from the wrong place.
 - **The Queue page follows every queue change** — toggling shuffle (key, playback-bar button or Shuffle lock), `ytm queue clear`, `ytm queue add` and the background fill of a long playlist now re-render the page, so `d`, `J` and `K` act on the row you see instead of a row that was no longer there.
 - **Remove from Queue removes the copy you picked** — with the same song queued twice, the track menu removed the first copy whichever one was selected. It now removes that occurrence; if it was already gone when you confirmed, nothing else is removed.

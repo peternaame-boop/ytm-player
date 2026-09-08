@@ -12,6 +12,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from ytm_player.ui.pages.library import LibraryPage
+from ytm_player.ui.popups.confirm_popup import ConfirmPopup
 from ytm_player.ui.popups.playlist_picker import PlaylistPicker
 
 
@@ -67,3 +68,35 @@ async def test_unique_submission_still_appends_optimistically():
     assert [t["setVideoId"] for t in appended] == ["set-b", "set-d"]
     library.run_worker.assert_not_called()
     dismiss.assert_called_once_with("PL1")
+
+
+# ── The "already in playlist" question on an existing playlist ────────
+
+
+async def _duplicate_question(video_ids: list[str]) -> str:
+    """Run ``_do_add`` against a server that answers ``"duplicate"``; return the question."""
+    picker = PlaylistPicker(video_ids=video_ids)
+    object.__setattr__(picker, "query_one", lambda *_a, **_k: MagicMock())
+    picker.notify = MagicMock()
+    app = MagicMock()
+    app.ytmusic.add_playlist_items = AsyncMock(return_value="duplicate")
+    with patch.object(type(picker), "app", new_callable=PropertyMock, return_value=app):
+        await picker._do_add("PL1", "My playlist")
+    popup, _callback = app.push_screen.call_args.args
+    assert isinstance(popup, ConfirmPopup)
+    return popup._message
+
+
+async def test_one_track_asks_about_that_track():
+    assert (
+        await _duplicate_question(["b"]) == "This track is already in 'My playlist'.\nAdd anyway?"
+    )
+
+
+async def test_several_tracks_ask_about_the_selection():
+    # The server rejects the whole request when any track is already there;
+    # the selection itself may hold two copies of a song.
+    assert (
+        await _duplicate_question(["b", "b", "d"])
+        == "Duplicate tracks detected. Add all 3 selected tracks to 'My playlist' anyway?"
+    )

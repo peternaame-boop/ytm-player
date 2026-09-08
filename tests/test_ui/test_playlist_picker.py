@@ -79,11 +79,23 @@ class TestTracksForAppend:
         rows = picker._tracks_for_append({})
         assert rows[0].get("_needs_reload_for_removal") is True
 
-    def test_preexisting_set_video_id_is_kept(self):
+    def test_source_set_video_id_is_never_reused(self):
+        # A setVideoId on the source dict names the row the track was taken
+        # from (this or another playlist), never the row just appended:
+        # keeping it made "Remove from Playlist" remove the original row.
         picker = PlaylistPicker(
             video_ids=["vid1"],
             tracks=[{"video_id": "vid1", "title": "T", "setVideoId": "existing"}],
         )
         rows = picker._tracks_for_append({})
-        assert rows[0]["setVideoId"] == "existing"
+        assert "setVideoId" not in rows[0]
+        assert rows[0].get("_needs_reload_for_removal") is True
+
+    def test_source_set_video_id_does_not_survive_a_response_stamp(self):
+        picker = PlaylistPicker(
+            video_ids=["vid1"],
+            tracks=[{"video_id": "vid1", "title": "T", "setVideoId": "existing"}],
+        )
+        rows = picker._tracks_for_append({"vid1": "setABC"})
+        assert rows[0]["setVideoId"] == "setABC"
         assert "_needs_reload_for_removal" not in rows[0]

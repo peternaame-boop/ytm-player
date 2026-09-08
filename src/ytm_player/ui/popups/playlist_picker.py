@@ -135,6 +135,14 @@ class PlaylistPicker(BasePopup[str | None]):
         self.video_ids = video_ids
         self.tracks = tracks or []
         self._playlists: list[dict[str, Any]] = []
+        # One flow owns the picker at a time, from the gesture that starts
+        # it (Enter on a playlist, or on Create New) until it ends in a
+        # failure the user can retry or in the picker closing. Gestures that
+        # arrive while a flow owns it are ignored — including ones already
+        # queued behind the first. After an outcome that could not be
+        # confirmed (a timeout) the flow keeps ownership for good: the
+        # request may still be applied, so this picker takes no other.
+        self._submitting = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -192,8 +200,15 @@ class PlaylistPicker(BasePopup[str | None]):
 
         self._playlists.sort(key=sort_key)
 
-    def _populate_list(self, filter_text: str = "") -> None:
-        """Rebuild the ListView with current playlists, optionally filtered."""
+    def _populate_list(self, filter_text: str = "", *, focus: bool = True) -> None:
+        """Rebuild the ListView with current playlists, optionally filtered.
+
+        *focus* moves keyboard focus to the list (the initial load); a
+        rebuild while the user types in the filter leaves focus alone.
+        While a flow owns the picker the status line is its (progress, or
+        the guidance after an unconfirmed outcome) and a rebuild leaves
+        that alone too.
+        """
         status = self.query_one("#picker-status", Static)
         list_view = self.query_one("#playlist-list", ListView)
         filter_input = self.query_one("#filter-input", Input)
@@ -207,8 +222,9 @@ class PlaylistPicker(BasePopup[str | None]):
             status.update("No playlists found")
             filter_input.display = False
         else:
-            count = len(self._playlists)
-            status.update(f"{count} playlist{'s' if count != 1 else ''}")
+            if not self._submitting:
+                count = len(self._playlists)
+                status.update(f"{count} playlist{'s' if count != 1 else ''}")
             filter_input.display = True
 
         query = filter_text.strip().lower()
@@ -223,30 +239,68 @@ class PlaylistPicker(BasePopup[str | None]):
                 track_count = str(track_count)
             list_view.append(_PlaylistItem(playlist_id, title, track_count))
 
-        list_view.focus()
+        if focus:
+            list_view.focus()
 
     # ── Filtering ───────────────────────────────────────────────────
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "filter-input":
-            self._populate_list(event.value)
+            self._populate_list(event.value, focus=False)
 
     # ── Selection ───────────────────────────────────────────────────
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         event.stop()
+        if self._submitting:
+            return
         item = event.item
 
         if isinstance(item, _CreateNewItem):
+            # Owned from here: a second Create selection queued behind this
+            # one must not open a second dialog.
+            self._submitting = True
             self.app.push_screen(CreatePlaylistPopup(), self._on_create_result)
             return
 
         if isinstance(item, _PlaylistItem):
             self._add_to_playlist(item.playlist_id, item._title)
 
+    def _release(self) -> None:
+        """The flow ended in a failure the user can retry: the picker is free again."""
+        self._submitting = False
+
+    def _report_unconfirmed(self, status: Static, prefix: str, check: str) -> None:
+        """A timeout: keep ownership, tell the user what to do.
+
+        No confirmation came in time. Whether the request reached the
+        server is unknown, and the thread behind it is not cancelled, so
+        the change may still be applied; this picker accepts no further
+        submission. *check* names what the user should reload and look at.
+        """
+        from ytm_player.services.ytmusic import mutation_failure_suffix
+
+        self.notify(
+            f"{prefix} — {mutation_failure_suffix('timeout')}", severity="warning", timeout=8
+        )
+        status.update(f"Unconfirmed — close this, reload {check} and check before retrying")
+
+    def _duplicate_question(self, name: str) -> str:
+        """The confirmation text for a ``"duplicate"`` answer from the server.
+
+        With more than one track the server rejects the whole request when
+        any of them is already there — the selection itself may hold two
+        copies of a song — so the copy names the selection, not one track.
+        """
+        count = len(self.video_ids)
+        if count == 1:
+            return f"This track is already in '{name}'.\nAdd anyway?"
+        return f"Duplicate tracks detected. Add all {count} selected tracks to '{name}' anyway?"
+
     def _on_create_result(self, result: tuple[str, str, str] | None) -> None:
         """Handle the result from CreatePlaylistPopup."""
         if result is None:
+            self._release()
             return
         name, description, privacy = result
         self.run_worker(
@@ -269,12 +323,18 @@ class PlaylistPicker(BasePopup[str | None]):
             create_status, playlist_id = await ytmusic.create_playlist(
                 name, description=description, privacy=privacy
             )
+            if create_status == "timeout":
+                self._report_unconfirmed(
+                    status, f"Couldn't confirm creating '{name}'", "your playlist list"
+                )
+                return
             if create_status != "success" or not playlist_id:
                 self.notify(
                     f"Failed to create playlist — {mutation_failure_suffix(create_status)}",
                     severity="error",
                 )
                 status.update("Creation failed")
+                self._release()
                 return
 
             status.update(f"Adding tracks to '{name}'...")
@@ -284,15 +344,18 @@ class PlaylistPicker(BasePopup[str | None]):
             logger.exception("Failed to create playlist and add tracks")
             self.notify("Failed to create playlist", severity="error")
             status.update("Error")
+            self._release()
 
     async def _add_to_created(self, playlist_id: str, name: str, duplicates: bool = False) -> None:
         """Add the tracks to the playlist just created, then finish.
 
         A ``"duplicate"`` answer asks the same question as for an existing
         playlist; accepting retries against this same *playlist_id* (never
-        a second playlist), declining closes the picker with nothing added,
-        which keeps the caller's marks. Any other failure leaves the picker
-        open with the marks as well.
+        a second playlist), declining reports the playlist as created with
+        nothing added and closes the picker with ``None``, which keeps the
+        caller's marks. A timeout keeps the picker owned (the add may have
+        landed). Any other failure leaves the picker open with the marks
+        as well.
         """
         status = self.query_one("#picker-status", Static)
         try:
@@ -305,24 +368,32 @@ class PlaylistPicker(BasePopup[str | None]):
             )
             if result == "duplicate":
                 status.update("Already in playlist")
-                track_word = "track is" if len(self.video_ids) == 1 else "tracks are"
 
                 def _on_duplicate_confirm(confirmed: bool | None) -> None:
+                    # Still owned either way: the retry and the empty-playlist
+                    # report both belong to this flow.
                     if confirmed:
                         self.run_worker(
                             self._add_to_created(playlist_id, name, duplicates=True),
                             name="create_playlist",
                         )
                     else:
-                        self.dismiss(None)
+                        self.run_worker(
+                            self._finish_created_empty(playlist_id, name), name="create_playlist"
+                        )
 
                 self.app.push_screen(
                     ConfirmPopup(
-                        f"This {track_word} already in '{name}'.\nAdd anyway?",
+                        self._duplicate_question(name),
                         confirm_label="Add anyway",
                         cancel_label="Cancel",
                     ),
                     _on_duplicate_confirm,
+                )
+                return
+            if result == "timeout":
+                self._report_unconfirmed(
+                    status, f"Created '{name}' but couldn't confirm the add", f"'{name}'"
                 )
                 return
             if result != "success":
@@ -331,6 +402,7 @@ class PlaylistPicker(BasePopup[str | None]):
                     severity="warning",
                 )
                 status.update("Add failed")
+                self._release()
                 return
 
             await self._finish_created(playlist_id, name)
@@ -339,21 +411,34 @@ class PlaylistPicker(BasePopup[str | None]):
             logger.exception("Failed to add tracks to the created playlist %r", playlist_id)
             self.notify(f"Created '{name}' but couldn't add tracks", severity="error")
             status.update("Error")
+            self._release()
+
+    async def _refresh_sidebar(self) -> None:
+        """Full sidebar refresh: a new playlist isn't in the cached items yet."""
+        try:
+            from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
+
+            ps = self.app.query_one("#playlist-sidebar", PlaylistSidebar)
+            await ps.refresh_playlists()
+        except Exception:
+            logger.exception("Sidebar refresh failed after create")
+
+    async def _finish_created_empty(self, playlist_id: str, name: str) -> None:
+        """Declined the duplicate prompt after creating: the playlist exists, empty.
+
+        Say so and show it in the sidebar. Nothing was added, so it is not
+        recorded as a recent target and the picker closes with ``None`` (the
+        caller keeps its marks).
+        """
+        await self._refresh_sidebar()
+        self.notify(f"Created '{name}' with nothing added", severity="information")
+        self.dismiss(None)
 
     async def _finish_created(self, playlist_id: str, name: str) -> None:
         """The completion path after tracks landed in a newly created playlist."""
         try:
             _record_recent(playlist_id)
-
-            # Full sidebar refresh — the new playlist doesn't exist in the
-            # cached items yet, so update_item_count would silently be a no-op.
-            try:
-                from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
-
-                ps = self.app.query_one("#playlist-sidebar", PlaylistSidebar)
-                await ps.refresh_playlists()
-            except Exception:
-                logger.exception("Sidebar refresh failed after create")
+            await self._refresh_sidebar()
 
             # Update library page header if the target playlist is currently open.
             try:
@@ -392,8 +477,11 @@ class PlaylistPicker(BasePopup[str | None]):
 
         *set_video_ids* maps videoId -> server-assigned setVideoId from the add
         response; appended rows are stamped with it so "Remove from Playlist"
-        works immediately. Rows still missing a setVideoId are flagged so the
-        remove action can explain a reload is needed.
+        works immediately. A ``setVideoId`` on the source dict names the row
+        the track was taken from (a row of this or another playlist), never
+        the row just appended, so it is dropped. Rows without a setVideoId
+        from the response are flagged so the remove action can explain a
+        reload is needed.
         """
         from ytm_player.utils.formatting import normalize_tracks
 
@@ -406,16 +494,20 @@ class PlaylistPicker(BasePopup[str | None]):
                 if not normed:
                     continue
                 track = normed[0]
+            track.pop("setVideoId", None)
             svid = set_video_ids.get(track.get("video_id", ""))
             if svid:
                 track["setVideoId"] = svid
-            elif not track.get("setVideoId"):
+            else:
                 track["_needs_reload_for_removal"] = True
             out.append(track)
         return out
 
     def _add_to_playlist(self, playlist_id: str, title: str, duplicates: bool = False) -> None:
-        """Add tracks to an existing playlist."""
+        """Start the add flow for an existing playlist, unless one owns the picker."""
+        if self._submitting:
+            return
+        self._submitting = True
         self.run_worker(
             self._do_add(playlist_id, title, duplicates=duplicates),
             name="add_to_playlist",
@@ -435,21 +527,29 @@ class PlaylistPicker(BasePopup[str | None]):
             )
             if result == "duplicate":
                 status.update("Already in playlist")
-                track_word = "track is" if len(self.video_ids) == 1 else "tracks are"
 
                 def _on_duplicate_confirm(confirmed: bool | None) -> None:
                     if confirmed:
-                        self._add_to_playlist(playlist_id, title, duplicates=True)
+                        # The retry belongs to the flow that owns the picker.
+                        self.run_worker(
+                            self._do_add(playlist_id, title, duplicates=True),
+                            name="add_to_playlist",
+                        )
                     else:
                         self.dismiss(None)
 
                 self.app.push_screen(
                     ConfirmPopup(
-                        f"This {track_word} already in '{title}'.\nAdd anyway?",
+                        self._duplicate_question(title),
                         confirm_label="Add anyway",
                         cancel_label="Cancel",
                     ),
                     _on_duplicate_confirm,
+                )
+                return
+            if result == "timeout":
+                self._report_unconfirmed(
+                    status, f"Couldn't confirm adding to '{title}'", "the playlist"
                 )
                 return
             if result != "success":
@@ -458,6 +558,7 @@ class PlaylistPicker(BasePopup[str | None]):
                     severity="error",
                 )
                 status.update("Error")
+                self._release()
                 return
 
             _record_recent(playlist_id)
@@ -515,3 +616,4 @@ class PlaylistPicker(BasePopup[str | None]):
             logger.exception("Failed to add tracks to playlist %r", playlist_id)
             self.notify(f"Failed to add to '{title}'", severity="error")
             status.update("Error")
+            self._release()
