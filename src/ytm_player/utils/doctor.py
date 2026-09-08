@@ -3,8 +3,9 @@
 Produces a single-string report users can paste directly into a GitHub
 issue. It covers every failure class: version, paths, process status,
 MPRIS / media keys, recent ERROR/WARNING, recent mpv warnings,
-faulthandler trace, last crash file, active hooks. All output passes
-through a redaction layer so auth tokens never leak.
+faulthandler trace, last crash file, active hooks. All output passes through
+redaction for recognized auth headers/tokens and HTTP(S)/TCP URLs. This is
+not a guarantee that arbitrary secrets embedded in diagnostic text are removed.
 """
 
 from __future__ import annotations
@@ -18,6 +19,10 @@ import sys
 from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
+
+# Stream URLs may contain the public IP and signed playback parameters.
+# Remove the whole URL rather than guessing which query fields are sensitive.
+_URL_PATTERN = re.compile(r"\b(?:https?|tcp)://[^\s<>\"']+", re.IGNORECASE)
 
 _REDACT_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Match header-value pairs — consume the rest of the line to catch multi-word tokens
@@ -33,7 +38,7 @@ _REDACT_PATTERNS: tuple[re.Pattern[str], ...] = (
 def _redact(text: str) -> str:
     for pat in _REDACT_PATTERNS:
         text = pat.sub(r"\1[REDACTED]", text)
-    return text
+    return _URL_PATTERN.sub("[URL REDACTED]", text)
 
 
 def _mpv_version() -> str:

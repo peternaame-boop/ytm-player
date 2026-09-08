@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import logging
 import os
 import sys
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -261,14 +263,16 @@ class YTMPlayerApp(
         # Consecutive stream failure counter (prevents infinite skip loops).
         self._consecutive_failures: int = 0
 
-        # Guard against duplicate end-file events advancing twice.
-        self._advancing: bool = False
         # Debounce rapid play_track calls (e.g. double-click).
         self._last_play_video_id: str = ""
         self._last_play_time: float = 0.0
         # Cross-track supersede counter: each committed play_track call
         # bumps it; older in-flight calls abort at their next check.
         self._play_generation: int = 0
+        self._play_request: int = 0
+        self._active_stop_generation: int = 0
+        self._queue_stop_generation: int = 0
+        self._handled_end_attempt: int = -1
         # Generation of the one retry a failed play attempt gets, and the
         # highest attempt whose ERROR was handled (see _on_player_error).
         self._recovery_generation: int | None = None
@@ -865,49 +869,79 @@ class YTMPlayerApp(
             logger.warning("yt-dlp pre-warm import failed: %s", exc)
 
     async def on_unmount(self) -> None:
-        """Clean up services and remove PID file."""
-        self._save_session_state()
+        """Clean up services and remove PID file.
 
-        if self._ipc_server:
-            await self._ipc_server.stop()
+        Every step is attempted, in the same order as before, even when an
+        earlier one fails: a step that raises is logged with its name and
+        the rest of the shutdown goes on (see docs/broad-except-audit.md).
+        A cancellation arriving at an awaited step is remembered, the
+        remaining steps still run, and it is re-raised at the end so the
+        shutdown is never reported as an ordinary success.
+        """
+        cancelled: asyncio.CancelledError | None = None
+
+        async def _step(name: str, action: Callable[[], Any]) -> bool:
+            """Run one cleanup step; True only when it completed."""
+            nonlocal cancelled
+            try:
+                result = action()
+                if inspect.isawaitable(result):
+                    await result
+            except asyncio.CancelledError as exc:
+                cancelled = exc
+                logger.warning("Shutdown step cancelled: %s — finishing the other steps", name)
+                return False
+            except Exception:
+                logger.exception("Shutdown step failed: %s — continuing with the other steps", name)
+                return False
+            return True
+
+        await _step("save session", self._save_session_state)
+
+        # A reference is dropped only once its resource actually closed.
+        if self._ipc_server and await _step("stop IPC server", self._ipc_server.stop):
             self._ipc_server = None
 
-        remove_pid()
+        await _step("remove PID file", remove_pid)
 
         # Stop the position poll timer.
-        if self._poll_timer is not None:
-            self._poll_timer.stop()
+        if self._poll_timer is not None and await _step(
+            "stop position timer", self._poll_timer.stop
+        ):
             self._poll_timer = None
 
         if self.player:
             # Log the final track listen duration.
-            await self._log_current_listen()
-            self.player.clear_callbacks()
-            self.player.shutdown()
+            await _step("log final listen", self._log_current_listen)
+            await _step("remove player callbacks", self.player.clear_callbacks)
+            await _step("shut down player", self.player.shutdown)
 
         if self.stream_resolver:
-            self.stream_resolver.clear_cache()
+            await _step("clear resolver cache", self.stream_resolver.clear_cache)
 
         if self.mpris:
-            await self.mpris.stop()
+            await _step("stop MPRIS", self.mpris.stop)
 
         if self.mediakeys:
-            self.mediakeys.stop()
+            await _step("stop media keys", self.mediakeys.stop)
 
         if self.mac_media:
-            self.mac_media.stop()
+            await _step("stop macOS Now Playing", self.mac_media.stop)
 
         if self.mac_eventtap:
-            self.mac_eventtap.stop()
+            await _step("stop macOS event tap", self.mac_eventtap.stop)
 
         if self.discord:
-            await self.discord.disconnect()
+            await _step("disconnect Discord", self.discord.disconnect)
 
         if self.history:
-            await self.history.close()
+            await _step("close history database", self.history.close)
 
         if self.cache:
-            await self.cache.close()
+            await _step("close audio cache", self.cache.close)
+
+        if cancelled is not None:
+            raise cancelled
 
     def _start_update_check(self) -> None:
         """Background-check PyPI for a newer release; toast once if found."""

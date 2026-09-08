@@ -1,12 +1,4 @@
-"""Concurrency and recovery tests for Player.
-
-The Player runs on the main thread but mpv invokes end-file/time-pos
-callbacks on its own thread, which dispatches through Player._dispatch.
-The shared state (_current_track, _end_file_skip) MUST be mutated only
-under _skip_lock — otherwise mpv's callback can read a half-updated
-state and miscount _end_file_skip, swallowing legitimate end-of-track
-events (the "auto-advance randomly stops" class of bug).
-"""
+"""Player command ordering, native event identity, dispatch and recovery tests."""
 
 from __future__ import annotations
 
@@ -27,6 +19,7 @@ def player(monkeypatch):
     Player._instance = None
 
     mock_mpv_instance = MagicMock()
+    mock_mpv_instance.command.return_value = {"playlist_entry_id": 10}
     mock_mpv_instance.volume = 80
     mock_mpv_instance.pause = False
     mock_mpv_class = MagicMock(return_value=mock_mpv_instance)
@@ -109,7 +102,7 @@ class TestTryRecoverState:
         Discord, and the _on_end_file guard for the recovered track.
         """
         player._current_track = {"video_id": "abc", "title": "X"}
-        player._end_file_skip = 7  # arbitrary leftover
+        player._current_entry_id = 7
 
         new_mock_mpv = MagicMock()
         new_mock_mpv.volume = 80
@@ -120,7 +113,7 @@ class TestTryRecoverState:
         assert player._current_track == {"video_id": "abc", "title": "X"}, (
             "_try_recover must NOT clear _current_track"
         )
-        assert player._end_file_skip == 0
+        assert player._current_entry_id is None
 
     async def test_play_with_recovery_keeps_current_track_set(self, player):
         """End-to-end: play() → _play_sync raises ShutdownError → _try_recover
@@ -132,12 +125,12 @@ class TestTryRecoverState:
         from ytm_player.services.player import mpv as _mpv
 
         # First mpv.play() raises ShutdownError; second succeeds.
-        player._mpv.play = MagicMock(side_effect=[_mpv.ShutdownError("simulated crash"), None])
+        player._mpv.command = MagicMock(side_effect=_mpv.ShutdownError("simulated crash"))
         player._mpv.pause = False
 
         # _try_recover replaces _mpv with a fresh instance.
         new_mpv = MagicMock()
-        new_mpv.play = MagicMock(return_value=None)
+        new_mpv.command = MagicMock(return_value={"playlist_entry_id": 11})
         new_mpv.pause = False
         player._init_mpv = MagicMock(return_value=new_mpv)
         player._loop = None  # Skip volume restore branch.
@@ -342,9 +335,9 @@ def _dead_mpv() -> _DeadMpv:
     return _DeadMpv(_mpv.ShutdownError("mpv is dead"))
 
 
-def _end_file_event(reason: int | None) -> SimpleNamespace:
+def _end_file_event(reason: int | None, entry_id: int = 10) -> SimpleNamespace:
     """Build a fake mpv end-file event with ``event.data.reason``."""
-    return SimpleNamespace(data=SimpleNamespace(reason=reason))
+    return SimpleNamespace(data=SimpleNamespace(reason=reason, playlist_entry_id=entry_id))
 
 
 @pytest.fixture
@@ -362,6 +355,7 @@ def player_with_end_file(monkeypatch):
     captured: dict[str, object] = {}
 
     mock_mpv_instance = MagicMock()
+    mock_mpv_instance.command.return_value = {"playlist_entry_id": 10}
     mock_mpv_instance.volume = 80
     mock_mpv_instance.pause = False
 
@@ -407,19 +401,18 @@ class TestTransportOps:
         await player.toggle_pause()
         assert player._mpv.pause is False
 
-    async def test_stop_clears_track_and_increments_skip(self, player):
+    async def test_stop_clears_track_and_invalidates_entry(self, player):
         player._current_track = {"video_id": "abc", "title": "X"}
-        player._end_file_skip = 0
+        player._current_entry_id = 10
         await player.stop()
         assert player._current_track is None
-        assert player._end_file_skip == 1, "stop() must arm the skip for mpv's end-file"
+        assert player._current_entry_id is None
         player._mpv.stop.assert_called_once()
 
-    async def test_stop_when_idle_does_not_arm_skip(self, player):
+    async def test_stop_when_idle_stays_idle(self, player):
         player._current_track = None
-        player._end_file_skip = 0
         await player.stop()
-        assert player._end_file_skip == 0
+        assert player._current_entry_id is None
         player._mpv.stop.assert_called_once()
 
     async def test_seek_relative(self, player):
@@ -574,167 +567,128 @@ class TestDispatchBridge:
         assert any("Failed to schedule" in r.getMessage() for r in caplog.records)
 
 
-# ── _on_end_file: _end_file_skip counting (the critical invariant) ─────
+# ── Native end-file identity (replaces the unsafe event-count contract) ──
 
 
-class TestEndFileSkipCounting:
-    """_on_end_file's skip-counting — the file's documented race invariant."""
-
-    def test_skip_swallows_one_event_without_dispatch(self, player_with_end_file):
-        player, on_end_file = player_with_end_file
-        player._end_file_skip = 1
-        player._current_track = {"video_id": "abc"}
+class TestEndFileIdentity:
+    async def test_old_eof_never_consumes_the_current_entry(self, player_with_end_file):
+        player, end = player_with_end_file
+        await player.play("new", {"video_id": "new"}, attempt=2)
         player._dispatch = MagicMock()
-
-        on_end_file(_end_file_event(0))
-
-        assert player._end_file_skip == 0, "skip must decrement"
-        assert player._current_track == {"video_id": "abc"}, "swallowed event keeps track"
+        end(_end_file_event(0, 9))
+        assert player.current_track == {"video_id": "new"}
         player._dispatch.assert_not_called()
 
-    def test_eof_dispatches_track_end_and_clears_track(self, player_with_end_file):
+    @pytest.mark.parametrize("reason", [0, 4])
+    async def test_current_end_is_dispatched_once_with_attempt(self, player_with_end_file, reason):
         from ytm_player.services.player import PlayerEvent
 
-        player, on_end_file = player_with_end_file
-        player._end_file_skip = 0
+        player, end = player_with_end_file
         track = {"video_id": "abc"}
-        player._current_track = track
+        await player.play("url", track, attempt=7)
         player._dispatch = MagicMock()
-
-        on_end_file(_end_file_event(0))
-
-        assert player._current_track is None
+        end(_end_file_event(reason))
+        end(_end_file_event(reason))
+        payload = {"reason": reason, "track": track, "attempt": 7}
+        if reason == 4:
+            payload["error"] = None
         player._dispatch.assert_called_once_with(
-            PlayerEvent.TRACK_END, {"reason": 0, "track": track}
+            PlayerEvent.ERROR if reason == 4 else PlayerEvent.TRACK_END, payload
         )
+        assert player.current_track is None
 
-    def test_none_reason_treated_as_eof(self, player_with_end_file):
-        from ytm_player.services.player import PlayerEvent
-
-        player, on_end_file = player_with_end_file
-        player._end_file_skip = 0
-        track = {"video_id": "abc"}
-        player._current_track = track
+    @pytest.mark.parametrize("reason", [None, 1, 2, 3, 5])
+    async def test_non_terminal_reason_does_not_end_current_play(
+        self, player_with_end_file, reason
+    ):
+        player, end = player_with_end_file
+        await player.play("url", {"video_id": "abc"}, attempt=1)
         player._dispatch = MagicMock()
-
-        on_end_file(_end_file_event(None))
-
-        player._dispatch.assert_called_once_with(
-            PlayerEvent.TRACK_END, {"reason": None, "track": track}
-        )
-
-    def test_error_reason_dispatches_error(self, player_with_end_file):
-        from ytm_player.services.player import PlayerEvent
-
-        player, on_end_file = player_with_end_file
-        player._end_file_skip = 0
-        player._current_track = {"video_id": "abc"}
-        player._dispatch = MagicMock()
-
-        on_end_file(_end_file_event(4))
-
-        assert player._current_track is None
-        player._dispatch.assert_called_once_with(
-            PlayerEvent.ERROR,
-            {"reason": 4, "error": None, "track": {"video_id": "abc"}, "attempt": None},
-        )
-
-    def test_aborted_reason_clears_track_without_dispatch(self, player_with_end_file):
-        player, on_end_file = player_with_end_file
-        player._end_file_skip = 0
-        player._current_track = {"video_id": "abc"}
-        player._dispatch = MagicMock()
-
-        on_end_file(_end_file_event(2))  # 2 = ABORTED (intentional stop)
-
-        assert player._current_track is None
+        end(_end_file_event(reason))
+        assert player.current_track is not None
         player._dispatch.assert_not_called()
 
-    def test_idle_end_file_is_ignored(self, player_with_end_file):
-        player, on_end_file = player_with_end_file
-        player._end_file_skip = 0
-        player._current_track = None
+    async def test_event_without_entry_identity_is_ignored(self, player_with_end_file):
+        player, end = player_with_end_file
+        await player.play("url", {"video_id": "abc"})
         player._dispatch = MagicMock()
-
-        on_end_file(_end_file_event(0))
-
+        end(SimpleNamespace(data=SimpleNamespace(reason=0)))
         player._dispatch.assert_not_called()
+        assert player.current_track is not None
 
-    def test_multiple_skips_counted_before_dispatch(self, player_with_end_file):
+    async def test_stop_invalidates_even_a_late_natural_eof(self, player_with_end_file):
+        player, end = player_with_end_file
+        await player.play("url", {"video_id": "abc"}, attempt=1)
+        await player.stop()
+        player._dispatch = MagicMock()
+        end(_end_file_event(0))
+        player._dispatch.assert_not_called()
+        assert player.current_track is None
+
+    async def test_many_old_events_do_not_swallow_current_eof(self, player_with_end_file):
         from ytm_player.services.player import PlayerEvent
 
-        player, on_end_file = player_with_end_file
-        player._end_file_skip = 2
-        player._current_track = {"video_id": "abc"}
+        player, end = player_with_end_file
+        await player.play("url", {"video_id": "abc"}, attempt=3)
         player._dispatch = MagicMock()
-
-        on_end_file(_end_file_event(0))  # swallowed → skip 1
-        on_end_file(_end_file_event(0))  # swallowed → skip 0
+        for identity in [8, 9, 8, 9]:
+            end(_end_file_event(0, identity))
         player._dispatch.assert_not_called()
-        assert player._end_file_skip == 0
+        end(_end_file_event(0))
+        assert player._dispatch.call_args.args[0] == PlayerEvent.TRACK_END
 
-        on_end_file(_end_file_event(0))  # now a real EOF
-        player._dispatch.assert_called_once()
-        assert player._dispatch.call_args[0][0] == PlayerEvent.TRACK_END
+    async def test_failed_load_does_not_swallow_later_eof(self, player_with_end_file):
+        from ytm_player.services.player import PlayerEvent
 
-
-# ── Bug (a): play() failure must roll back the pre-incremented skip ─────
-
-
-class TestPlayFailureRollsBackSkip:
-    """A failed play() must not leave _end_file_skip inflated."""
-
-    async def test_play_failure_rolls_back_end_file_skip(self, player):
-        # A previous track is loaded, so play() pre-increments the skip.
-        player._current_track = {"video_id": "prev", "title": "Prev"}
-        player._end_file_skip = 0
-
+        player, end = player_with_end_file
         with patch.object(player, "_play_sync", side_effect=RuntimeError("boom")):
-            await player.play("http://stream", {"video_id": "new", "title": "New"})
-
-        assert player._current_track is None
-        assert player._end_file_skip == 0, (
-            "failed play must roll back the pre-incremented _end_file_skip; "
-            "leaving it at 1 swallows a later legitimate end-file"
+            await player.play("bad", {"video_id": "bad"}, attempt=1)
+        assert player.current_track is None
+        await player.play("next", {"video_id": "next"}, attempt=2)
+        player._dispatch = MagicMock()
+        end(_end_file_event(0))
+        player._dispatch.assert_called_once_with(
+            PlayerEvent.TRACK_END,
+            {"reason": 0, "track": {"video_id": "next"}, "attempt": 2},
         )
 
-    async def test_play_failure_does_not_swallow_later_end_file(self, player_with_end_file):
+    @pytest.mark.parametrize("reason", [0, 4])
+    async def test_end_before_load_reply_is_attributed_to_that_load(
+        self, player_with_end_file, reason
+    ):
         from ytm_player.services.player import PlayerEvent
 
-        player, on_end_file = player_with_end_file
-        player._current_track = {"video_id": "prev", "title": "Prev"}
-        player._end_file_skip = 0
+        player, end = player_with_end_file
 
-        with patch.object(player, "_play_sync", side_effect=RuntimeError("boom")):
-            await player.play("http://stream", {"video_id": "new", "title": "New"})
+        def load(*args):
+            event = _end_file_event(reason)
+            end(event)
+            # python-mpv may release/reuse event storage after the callback.
+            event.data.reason = 2
+            event.data.playlist_entry_id = 99
+            return {"playlist_entry_id": 10}
 
-        assert player._end_file_skip == 0
-
-        # A genuinely new track now ends naturally — TRACK_END must fire.
-        player._current_track = {"video_id": "next", "title": "Next"}
+        player._mpv.command.side_effect = load
         player._dispatch = MagicMock()
-        on_end_file(_end_file_event(0))
+        await player.play("url", {"video_id": "abc"}, attempt=1)
+        assert player.current_track is None
         player._dispatch.assert_called_once()
-        assert player._dispatch.call_args[0][0] == PlayerEvent.TRACK_END
+        assert player._dispatch.call_args.args[0] == (
+            PlayerEvent.ERROR if reason == 4 else PlayerEvent.TRACK_END
+        )
+        assert player._dispatch.call_args.args[1]["attempt"] == 1
 
-    async def test_play_failure_after_takeover_leaves_newer_state_alone(self, player):
-        """If another operation replaced _current_track while _play_sync was
-        in flight, the failure cleanup must not steal that operation's skip
-        counter or clear its track."""
-        player._current_track = {"video_id": "prev", "title": "Prev"}
-        player._end_file_skip = 0
-        newer = {"video_id": "newer", "title": "Newer"}
-
-        def takeover_then_fail(url):
-            player._current_track = newer
-            player._end_file_skip = 5
-            raise RuntimeError("boom")
-
-        with patch.object(player, "_play_sync", side_effect=takeover_then_fail):
-            await player.play("http://stream", {"video_id": "mine", "title": "Mine"})
-
-        assert player._current_track is newer, "failure cleanup clobbered a newer op's track"
-        assert player._end_file_skip == 5, "failure cleanup stole a newer op's skip"
+    async def test_old_native_instance_cannot_end_recovered_entry(self, player_with_end_file):
+        player, old_end = player_with_end_file
+        replacement = MagicMock()
+        replacement.command.return_value = {"playlist_entry_id": 10}
+        with patch.object(player, "_init_mpv", return_value=replacement):
+            assert player._try_recover()
+        await player.play("url", {"video_id": "new"}, attempt=2)
+        player._dispatch = MagicMock()
+        old_end(_end_file_event(0, 10))
+        player._dispatch.assert_not_called()
+        assert player.current_track == {"video_id": "new"}
 
 
 # ── Bug (b): transport ops must survive a dead mpv (ShutdownError) ──────
@@ -791,12 +745,12 @@ class TestErrorPayload:
         from ytm_player.services.player import PlayerEvent
 
         player, on_end_file = player_with_end_file
-        player._end_file_skip = 0
+        player._current_entry_id = 10
         player._current_track = {"video_id": "abc"}
         player._current_attempt = 7
         player._dispatch = MagicMock()
 
-        on_end_file(SimpleNamespace(data=SimpleNamespace(reason=4, error=-1)))
+        on_end_file(SimpleNamespace(data=SimpleNamespace(reason=4, error=-1, playlist_entry_id=10)))
 
         player._dispatch.assert_called_once_with(
             PlayerEvent.ERROR,

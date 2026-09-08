@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ytm_player.app._base import YTMHostBase
+from ytm_player.app._ownership import owns_request, playback_request
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
@@ -277,6 +278,7 @@ class SidebarMixin(YTMHostBase):
         if playlist_id:
             await self.navigate_to("library", playlist_id=playlist_id)
 
+    @playback_request
     async def on_playlist_sidebar_playlist_double_clicked(
         self, message: PlaylistSidebar.PlaylistDoubleClicked
     ) -> None:
@@ -287,7 +289,11 @@ class SidebarMixin(YTMHostBase):
         if playlist_id:
             prev = self.queue.current_track
             await self._play_playlist(playlist_id, name, order="recently_added")
-            if self.queue.current_track is not None and self.queue.current_track is not prev:
+            if (
+                owns_request(self)
+                and self.queue.current_track is not None
+                and self.queue.current_track is not prev
+            ):
                 self._active_library_playlist_id = playlist_id
                 await self.navigate_to("queue")
 
@@ -317,19 +323,9 @@ class SidebarMixin(YTMHostBase):
             if action_id is None:
                 return
             if action_id in ("play_all", "shuffle_play"):
-                pid = item.get("playlistId") or item.get("browseId")
-
-                async def _play_and_navigate() -> None:
-                    prev = self.queue.current_track
-                    await self._dispatch_entity_action(action_id, item, "playlist")
-                    if (
-                        self.queue.current_track is not None
-                        and self.queue.current_track is not prev
-                    ):
-                        self._active_library_playlist_id = pid
-                        await self.navigate_to("queue")
-
-                self.run_worker(_play_and_navigate())
+                self.run_worker(
+                    self._play_entity_and_navigate(action_id, item, "playlist", sidebar=True)
+                )
             elif action_id == "edit":
                 self._prompt_edit_playlist(item)
             elif action_id == "delete":

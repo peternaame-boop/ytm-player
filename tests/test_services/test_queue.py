@@ -2,6 +2,8 @@
 
 import random
 
+import pytest
+
 from ytm_player.services.queue import QueueManager, RepeatMode
 
 
@@ -317,10 +319,9 @@ class TestRemoveEdgeCases:
 
         queue_manager.remove(2)
         assert queue_manager.length == 4
-        # After removing current, index stays in bounds and points to the next track.
-        current = queue_manager.current()
-        assert current is not None
-        assert current["video_id"] == "vid_04"
+        # The audible entry finishes outside the queue; EOF selects its successor.
+        assert queue_manager.current() is None
+        assert queue_manager.next_track()["video_id"] == "vid_04"
 
     def test_remove_last_track_empties_queue(self, queue_manager):
         from tests.conftest import _make_track
@@ -358,8 +359,7 @@ class TestRemoveEdgeCases:
 
 class TestRemoveShuffleCurrentTrack:
     """remove() of the current track under shuffle must match the
-    non-shuffle contract: current() lands on the NEXT track in playback
-    order (clamped to the new last track at the end of the queue)."""
+    non-shuffle contract: finish the removed song, then select its successor."""
 
     def _shuffled_order(self, queue_manager, sample_tracks) -> list[str]:
         """Populate, enable shuffle, return video_ids in shuffle order."""
@@ -375,14 +375,16 @@ class TestRemoveShuffleCurrentTrack:
         assert queue_manager.current()["video_id"] == order[1]
 
         queue_manager.remove(1)
-        assert queue_manager.current()["video_id"] == order[2]
+        assert queue_manager.current() is None
+        assert queue_manager.next_track()["video_id"] == order[2]
 
-    def test_remove_current_at_end_clamps_to_new_last(self, queue_manager, sample_tracks):
+    def test_remove_current_at_end_does_not_replay_previous(self, queue_manager, sample_tracks):
         order = self._shuffled_order(queue_manager, sample_tracks)
         queue_manager.jump_to(len(order) - 1)
 
         queue_manager.remove(len(order) - 1)
-        assert queue_manager.current()["video_id"] == order[-2]
+        assert queue_manager.current() is None
+        assert queue_manager.next_track() is None
 
     def test_remove_before_current_keeps_current_track(self, queue_manager, sample_tracks):
         order = self._shuffled_order(queue_manager, sample_tracks)
@@ -409,6 +411,98 @@ class TestRemoveShuffleCurrentTrack:
         assert queue_manager.is_empty
         assert queue_manager.current() is None
         assert queue_manager.current_index == -1
+
+
+class TestRemovedAudibleBoundary:
+    @pytest.mark.parametrize("shuffle", [False, True])
+    @pytest.mark.parametrize("repeat", [RepeatMode.OFF, RepeatMode.ALL, RepeatMode.ONE])
+    @pytest.mark.parametrize("count,position", [(1, 0), (4, 0), (4, 1), (4, 3)])
+    def test_finish_then_next(self, queue_manager, shuffle, repeat, count, position):
+        q = queue_manager
+        # Duplicate values and even shared dicts cannot define occurrence identity.
+        same = {"video_id": "A"}
+        q.add_multiple([same] * count)
+        if shuffle:
+            q.toggle_shuffle()
+        q.set_repeat(repeat)
+        q.jump_to(position)
+        before = q.entries
+        q.remove_entry(before[position][0])
+        assert q.current_track is None
+        assert q.current_index == -1
+        expected = before[position + 1][0] if position + 1 < count else None
+        if expected is None and count > 1 and repeat == RepeatMode.ALL:
+            expected = before[0][0]
+        next_track = q.next_track()
+        if expected is None:
+            assert next_track is None
+        else:
+            assert next_track is same
+            assert q.entries[q.current_index][0] == expected
+
+    @pytest.mark.parametrize("shuffle", [False, True])
+    def test_removing_successor_again_keeps_following_survivor(self, queue_manager, shuffle):
+        q = queue_manager
+        q.add_multiple([{"video_id": str(i)} for i in range(5)])
+        if shuffle:
+            q.toggle_shuffle()
+        q.jump_to(1)
+        before = q.entries
+        q.remove_entry(before[1][0])
+        q.remove_entry(before[2][0])
+        assert q.peek_next() is before[3][1]
+        assert q.next_track() is before[3][1]
+
+    @pytest.mark.parametrize("shuffle", [False, True])
+    def test_play_next_insert_at_removed_boundary(self, queue_manager, shuffle):
+        q = queue_manager
+        q.add_multiple([{"video_id": str(i)} for i in range(4)])
+        if shuffle:
+            q.toggle_shuffle()
+        q.jump_to(1)
+        before = q.entries
+        q.remove_entry(before[1][0])
+        new = [{"video_id": "X"}, {"video_id": "Y"}]
+        q.add_next_multiple(new)
+        assert q.next_track() is new[0]
+        assert q.next_track() is new[1]
+        assert q.next_track() is before[2][1]
+
+    @pytest.mark.parametrize("shuffle", [False, True])
+    def test_append_after_removed_last_starts_new_tail(self, queue_manager, shuffle):
+        q = queue_manager
+        q.add_multiple([{"video_id": "A"}, {"video_id": "B"}])
+        if shuffle:
+            q.toggle_shuffle()
+        q.jump_to(1)
+        q.remove(1)
+        tail = {"video_id": "C"}
+        q.add(tail)
+        assert q.next_track() is tail
+
+    def test_reorder_keeps_the_surviving_successor_identity(self, queue_manager):
+        q = queue_manager
+        q.add_multiple([{"video_id": str(i)} for i in range(5)])
+        q.jump_to(1)
+        successor = q.entries[2]
+        q.remove(1)
+        q.move(1, 3)
+        q.toggle_shuffle()
+        assert q.next_track() is successor[1]
+        assert q.entries[q.current_index][0] == successor[0]
+
+    def test_clear_only_changes_lifetime(self, queue_manager):
+        q = queue_manager
+        generation = q.generation
+        q.add_multiple([{"video_id": "A"}, {"video_id": "A"}])
+        q.jump_to(0)
+        q.next_track()
+        q.toggle_shuffle()
+        q.move(0, 1)
+        q.remove(0)
+        assert q.generation == generation
+        q.clear()
+        assert q.generation == generation + 1
 
 
 class TestRadioTracks:

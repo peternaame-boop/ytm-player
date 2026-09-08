@@ -189,11 +189,13 @@ class Player:
         # (e.g. history reporting on auto-advance) raises LookupError and
         # never fires. See set_event_loop / _dispatch.
         self._dispatch_context: contextvars.Context | None = None
-        # Counter for end-file events to ignore.  Incremented when we
-        # intentionally replace/stop a track (so the resulting end-file
-        # from mpv doesn't trigger auto-advance).
-        self._end_file_skip: int = 0
         self._skip_lock = threading.Lock()
+        # The gate belongs to the native worker, not its cancellable awaiter.
+        self._command_lock = threading.Lock()
+        self._command_generation = 0
+        self._current_entry_id: int | None = None
+        self._loading = False
+        self._pending_end_events: list[tuple[Any, Any, Any, Any]] = []
         self._last_position_dispatch: float = 0.0
         # Strong references to dispatched async tasks so they aren't GC'd
         # before execution (the classic asyncio.create_task footgun).
@@ -274,42 +276,46 @@ class Player:
 
         @instance.event_callback("end-file")
         def _on_end_file(event: Any) -> None:
-            # The reason code lives on event.data (MpvEventEndFile), not
-            # on the MpvEvent itself.  Extract the integer reason:
-            #   0 = EOF, 1 = RESTARTED, 2 = ABORTED, 3 = QUIT, 4 = ERROR, 5 = REDIRECT
-            data = getattr(event, "data", None) if event else None
-            reason = getattr(data, "reason", None) if data else None
-            with self._skip_lock:
-                if self._end_file_skip > 0:
-                    self._end_file_skip -= 1
-                    return
-                if self._current_track is None:
-                    return  # Already idle, nothing to do.
-                # Capture track info before clearing — the app needs it
-                # for history logging and autoplay decisions.
-                ended_track = self._current_track
-                ended_attempt = self._current_attempt
-                # Clear so play() won't increment _end_file_skip for
-                # an already-idle mpv.
-                self._current_track = None
-                self._current_attempt = None
-            # Only auto-advance on natural EOF (0).  Errors (4) are
-            # dispatched separately.  Everything else (stop, redirect,
-            # quit, restart) is intentional — ignore.
-            if reason == 4:  # ERROR
-                self._dispatch(
-                    PlayerEvent.ERROR,
-                    {
-                        "reason": reason,
-                        "error": getattr(data, "error", None),
-                        "track": ended_track,
-                        "attempt": ended_attempt,
-                    },
-                )
-            elif reason is None or reason == 0:  # EOF
-                self._dispatch(PlayerEvent.TRACK_END, {"reason": reason, "track": ended_track})
+            self._handle_end_file(instance, event)
 
         return instance
+
+    def _handle_end_file(self, instance: Any, event: Any) -> None:
+        """Match native events by entry ID, never by an expected event count."""
+        data = getattr(event, "data", None)
+        reason = getattr(data, "reason", None)
+        entry_id = getattr(data, "playlist_entry_id", None)
+        self._end_file_data(instance, reason, entry_id, getattr(data, "error", None))
+
+    def _end_file_data(self, instance: Any, reason: Any, entry_id: Any, error: Any) -> None:
+        with self._skip_lock:
+            if instance is not self._mpv:
+                return
+            if self._loading:
+                # loadfile's reply and its end-file can arrive in either order.
+                # Copy scalar fields; the native event's storage is temporary.
+                self._pending_end_events.append((instance, reason, entry_id, error))
+                return
+            if (
+                not isinstance(entry_id, int)
+                or entry_id != self._current_entry_id
+                or self._current_track is None
+                or reason not in (0, 4)
+            ):
+                return
+            payload = {
+                "reason": reason,
+                "track": self._current_track,
+                "attempt": self._current_attempt,
+            }
+            self._current_track = None
+            self._current_attempt = None
+            self._current_entry_id = None
+        if reason == 4:
+            payload["error"] = error
+            self._dispatch(PlayerEvent.ERROR, payload)
+        else:
+            self._dispatch(PlayerEvent.TRACK_END, payload)
 
     def _get_loop(self) -> asyncio.AbstractEventLoop | None:
         """Get the event loop, using the cached reference.
@@ -358,7 +364,7 @@ class Player:
         for event in PlayerEvent:
             self._callbacks[event].clear()
 
-    def _dispatch(self, event: PlayerEvent, *args: Any) -> None:
+    def _dispatch(self, event: PlayerEvent, *args: Any, command: int | None = None) -> None:
         """Dispatch an event to all registered callbacks.
 
         If an asyncio event loop is available, callbacks are scheduled
@@ -366,12 +372,19 @@ class Player:
         """
         loop = self._get_loop()
 
+        def still_current() -> bool:
+            with self._skip_lock:
+                return command is None or (
+                    command == self._command_generation and self._current_track is not None
+                )
+
         def _schedule_async(coro_fn: Any, call_args: tuple) -> None:
             """Create a task for an async callback with error handling."""
 
             async def _safe_wrapper() -> None:
                 try:
-                    await coro_fn(*call_args)
+                    if still_current():
+                        await coro_fn(*call_args)
                 except Exception:
                     logger.exception("Async callback failed (event=%s)", event)
 
@@ -382,7 +395,8 @@ class Player:
         def _safe_sync(sync_fn: Any, call_args: tuple) -> None:
             """Run a sync callback with error handling on the event loop."""
             try:
-                sync_fn(*call_args)
+                if still_current():
+                    sync_fn(*call_args)
             except Exception:
                 logger.exception("Sync callback failed (event=%s)", event)
 
@@ -406,7 +420,8 @@ class Player:
                             "Dropping async %s callback — no event loop available", event
                         )
                     else:
-                        cb(*args)
+                        if still_current():
+                            cb(*args)
             except Exception:
                 logger.exception("Failed to schedule %s callback", event)
 
@@ -447,6 +462,10 @@ class Player:
         return self._current_track
 
     @property
+    def current_attempt(self) -> int | None:
+        return self._current_attempt
+
+    @property
     def position(self) -> float:
         """Current playback position in seconds."""
         try:
@@ -484,48 +503,90 @@ class Player:
         event whose payload carries the request's track and ``attempt``.
         """
         with self._skip_lock:
-            # A track is still playing — mpv will fire end-file for it
-            # when we load the new URL.  Tell the callback to ignore it.
-            skip_armed = self._current_track is not None
-            if skip_armed:
-                self._end_file_skip += 1
-            self._current_track = track_info
-            self._current_attempt = attempt
+            self._command_generation += 1
+            command = self._command_generation
+            self._current_track = None
+            self._current_attempt = None
+            self._current_entry_id = None
         try:
-            await asyncio.to_thread(self._play_sync, url)
-            self._dispatch(PlayerEvent.TRACK_CHANGE, track_info)
+            await asyncio.to_thread(self._load_owned, command, url, track_info, attempt)
+        except asyncio.CancelledError:
+            with self._skip_lock:
+                if command != self._command_generation:
+                    raise
+                self._command_generation += 1
+                stopped = self._command_generation
+                self._current_track = None
+                self._current_attempt = None
+                self._current_entry_id = None
+            # Cancellation cannot release a native worker's gate. A stop
+            # follows that worker, unless a newer command supersedes it.
+            task = asyncio.create_task(asyncio.to_thread(self._stop_owned, stopped))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            raise
+
+    def _load_owned(self, command: int, url: str, track: dict, attempt: int | None) -> None:
+        # Lock order: native gate, then short state lock. Native calls never
+        # hold the state lock; callbacks take only the state lock.
+        with self._command_lock:
+            with self._skip_lock:
+                if command != self._command_generation:
+                    return
+                self._loading = True
+                self._pending_end_events.clear()
+            self._finish_load(command, url, track, attempt)
+
+    def _finish_load(self, command: int, url: str, track: dict, attempt: int | None) -> None:
+        try:
+            entry_id = self._play_sync(url)
         except Exception as exc:
             with self._skip_lock:
-                # Clean up only if no other operation replaced the current
-                # track while _play_sync was in flight — the counter and
-                # track would belong to that operation, not this call.
-                if self._current_track is track_info:
-                    # The load failed, so no end-file will arrive for it —
-                    # roll back the pre-incremented counter, or a later
-                    # legitimate end-file gets swallowed and auto-advance
-                    # silently stops.
-                    if skip_armed and self._end_file_skip > 0:
-                        self._end_file_skip -= 1
-                    self._current_track = None
-                    self._current_attempt = None
-            logger.error("Failed to play %s: %s", track_info.get("video_id", "?"), exc)
+                self._loading = False
+                self._pending_end_events.clear()
+                if command != self._command_generation:
+                    return
+            logger.exception("Failed to play %s", track.get("video_id", "?"))
             self._dispatch(
                 PlayerEvent.ERROR,
-                {"reason": "load", "error": exc, "track": track_info, "attempt": attempt},
+                {"reason": "load", "error": exc, "track": track, "attempt": attempt},
             )
+            return
+        with self._skip_lock:
+            self._loading = False
+            pending = self._pending_end_events
+            self._pending_end_events = []
+            if command != self._command_generation:
+                return
+            self._current_track = track
+            self._current_attempt = attempt
+            self._current_entry_id = entry_id
+        for instance, reason, entry, error in pending:
+            self._end_file_data(instance, reason, entry, error)
+        with self._skip_lock:
+            accepted = command == self._command_generation and self._current_track is not None
+        if accepted:
+            self._dispatch(PlayerEvent.TRACK_CHANGE, track, command=command)
 
-    def _play_sync(self, url: str) -> None:
-        """Synchronous mpv play call."""
+    def _play_sync(self, url: str) -> int:
+        """Load and retain mpv's ID (python-mpv's play helper discards it)."""
         try:
-            self._mpv.play(url)
-            self._mpv.pause = False
+            result = self._mpv.command("loadfile", url)
         except mpv.ShutdownError:
             logger.warning("mpv crashed, attempting recovery...")
             if self._try_recover():
-                self._mpv.play(url)
-                self._mpv.pause = False
+                result = self._mpv.command("loadfile", url)
             else:
                 raise RuntimeError("mpv recovery failed")
+        entry_id = result.get("playlist_entry_id") if isinstance(result, dict) else None
+        if not isinstance(entry_id, int):
+            # Older mpv versions don't return command result data. The gate
+            # still owns the command, so the single loaded entry is ours.
+            entry_id = self._mpv.playlist[0]["id"]
+        if not isinstance(entry_id, int):
+            raise RuntimeError("mpv did not identify the loaded playlist entry")
+        self._mpv.pause = False
+        return entry_id
 
     async def pause(self) -> None:
         try:
@@ -547,14 +608,22 @@ class Player:
 
     async def stop(self) -> None:
         with self._skip_lock:
-            if self._current_track is not None:
-                self._end_file_skip += 1
+            self._command_generation += 1
+            command = self._command_generation
             self._current_track = None
             self._current_attempt = None
-        try:
-            self._mpv.stop()
-        except mpv.ShutdownError:
-            pass
+            self._current_entry_id = None
+        await asyncio.to_thread(self._stop_owned, command)
+
+    def _stop_owned(self, command: int) -> None:
+        with self._command_lock:
+            with self._skip_lock:
+                if command != self._command_generation:
+                    return
+            try:
+                self._mpv.stop()
+            except mpv.ShutdownError:
+                pass
 
     def _clamp_seek_target(self, target: float) -> float:
         """Clamp a seek target to [0, duration] (duration 0.0 = unknown)."""
@@ -623,12 +692,8 @@ class Player:
         try:
             logger.info("Re-initializing mpv instance...")
             with self._skip_lock:
-                # Reset skip counter — it has no meaning across mpv instances.
-                # Do NOT clear _current_track: _try_recover is only called from
-                # within play() which has already set _current_track to the
-                # NEW track we're about to play. Clearing it would break
-                # downstream readers (MPRIS, Discord, _on_end_file guard).
-                self._end_file_skip = 0
+                self._current_entry_id = None
+                self._pending_end_events.clear()
             self._mpv = self._init_mpv()
 
             # Restore volume if possible.
