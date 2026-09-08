@@ -303,7 +303,11 @@ class _CapturingConnect:
         self._real = aiosqlite.connect
 
     async def __call__(self, path, *args, **kwargs):
-        conn = await self._real(path, *args, **kwargs)
+        # ``aiosqlite.connect`` returns the Connection unstarted; its thread
+        # starts on await. Capture before the await so a connect that fails
+        # (the file is a directory) still leaves a thread to join.
+        conn = self._real(path, *args, **kwargs)
+        self.conn = conn
         real_close = conn.close
 
         async def close():
@@ -311,16 +315,25 @@ class _CapturingConnect:
             await real_close()
 
         conn.close = close
-        self.conn = conn
+        await conn
         if self._on_connect is not None:
             self._on_connect(conn)
         return conn
 
+    def join_thread(self) -> None:
+        """Wait (bounded) for the connection's worker thread, if one was created."""
+        if self.conn is not None:
+            self.conn._thread.join(timeout=2.0)
+
+    def assert_thread_finished(self) -> None:
+        assert self.conn is not None, "no connection was created"
+        self.join_thread()
+        assert not self.conn._thread.is_alive()
+
     def assert_released(self) -> None:
         assert self.conn is not None, "no connection was created"
         assert self.close_calls == 1
-        self.conn._thread.join(timeout=2.0)
-        assert not self.conn._thread.is_alive()
+        self.assert_thread_finished()
 
 
 class TestInitCleanup:
@@ -347,14 +360,23 @@ class TestInitCleanup:
         capture.assert_released()
         await manager.close()  # no-op after a failed init
 
-    async def test_directory_path_raises_runtime_error(self, tmp_path):
+    async def test_directory_path_raises_runtime_error(self, tmp_path, monkeypatch):
+        # A failed connect stops aiosqlite's worker thread through the event
+        # loop. Join that thread while the loop is alive, or it dies later
+        # with "Event loop is closed" attributed to whichever test is running.
+        capture = _CapturingConnect()
+        monkeypatch.setattr("ytm_player.services.history.aiosqlite.connect", capture)
         manager = HistoryManager(db_path=tmp_path)  # an existing directory
 
-        with pytest.raises(RuntimeError, match="Failed to open history database"):
-            await manager.init()
+        try:
+            with pytest.raises(RuntimeError, match="Failed to open history database"):
+                await manager.init()
 
-        assert manager._db is None
-        assert tmp_path.is_dir()
+            assert manager._db is None
+            assert tmp_path.is_dir()
+        finally:
+            capture.join_thread()
+        capture.assert_thread_finished()
 
     async def test_prune_failure_closes_the_connection(self, history_manager, monkeypatch):
         def poison_prune(conn: aiosqlite.Connection) -> None:
