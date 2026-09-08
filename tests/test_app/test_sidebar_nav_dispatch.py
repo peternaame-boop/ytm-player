@@ -26,7 +26,9 @@ class TestNavDispatch:
         host = _make_host()
         await _dispatch(host, "discovery_mix")
 
-        host.run_worker.assert_called_once()
+        host.run_worker.assert_called_once_with(
+            host._start_discovery_mix.return_value, group="discovery-mix", exclusive=True
+        )
         host._start_discovery_mix.assert_called_once()
         host.navigate_to.assert_not_called()
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -119,6 +119,10 @@ class LibraryPage(TrackFilterHost, Widget):
 
     is_loading: reactive[bool] = reactive(True)
 
+    # Group of a playlist load and the tail fetch it starts: a new load
+    # supersedes both, and nothing else on this page cancels them.
+    LOAD_GROUP: ClassVar[str] = "library-load"
+
     def __init__(
         self,
         *,
@@ -149,21 +153,13 @@ class LibraryPage(TrackFilterHost, Widget):
 
         # Auto-load if a playlist_id was provided.
         if self._active_playlist_id:
-            self.run_worker(
-                self.load_playlist(self._active_playlist_id),
-                name="load-playlist",
-                exclusive=True,
-            )
+            self.reload(self._active_playlist_id)
         elif not self._active_playlist_id:
             # Try the currently-playing playlist from the app.
             target_id = getattr(self.app, "_active_library_playlist_id", None)
             if target_id:
                 self._active_playlist_id = target_id
-                self.run_worker(
-                    self.load_playlist(target_id),
-                    name="load-playlist",
-                    exclusive=True,
-                )
+                self.reload(target_id)
 
     def get_nav_state(self) -> dict[str, Any]:
         """Return state to preserve when navigating away."""
@@ -184,6 +180,19 @@ class LibraryPage(TrackFilterHost, Widget):
 
     # First batch size for progressive playlist loading.
     _FIRST_BATCH = 300
+
+    def reload(self, playlist_id: str) -> None:
+        """Load *playlist_id* as this page's worker.
+
+        Supersedes the load in flight and its tail fetch, so the tracks a
+        previous load was still fetching are never appended to this one.
+        """
+        self.run_worker(
+            self.load_playlist(playlist_id),
+            name="load-playlist",
+            group=self.LOAD_GROUP,
+            exclusive=True,
+        )
 
     async def load_playlist(self, playlist_id: str) -> None:
         """Fetch and display a playlist's tracks."""
@@ -272,6 +281,7 @@ class LibraryPage(TrackFilterHost, Widget):
                 self.run_worker(
                     self._fetch_remaining(playlist_id, len(raw_tracks)),
                     name="fetch-remaining",
+                    group=self.LOAD_GROUP,
                 )
 
         except Exception:
@@ -396,6 +406,7 @@ class LibraryPage(TrackFilterHost, Widget):
                 self.run_worker(
                     cast("YTMHostBase", self.app)._start_playlist_radio(data),
                     name="start_radio",
+                    group="start-radio",
                     exclusive=True,
                 )
         elif widget.id == "shuffle-lock-btn":

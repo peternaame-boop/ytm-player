@@ -278,7 +278,7 @@ class KeyHandlingMixin(YTMHostBase):
 
             # -- Discovery roulette: random mix from one of seven sources --
             case Action.DISCOVERY_MIX:
-                self.run_worker(self._start_discovery_mix(), exclusive=True)
+                self.run_worker(self._start_discovery_mix(), group="discovery-mix", exclusive=True)
 
             # -- Track actions (opens popup, handles result) --
             case Action.TRACK_ACTIONS:

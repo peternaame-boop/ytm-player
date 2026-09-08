@@ -589,11 +589,7 @@ class PlaylistPicker(BasePopup[str | None]):
                         # maps videoId -> setVideoId, one per video, so the
                         # copies can't be told apart; reload rather than
                         # stamp both rows with the same setVideoId.
-                        library.run_worker(
-                            library.load_playlist(current_pid),
-                            name="load-playlist",
-                            exclusive=True,
-                        )
+                        library.reload(current_pid)
                     elif self.tracks:
                         table = library.query_one("#library-tracks", TrackTable)
                         table.append_tracks(

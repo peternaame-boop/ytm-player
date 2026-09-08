@@ -55,8 +55,7 @@ async def test_duplicate_submission_reloads_the_open_playlist_instead_of_appendi
     )
 
     table.append_tracks.assert_not_called()
-    library.run_worker.assert_called_once()
-    library.load_playlist.assert_called_once_with("PL1")
+    library.reload.assert_called_once_with("PL1")
     dismiss.assert_called_once_with("PL1")
 
 
@@ -66,7 +65,7 @@ async def test_unique_submission_still_appends_optimistically():
     table.append_tracks.assert_called_once()
     appended = table.append_tracks.call_args.args[0]
     assert [t["setVideoId"] for t in appended] == ["set-b", "set-d"]
-    library.run_worker.assert_not_called()
+    library.reload.assert_not_called()
     dismiss.assert_called_once_with("PL1")
 
 

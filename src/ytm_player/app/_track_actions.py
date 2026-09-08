@@ -628,6 +628,7 @@ class TrackActionsMixin(YTMHostBase):
             self.run_worker(
                 self._fetch_remaining_artist_songs(songs_browse_id, top_tracks),
                 name="fetch-artist-songs",
+                group="fetch-artist-songs",
                 exclusive=True,
             )
 
