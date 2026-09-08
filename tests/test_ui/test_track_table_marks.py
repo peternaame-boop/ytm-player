@@ -362,6 +362,56 @@ async def test_click_on_the_mark_column_toggles_without_selecting():
         assert app.selected == []
 
 
+async def _with_blank_strip(app: _Host, pilot) -> int:
+    """Load four rows, narrow the Title column, return an x inside the blank strip.
+
+    The user dragged the Title column narrower: auto-fill is off and a
+    blank strip opens right of the last column (the drag gesture's state).
+    DataTable tags a click there as column 0, out of bounds.
+    """
+    table = app.table
+    table.load_tracks(_unique_tracks())
+    await pilot.pause()
+    title = next(c for c in table.ordered_columns if c.key.value == "title")
+    title.width = 10
+    title.auto_width = False
+    table._title_manual_width = True
+    table._invalidate_table()
+    await pilot.pause()
+    used = table._row_label_column_width + sum(
+        c.get_render_width(table) for c in table.ordered_columns
+    )
+    assert used < table.size.width, "no blank strip"
+    return used + 2
+
+
+async def test_plain_click_in_the_blank_strip_is_a_row_click_not_a_mark():
+    app = _Host()
+    async with app.run_test(size=(120, 20)) as pilot:
+        table = app.table
+        x = await _with_blank_strip(app, pilot)
+
+        # Row 0 is highlighted after the load and the strip counts as column
+        # 0, so one click there lands on the cursor cell: it selects at once.
+        await pilot.click(TrackTable, offset=(x, 1))
+        await pilot.pause()
+        assert _glyphs(table) == "    "
+        assert table.marked_count == 0
+        assert app.selected == ["Alpha"]
+
+
+async def test_ctrl_click_in_the_blank_strip_still_marks_the_row():
+    app = _Host()
+    async with app.run_test(size=(120, 20)) as pilot:
+        table = app.table
+        x = await _with_blank_strip(app, pilot)
+
+        await pilot.click(TrackTable, offset=(x, 2), control=True)  # row 1
+        await pilot.pause()
+        assert _glyphs(table) == " ✓  "
+        assert app.selected == []
+
+
 async def test_plain_click_on_a_data_cell_still_selects():
     app = _Host()
     async with app.run_test() as pilot:
