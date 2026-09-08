@@ -57,6 +57,7 @@ class IPCMixin(YTMHostBase):
 
                 case "queue_clear":
                     self.queue.clear()
+                    self._refresh_queue_page()
                     return {"ok": True}
 
                 case "like":
@@ -212,5 +213,6 @@ class IPCMixin(YTMHostBase):
         normalized = normalize_tracks(watch_tracks[:1])
         if normalized:
             self.queue.add(normalized[0])
+            self._refresh_queue_page()
             return {"ok": True}
         return {"ok": False, "error": "failed to normalize track"}

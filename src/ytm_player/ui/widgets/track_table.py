@@ -83,12 +83,32 @@ class TrackTable(DataTable):
             self.index = index
 
     class TrackRightClicked(Message):
-        """Emitted when a track row is right-clicked (title or non-specific column)."""
+        """Emitted when a track row is right-clicked (title or non-specific column).
 
-        def __init__(self, track: dict, index: int) -> None:
+        *index* is the visible row and *track* the table's own copy of it
+        (unlike ``TrackSelected``, whose index is the load-order one). The
+        row's occurrence is snapshotted here, when the message is created:
+        ``occurrence_key`` is the key the row was loaded with (see
+        ``occurrence_key()``) and ``from_queue`` says whether that key is a
+        queue entry id (``queue_entry_keys`` on the table). A handler runs
+        later, possibly after the table re-rendered or was removed, so it
+        must use these and not look the row up again. ``control`` is the table.
+        """
+
+        def __init__(self, table: TrackTable, track: dict, index: int) -> None:
             super().__init__()
+            self.table = table
             self.track = track
             self.index = index
+            original = track.get("_original_index")
+            self.occurrence_key: Hashable | None = (
+                table.occurrence_key(original) if isinstance(original, int) else None
+            )
+            self.from_queue: bool = table.queue_entry_keys
+
+        @property
+        def control(self) -> TrackTable:
+            return self.table
 
     class ArtistRightClicked(Message):
         """Emitted when the Artist column of a track row is right-clicked."""
@@ -126,6 +146,7 @@ class TrackTable(DataTable):
         show_index: bool = True,
         show_album: bool = True,
         zebra_stripes: bool = True,
+        queue_entry_keys: bool = False,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -140,6 +161,9 @@ class TrackTable(DataTable):
         )
         self._show_index = show_index
         self._show_album = show_album
+        # True on the Queue page only: its rows are loaded with QueueManager
+        # entry ids as keys, so a row names one queue occurrence.
+        self.queue_entry_keys = queue_entry_keys
         self._all_tracks: list[dict] = []
         self._tracks: list[dict] = []
         self._filtered_map: list[int] = []
@@ -232,6 +256,18 @@ class TrackTable(DataTable):
     def selection_generation(self) -> int:
         """Changes whenever the marked set changes or the list is replaced."""
         return self._selection_generation
+
+    def occurrence_key(self, original_index: int) -> Hashable | None:
+        """The key naming occurrence *original_index*, or None.
+
+        Keys come from the ``keys`` the list was loaded with (queue entry ids
+        on the Queue page); None when the list was loaded without keys or the
+        index is out of range.
+        """
+        keys = self._occurrence_keys
+        if keys is None or not 0 <= original_index < len(keys):
+            return None
+        return keys[original_index]
 
     def marked_tracks(self) -> list[dict]:
         """Marked tracks in the displayed order, hidden ones included.
@@ -1035,7 +1071,7 @@ class TrackTable(DataTable):
                 elif col_key == "album":
                     self.post_message(self.AlbumRightClicked(track, row_idx))
                 else:
-                    self.post_message(self.TrackRightClicked(track, row_idx))
+                    self.post_message(self.TrackRightClicked(self, track, row_idx))
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
         """Sort by the clicked column header."""
@@ -1121,6 +1157,19 @@ class TrackTable(DataTable):
         # Restore by occurrence, not video ID: with the same track listed
         # twice, the cursor stays on the copy it was on.
         current = self.selected_original_index
+        self._rebuild_view()
+        self._place_cursor_on(current)
+
+    def clear_sort(self) -> None:
+        """Drop the active sort, back to load order; a no-op when unsorted.
+
+        The filter, the marks and the cursor's occurrence all stay.
+        """
+        if self._sort_column is None:
+            return
+        current = self.selected_original_index
+        self._sort_column = None
+        self._sort_reverse = False
         self._rebuild_view()
         self._place_cursor_on(current)
 

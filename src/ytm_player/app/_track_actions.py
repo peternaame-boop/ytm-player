@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Hashable
 from typing import Any
 
 from ytm_player.app._base import YTMHostBase
@@ -47,19 +48,29 @@ class TrackActionsMixin(YTMHostBase):
         self.queue.jump_to_real(index)
         await self.play_track(track)
 
-    def _get_focused_track(self) -> dict | None:
-        """Try to get a track dict from the currently focused widget."""
-        focused = self.focused
-        if focused is None:
-            return None
-
-        # Walk up to find a TrackTable parent.
-        widget = focused
+    def _focused_track_table(self) -> TrackTable | None:
+        """The TrackTable that has focus, or contains the focused widget."""
+        widget = self.focused
         while widget is not None:
             if isinstance(widget, TrackTable):
-                return widget.selected_track
+                return widget
             widget = widget.parent
         return None
+
+    def _get_focused_track(self) -> dict | None:
+        """Try to get a track dict from the currently focused widget."""
+        table = self._focused_track_table()
+        return table.selected_track if table is not None else None
+
+    @staticmethod
+    def _queue_entry_id(from_queue: bool, key: Hashable | None) -> int | None:
+        """The queue entry id a row's occurrence *key* names, or None.
+
+        Only the Queue page's table keys its rows by queue entry id
+        (``from_queue``); any other table's key, or no key, names no queue
+        occurrence.
+        """
+        return key if from_queue and isinstance(key, int) else None
 
     def _resolve_action_track(self) -> dict | None:
         """Focused-table track, falling back to the currently playing track."""
@@ -171,19 +182,37 @@ class TrackActionsMixin(YTMHostBase):
 
     async def _open_track_actions(self) -> None:
         """Open ActionsPopup for the focused track."""
-        track = self._get_focused_track()
+        table = self._focused_track_table()
+        track = table.selected_track if table is not None else None
+        from_queue = table is not None and table.queue_entry_keys
+        queue_entry_id = None
+        if table is not None and track is not None:
+            original = track.get("_original_index")
+            key = table.occurrence_key(original) if isinstance(original, int) else None
+            queue_entry_id = self._queue_entry_id(from_queue, key)
         if not track:
-            # Fall back to currently playing track.
+            # Fall back to currently playing track. It did not come from a
+            # Queue page row (the table may be filtered to nothing), so it
+            # names no occurrence and carries no Queue origin.
             if self.player and self.player.current_track:
                 track = self.player.current_track
+                queue_entry_id = None
+                from_queue = False
             else:
                 self.notify("No track selected.", severity="warning", timeout=2)
                 return
 
-        self._open_actions_for_track(track)
+        self._open_actions_for_track(track, queue_entry_id=queue_entry_id, from_queue=from_queue)
 
-    def _open_actions_for_track(self, track: dict) -> None:
-        """Push ActionsPopup for a specific track dict."""
+    def _open_actions_for_track(
+        self, track: dict, *, queue_entry_id: int | None = None, from_queue: bool = False
+    ) -> None:
+        """Push ActionsPopup for a specific track dict.
+
+        *queue_entry_id* names the queue occurrence the popup was opened on
+        (a Queue page row); *from_queue* says the track came from that page
+        even if no id could be read, so removal never guesses by video id.
+        """
 
         def _handle_action_result(action_id: str | None) -> None:
             """Callback when the user picks an action from the popup."""
@@ -205,14 +234,7 @@ class TrackActionsMixin(YTMHostBase):
             elif action_id == "add_to_queue":
                 self._enqueue_track(track)
             elif action_id == "remove_from_queue":
-                video_id = get_video_id(track)
-                if video_id:
-                    for i, t in enumerate(self.queue.tracks):
-                        if t.get("video_id") == video_id:
-                            self.queue.remove(i)
-                            self._refresh_queue_page()
-                            self.notify("Removed from queue", timeout=2)
-                            break
+                self._remove_from_queue(track, queue_entry_id, from_queue=from_queue)
             elif action_id == "start_radio":
                 self.run_worker(self._fetch_and_play_radio(track))
             elif action_id == "go_to_artist":
@@ -276,6 +298,37 @@ class TrackActionsMixin(YTMHostBase):
             ActionsPopup(track, item_type="track", in_queue=in_queue, in_playlist=in_playlist),
             _handle_action_result,
         )
+
+    def _remove_from_queue(
+        self, track: dict, queue_entry_id: int | None, *, from_queue: bool = False
+    ) -> None:
+        """Remove *track* from the queue on the popup's Remove from Queue.
+
+        With an entry id only that occurrence goes. If it is gone by the time
+        the popup closes (removed, or the queue rebuilt, meanwhile) nothing is
+        removed — never another copy of the same song — and the page is
+        re-rendered so the stale row disappears. A Queue page row whose id
+        could not be read (*from_queue* without an id) is treated the same
+        way. Only without any occurrence to name (popup opened from the
+        playback bar or another page) does the first copy by video id go.
+        """
+        if from_queue or queue_entry_id is not None:
+            if queue_entry_id is not None and self.queue.remove_entry(queue_entry_id):
+                self._refresh_queue_page()
+                self.notify("Removed from queue", timeout=2)
+            else:
+                self._refresh_queue_page()
+                self.notify("That queue entry is no longer present", severity="warning", timeout=3)
+            return
+        video_id = get_video_id(track)
+        if not video_id:
+            return
+        for i, t in enumerate(self.queue.tracks):
+            if t.get("video_id") == video_id:
+                self.queue.remove(i)
+                self._refresh_queue_page()
+                self.notify("Removed from queue", timeout=2)
+                break
 
     def _sync_shuffle_bar(self) -> None:
         try:
@@ -393,8 +446,16 @@ class TrackActionsMixin(YTMHostBase):
             logger.exception("Failed to update UI after track removal")
 
     def on_track_table_track_right_clicked(self, message: TrackTable.TrackRightClicked) -> None:
-        """Handle right-click on any TrackTable -- open actions popup."""
-        self._open_actions_for_track(message.track)
+        """Handle right-click on any TrackTable -- open actions popup.
+
+        Works from the message's snapshot only: by now the table may have
+        re-rendered (a queue change) or been removed (navigation), so the
+        clicked row must not be looked up again.
+        """
+        queue_entry_id = self._queue_entry_id(message.from_queue, message.occurrence_key)
+        self._open_actions_for_track(
+            message.track, queue_entry_id=queue_entry_id, from_queue=message.from_queue
+        )
 
     def on_playback_bar_track_right_clicked(self, message: PlaybackBar.TrackRightClicked) -> None:
         """Handle right-click on the playback bar -- open actions popup."""
@@ -886,6 +947,7 @@ class TrackActionsMixin(YTMHostBase):
             if remaining:
                 tracks = normalize_tracks(remaining)
                 self.queue.add_multiple(tracks)
+                self._refresh_queue_page()
         except Exception:
             logger.debug("Failed to fetch remaining playlist tracks for queue", exc_info=True)
 

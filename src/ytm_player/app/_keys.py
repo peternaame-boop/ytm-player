@@ -215,6 +215,7 @@ class KeyHandlingMixin(YTMHostBase):
                     )
                     return
                 self.queue.toggle_shuffle()
+                self._refresh_queue_page()
                 bar = self.query_one("#playback-bar", PlaybackBar)
                 bar.update_shuffle(self.queue.shuffle_enabled)
                 state = "on" if self.queue.shuffle_enabled else "off"

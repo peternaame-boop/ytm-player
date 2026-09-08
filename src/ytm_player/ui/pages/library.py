@@ -427,6 +427,7 @@ class LibraryPage(TrackFilterHost, Widget):
         if new_locked and host.queue.current_context_id == playlist_id:
             if not host.queue.shuffle_enabled:
                 host.queue.toggle_shuffle()
+                host._refresh_queue_page()
                 try:
                     bar = host.query_one("#playback-bar")
                     bar.update_shuffle(host.queue.shuffle_enabled)  # type: ignore[attr-defined]

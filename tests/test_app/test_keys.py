@@ -14,6 +14,8 @@ from unittest.mock import MagicMock
 from textual.events import Key
 
 from ytm_player.app._keys import _MAX_KEY_COUNT, KeyHandlingMixin
+from ytm_player.config import Action
+from ytm_player.services.queue import QueueManager
 
 
 def _make_event(key: str) -> MagicMock:
@@ -68,3 +70,35 @@ class TestKeyCountCap:
     def test_max_count_constant_is_1000(self):
         """Sanity: regression guard if someone changes the cap silently."""
         assert _MAX_KEY_COUNT == 1000
+
+
+def _shuffle_host(*, locked: bool = False) -> MagicMock:
+    """A host with a real queue in a playlist context; the rest is mocked."""
+    host = MagicMock()
+    host.queue = QueueManager()
+    host.queue.add_multiple(
+        [{"video_id": f"v{i}", "title": f"T{i}", "artist": "A", "duration": 60} for i in range(3)]
+    )
+    host.queue.jump_to(0)
+    host.queue.set_context("PL1")
+    host.shuffle_prefs.get.return_value = locked
+    return host
+
+
+class TestToggleShuffleAction:
+    async def test_toggle_refreshes_the_queue_page(self):
+        host = _shuffle_host()
+
+        await KeyHandlingMixin._handle_action(host, Action.TOGGLE_SHUFFLE)
+
+        assert host.queue.shuffle_enabled
+        host._refresh_queue_page.assert_called_once()
+
+    async def test_locked_context_toggles_nothing(self):
+        host = _shuffle_host(locked=True)
+
+        await KeyHandlingMixin._handle_action(host, Action.TOGGLE_SHUFFLE)
+
+        assert not host.queue.shuffle_enabled
+        host._refresh_queue_page.assert_not_called()
+        assert host.notify.call_args.kwargs.get("severity") == "warning"
