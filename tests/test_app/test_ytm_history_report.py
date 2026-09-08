@@ -71,6 +71,11 @@ def _report(host, video_id="vid1", generation=1) -> None:
     PlaybackMixin._report_ytm_play.__get__(host)(track, video_id, generation)
 
 
+def _without_occurrence(rows: list[dict]) -> list[dict]:
+    """*rows* minus the occurrence id the account cache stamps on them."""
+    return [{k: v for k, v in row.items() if k != "_occurrence"} for row in rows]
+
+
 def _claim(video_id: str = "vid1", generation: int = 1, **kw) -> _LocalHistoryClaim:
     c = _LocalHistoryClaim(video_id=video_id, track={"video_id": video_id}, generation=generation)
     for k, v in kw.items():
@@ -321,7 +326,10 @@ async def test_push_adds_the_accepted_play_to_the_account_cache() -> None:
 
     host.ytmusic.add_history_item.assert_awaited_once_with("vid1")
     assert host._ytm_reported_generation == 3
-    assert host._ytm_history == [{"video_id": "vid1", "title": "Fresh"}, {"video_id": "old"}]
+    assert _without_occurrence(host._ytm_history) == [
+        {"video_id": "vid1", "title": "Fresh"},
+        {"video_id": "old"},
+    ]
     assert host._ytm_history_pending == []
 
 
@@ -645,7 +653,10 @@ def test_ytm_cache_update_moves_the_play_to_the_top() -> None:
 
     PlaybackMixin._add_to_ytm_history_cache.__get__(host)({"video_id": "vid1", "title": "new"})
 
-    assert host._ytm_history == [{"video_id": "vid1", "title": "new"}, {"video_id": "a"}]
+    assert _without_occurrence(host._ytm_history) == [
+        {"video_id": "vid1", "title": "new"},
+        {"video_id": "a"},
+    ]
 
 
 def test_ytm_cache_update_rerenders_the_open_page() -> None:

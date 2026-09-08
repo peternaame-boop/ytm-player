@@ -17,8 +17,10 @@ Three tabs:
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import sqlite3
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
@@ -72,6 +74,51 @@ _TAB_DESCRIPTIONS = {
 # cap when it derives its rows, so All shows up to 100 local rows plus up to
 # 100 further account rows.
 _MAX_TRACKS = 100
+
+
+# Occurrence ids for the rows of the account cache. The feed lists a track
+# once per day it was played, so the same video ID can name several rows;
+# each row gets its own id when it enters the cache and keeps it while it
+# stays, which is what a keyed refresh of the YT Music tab matches on.
+_occurrences = itertools.count(1)
+
+
+def _stamp(track: dict, occurrence: int | None = None) -> dict:
+    """A copy of *track* carrying an occurrence id (a fresh one unless given)."""
+    stamped = dict(track)
+    stamped["_occurrence"] = next(_occurrences) if occurrence is None else occurrence
+    return stamped
+
+
+def _occurrence_key(track: dict) -> Hashable:
+    """The key a cached account row is matched by across background refreshes.
+
+    Every row the cache holds is stamped; one that reached it another way
+    falls back to its video ID.
+    """
+    return track.get("_occurrence", get_video_id(track))
+
+
+def _with_accepted_play(cache: list[dict], track: dict) -> list[dict]:
+    """*cache* with an accepted play of *track* on top.
+
+    The play supersedes the track's most recent listing: that row moves to
+    the top keeping its identity (a mark on it moves along) and takes the
+    played track's details. Older listings of the track stay where they
+    are — a play never deletes history. A track the cache does not list
+    gets a new occurrence. Identity is the cache's to decide: a stamp the
+    incoming *track* carries (a row it was played from) is never kept.
+
+    This is a provisional update of the cached view, not a reconstruction
+    of the server's per-day shelves; the next fetch replaces the cache
+    with the server's list, which is authoritative.
+    """
+    video_id = get_video_id(track)
+    for index, cached in enumerate(cache):
+        if get_video_id(cached) == video_id:
+            moved = _stamp(track, cached.get("_occurrence"))
+            return [moved] + cache[:index] + cache[index + 1 :]
+    return [_stamp(track)] + list(cache)
 
 
 def _enrich(track: dict, extra: dict) -> dict:
@@ -344,10 +391,12 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
     async def _fetch_ytm(self) -> None:
         """Fill the app-level account cache from ``get_history()``; renders nothing.
 
-        The cache holds the whole normalized feed, unfiltered; views apply
-        their own limits. Plays the account accepted while no feed was
-        cached (see ``_add_to_ytm_history_cache`` on the app) are folded
-        into the fetched feed by ``_merge_pending_account_plays``.
+        The cache holds the whole normalized feed, unfiltered, every row
+        stamped with its occurrence id (the feed lists a track once per day
+        it was played; ``normalize_tracks`` drops the day, the rows stay);
+        views apply their own limits. Plays the account accepted while no
+        feed was cached (see ``_add_to_ytm_history_cache`` on the app) are
+        folded into the fetched feed by ``_merge_pending_account_plays``.
         """
         self._ytm_auth_required = False
         self._ytm_load_failed = False
@@ -365,9 +414,8 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         if raw is None:
             self._ytm_load_failed = True
             return
-        self._set_cache(
-            _TAB_YTM, self._merge_pending_account_plays(normalize_tracks(raw), fetch_seq)
-        )
+        feed = [_stamp(track) for track in normalize_tracks(raw)]
+        self._set_cache(_TAB_YTM, self._merge_pending_account_plays(feed, fetch_seq))
 
     def _pending_account_seq(self) -> int:
         """The sequence number of the latest pending accepted play (0 = none yet)."""
@@ -378,20 +426,24 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         """Fold the pending accepted plays into *feed*, consuming them.
 
         A play accepted after the fetch started (sequence number above
-        *fetch_seq*) post-dates the feed, so it goes ahead of it even when
-        the feed already lists the track. A play accepted before the fetch
-        started is already reflected in the feed: its server position
-        stands. Only when the feed does not list such a play yet does it go
-        ahead of the feed, behind the newer plays.
+        *fetch_seq*) post-dates the feed, so it goes ahead of it, superseding
+        the feed's most recent listing of the track if there is one (see
+        ``_with_accepted_play``). A play accepted before the fetch started
+        is already reflected in the feed: its server position stands. Only
+        when the feed does not list such a play yet does it go ahead of the
+        feed, behind the newer plays.
         """
         pending = self._take_pending_account_plays()
         if not pending:
             return feed
         feed_ids = {get_video_id(t) for t in feed}
-        ahead = [t for seq, t in pending if seq > fetch_seq]
-        ahead += [t for seq, t in pending if seq <= fetch_seq and get_video_id(t) not in feed_ids]
-        ahead_ids = {get_video_id(t) for t in ahead}
-        return ahead + [t for t in feed if get_video_id(t) not in ahead_ids]
+        merged = list(feed)
+        # Oldest first, so the newest play ends up on top.
+        for seq, track in reversed(pending):
+            if seq <= fetch_seq and get_video_id(track) in feed_ids:
+                continue
+            merged = _with_accepted_play(merged, track)
+        return merged
 
     def _take_pending_account_plays(self) -> list[tuple[int, dict]]:
         pending = getattr(self.app, "_ytm_history_pending", None)
@@ -436,18 +488,21 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
     def optimistic_add(self, index: int, track: dict) -> None:
         """Prepend a just-played track to a source's cache and re-render live.
 
-        Dedups by ``video_id``: an existing row for the same track moves to
-        the top. The Local cache stays capped at ``_MAX_TRACKS`` (its query
-        limit); the account cache is unfiltered and capped on display. No-op
-        until the source has a cache (the first visit fetches the real list).
-        If the source, or All, is showing, it re-renders.
+        Local lists a track once (its query groups by track): an existing
+        row for the same track moves to the top, and the cache stays capped
+        at ``_MAX_TRACKS`` (its query limit). The account cache keeps every
+        listing (see ``_with_accepted_play``) and is capped on display.
+        No-op until the source has a cache (the first visit fetches the
+        real list). If the source, or All, is showing, it re-renders.
         """
         cache = self._get_cache(index)
         if cache is None:
             return
-        video_id = get_video_id(track)
-        updated = [dict(track)] + [t for t in cache if get_video_id(t) != video_id]
-        if index == _TAB_LOCAL:
+        if index == _TAB_YTM:
+            updated = _with_accepted_play(cache, track)
+        else:
+            video_id = get_video_id(track)
+            updated = [dict(track)] + [t for t in cache if get_video_id(t) != video_id]
             updated = updated[:_MAX_TRACKS]
         self._set_cache(index, updated)
         self._refresh_tab_from_cache(index)
@@ -459,8 +514,8 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         draws from both sources). Never steals focus: the change lands from
         playback timers, not user input, and the user may be typing in the
         filter. The table keeps its view across the re-render — sort,
-        filter, cursor and marks — matching rows by video ID, which every
-        view shows once.
+        filter, cursor and marks — matching rows by the keys
+        ``_display_tracks`` loads them with.
         """
         if self._active_tab not in (index, _TAB_ALL):
             return
@@ -488,10 +543,15 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
 
         loading.display = False
         table.display = True
-        # Every load is keyed by video ID (each view shows a track once) so
-        # a later background refresh can carry the marks over; a deliberate
-        # load still starts with none.
-        keys = [get_video_id(t) for t in tracks]
+        # Every load is keyed so a later background refresh can carry the
+        # marks over: by video ID where the view shows a track once (All,
+        # Local), by occurrence on the YT Music tab, which lists a track
+        # once per day it was played. A deliberate load still starts with
+        # no marks.
+        if self._active_tab == _TAB_YTM:
+            keys: list[Hashable] = [_occurrence_key(t) for t in tracks]
+        else:
+            keys = [get_video_id(t) for t in tracks]
         if refresh:
             table.refresh_tracks(tracks, keys=keys)
         else:

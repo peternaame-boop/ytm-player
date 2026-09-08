@@ -1,9 +1,11 @@
 """Marks on the real Recently Played page survive the plays that re-render it.
 
-Every load of the page's table is keyed by video ID, so the first
-background refresh after marking (a play landing) carries the marks over
-instead of falling back to a fresh load. A deliberate load still starts
-with none.
+These tests drive the Local tab, which lists a track once, so every load
+of its table is keyed by video ID and the first background refresh after
+marking (a play landing) carries the marks over instead of falling back
+to a fresh load. A deliberate load still starts with none. The YT Music
+tab, whose rows are keyed by occurrence, is covered in
+``test_recently_played_ytm_occurrences.py``.
 """
 
 from __future__ import annotations

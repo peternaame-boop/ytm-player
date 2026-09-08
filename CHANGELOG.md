@@ -24,6 +24,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Recently Played: marks and the cursor survive on the YT Music tab** — the account feed lists a track on every day it was played, and those repeated rows made a play landing in the background drop the marks on that track and send the cursor to the top. Every row now keeps its own identity across the refresh; the rows themselves are unchanged. A play the account accepts moves the track's most recent row to the top and leaves its older rows where they are, until the next reload shows the account's own list.
+- **A click in the blank space right of the columns plays the row again** — since the mark column arrived, a plain click there marked the row instead. Ctrl+click and Shift+click there still mark.
 - **Turning shuffle off keeps the playing track** — after skipping under shuffle, turning shuffle off jumped the position back to the track that was playing when shuffle went on, so Next continued from the wrong place.
 - **The Queue page follows every queue change** — toggling shuffle (key, playback-bar button or Shuffle lock), `ytm queue clear`, `ytm queue add` and the background fill of a long playlist now re-render the page, so `d`, `J` and `K` act on the row you see instead of a row that was no longer there.
 - **Remove from Queue removes the copy you picked** — with the same song queued twice, the track menu removed the first copy whichever one was selected. It now removes that occurrence; if it was already gone when you confirmed, nothing else is removed.
