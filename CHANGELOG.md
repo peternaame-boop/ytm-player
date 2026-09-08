@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-### Unreleased
+### v2.1.0 (2026-09-08)
 
 #### Upgrade notes
 
