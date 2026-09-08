@@ -942,14 +942,23 @@ class PlaybackMixin(YTMHostBase):
         """Reflect a play the account just accepted in the cached account history.
 
         Runs only after ``add_history_item`` succeeded, so the YT Music and
-        All tabs agree with the account. With a feed cached, the play moves
-        to the top. With none cached (first visit still pending, or a
-        refresh in flight) it is parked in ``_ytm_history_pending`` with a
-        sequence number, so the next fetch can tell whether the play came
-        before or after the feed it received (see the page's
-        ``_merge_pending_account_plays``). Re-renders the page when the YT
-        Music or All tab is showing.
+        All tabs agree with the account. With a feed cached, the play
+        supersedes the track's most recent row, which moves to the top
+        keeping its identity; older rows of the track stay (see the page's
+        ``_with_accepted_play``). That is a provisional view: the next
+        fetch is authoritative. With none cached (first visit still
+        pending, or a refresh in flight) it is parked in
+        ``_ytm_history_pending`` with a sequence number, so the next fetch
+        can tell whether the play came before or after the feed it received
+        (see the page's ``_merge_pending_account_plays``). Re-renders the
+        page when the YT Music or All tab is showing.
         """
+        from ytm_player.ui.pages.recently_played import (
+            _TAB_YTM,
+            RecentlyPlayedPage,
+            _with_accepted_play,
+        )
+
         video_id = get_video_id(track)
         if not video_id:
             return
@@ -962,9 +971,7 @@ class PlaybackMixin(YTMHostBase):
             ]
             del pending[_YTM_PENDING_MAX:]
             return
-        self._ytm_history = [dict(track)] + [t for t in cache if get_video_id(t) != video_id]
-
-        from ytm_player.ui.pages.recently_played import _TAB_YTM, RecentlyPlayedPage
+        self._ytm_history = _with_accepted_play(cache, track)
 
         page = self._get_current_page()
         if isinstance(page, RecentlyPlayedPage):

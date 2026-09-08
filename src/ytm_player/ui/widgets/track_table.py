@@ -1041,7 +1041,10 @@ class TrackTable(DataTable):
             row_idx = meta.get("row") if meta else None
             if row_idx is None or not (0 <= row_idx < len(self._tracks)):
                 return
-            on_mark_column = meta.get("column") == 0
+            # DataTable tags the filler right of the last column as column 0
+            # "out of bounds"; a plain click there is a row click, not a
+            # click on the mark column.
+            on_mark_column = meta.get("column") == 0 and not meta.get("out_of_bounds")
             if not (event.ctrl or event.shift or on_mark_column):
                 return
             event.stop()
