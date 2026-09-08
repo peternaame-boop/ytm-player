@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 if TYPE_CHECKING:
     from ytm_player.app._base import YTMHostBase
@@ -175,6 +175,11 @@ class ContextPage(TrackFilterHost, Widget):
     error_message: reactive[str] = reactive("")
     _load_failed: bool
 
+    # Group of the page's data load and the follow-up fetches it starts (a
+    # playlist's tail, an artist's full song list): a new load supersedes
+    # them; the header buttons' workers run in groups of their own.
+    LOAD_GROUP: ClassVar[str] = "context-load"
+
     def __init__(
         self,
         context_type: str,
@@ -212,7 +217,9 @@ class ContextPage(TrackFilterHost, Widget):
         """Start an async worker to fetch context data."""
         self.loading = True
         self.error_message = ""
-        self.run_worker(self._fetch_data(), name="fetch_context", exclusive=True)
+        self.run_worker(
+            self._fetch_data(), name="fetch_context", group=self.LOAD_GROUP, exclusive=True
+        )
 
     # First batch size for progressive playlist loading.
     _FIRST_BATCH = 300
@@ -415,6 +422,7 @@ class ContextPage(TrackFilterHost, Widget):
             self.run_worker(
                 self._fetch_remaining_tracks(len(raw_tracks)),
                 name="fetch_remaining",
+                group=self.LOAD_GROUP,
             )
 
     async def _fetch_remaining_tracks(self, already_have: int) -> list[dict]:
@@ -508,6 +516,7 @@ class ContextPage(TrackFilterHost, Widget):
             self.run_worker(
                 self._fetch_full_artist_songs(songs_browse_id, top_tracks_table),
                 name="fetch-artist-songs",
+                group=self.LOAD_GROUP,
                 exclusive=True,
             )
 
@@ -556,10 +565,14 @@ class ContextPage(TrackFilterHost, Widget):
             return
         if widget.id == "add-to-library-btn":
             event.stop()
-            self.run_worker(self._add_to_library(), name="add_to_lib", exclusive=True)
+            self.run_worker(
+                self._add_to_library(), name="add_to_lib", group="add-to-library", exclusive=True
+            )
         elif widget.id == "start-radio-btn":
             event.stop()
-            self.run_worker(self._start_radio(), name="start_radio", exclusive=True)
+            self.run_worker(
+                self._start_radio(), name="start_radio", group="start-radio", exclusive=True
+            )
 
     async def _add_to_library(self) -> None:
         """Add the current album or playlist to the user's library."""

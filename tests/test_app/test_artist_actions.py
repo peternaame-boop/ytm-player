@@ -160,6 +160,11 @@ class TestPlayArtistTopSongs:
         await TrackActionsMixin._play_artist_top_songs(host, "UC_ax")
 
         host.run_worker.assert_called_once()
+        assert host.run_worker.call_args.kwargs == {
+            "name": "fetch-artist-songs",
+            "group": "fetch-artist-songs",
+            "exclusive": True,
+        }
 
     async def test_no_songs(self):
         """When artist has no songs, shows warning."""

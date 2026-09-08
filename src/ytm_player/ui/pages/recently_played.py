@@ -721,7 +721,9 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
         widget_id = event.widget.id if event.widget is not None else None
         if widget_id == "start-radio-btn":
             event.stop()
-            self.run_worker(self._start_radio(), name="start_radio", exclusive=True)
+            self.run_worker(
+                self._start_radio(), name="start_radio", group="start-radio", exclusive=True
+            )
             return
         for index, tab_id in _TAB_IDS.items():
             if widget_id == tab_id:

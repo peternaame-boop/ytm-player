@@ -102,3 +102,14 @@ class TestToggleShuffleAction:
         assert not host.queue.shuffle_enabled
         host._refresh_queue_page.assert_not_called()
         assert host.notify.call_args.kwargs.get("severity") == "warning"
+
+
+class TestDiscoveryMixAction:
+    async def test_runs_in_a_worker_group_of_its_own(self):
+        host = MagicMock()
+
+        await KeyHandlingMixin._handle_action(host, Action.DISCOVERY_MIX)
+
+        host.run_worker.assert_called_once_with(
+            host._start_discovery_mix.return_value, group="discovery-mix", exclusive=True
+        )

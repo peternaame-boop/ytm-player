@@ -275,7 +275,7 @@ class _HeartButton(Widget):
         event.stop()
         app = cast("YTMHostBase", self.app)
         try:
-            self.run_worker(app._toggle_like_current(), exclusive=True)
+            self.run_worker(app._toggle_like_current(), group="toggle-like", exclusive=True)
         except Exception:
             logger.debug("Failed to toggle like from heart click", exc_info=True)
 

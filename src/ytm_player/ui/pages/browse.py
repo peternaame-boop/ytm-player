@@ -643,6 +643,25 @@ class ChartsSection(Widget):
 
     is_loading: reactive[bool] = reactive(True)
 
+    class ShelfRequested(Message):
+        """A chart pill was clicked.
+
+        The page runs the shelf fetch as its own worker (``load_shelf``) so
+        that its outcome reaches the page's worker handler —
+        ``Worker.StateChanged`` does not bubble.
+        """
+
+        def __init__(self, section: ChartsSection, index: int, revision: int) -> None:
+            super().__init__()
+            self.section = section
+            self.index = index
+            # The chart data the pill belonged to (``ChartsSection.revision``).
+            self.revision = revision
+
+        @property
+        def control(self) -> ChartsSection:
+            return self.section
+
     # Below this terminal width (cols), the event pill row is hidden to
     # reclaim vertical space. Chart pills always render — they're the
     # primary content.
@@ -653,6 +672,13 @@ class ChartsSection(Widget):
         self._chart_data: dict[str, Any] = {}
         self.load_failed = False
         self._country: str = get_settings().ui.region
+        # ``_revision`` counts the loads started on this section;
+        # ``_data_revision`` is the load whose chart data the pills show. A
+        # pill click carries the latter, and the page runs it only while the
+        # two agree: a click on pills a later load is replacing is refused
+        # (its index means nothing on the new pills).
+        self._revision = 0
+        self._data_revision = 0
         # Combined shelves list: events first, then country charts (sorted
         # by priority). Each entry is the dict ytmusicapi returns —
         # keys include "title", "playlistId", "thumbnails".
@@ -708,6 +734,21 @@ class ChartsSection(Widget):
         except Exception:
             logger.debug("Failed to hide charts content on mount", exc_info=True)
 
+    @property
+    def revision(self) -> int:
+        """The latest load started on this section; see ``begin_load``."""
+        return self._revision
+
+    def begin_load(self) -> None:
+        """Mark the chart data as being replaced, before the load runs.
+
+        The page calls this when it schedules ``load_data``. From here a
+        click on the current pills is refused, whether it is handled before
+        or after the load's coroutine starts.
+        """
+        self._revision += 1
+        self.is_loading = True
+
     async def load_data(self, country: str | None = None) -> None:
         """Fetch chart data for *country* and display the first daily shelf.
 
@@ -723,7 +764,6 @@ class ChartsSection(Widget):
         self.load_failed = False
         if country is None:
             country = get_settings().ui.region
-        self._country = country
         try:
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
@@ -738,6 +778,10 @@ class ChartsSection(Widget):
             self.is_loading = False
             return
         self._chart_data = chart_data
+        # Only now: the label ``_populate_charts`` writes must never name a
+        # country the table's data is not for.
+        self._country = country
+        self._data_revision = self._revision
 
         try:
             raw: list[dict[str, Any]] = []
@@ -859,10 +903,27 @@ class ChartsSection(Widget):
             logger.exception("Failed to load playlist for chart shelf %r", playlist_id)
             self._show_error("Failed to load chart playlist — try again later.")
             return
+        if not tracks:
+            # The service turns a failed playlist request into an empty list,
+            # so an empty shelf may be a failure: keep the tab retryable.
+            self._show_error("No chart tracks returned — select the tab again to retry.")
+            return
         self._populate_charts(tracks)
 
+    async def load_shelf(self, index: int, revision: int) -> None:
+        """Switch the table to the shelf at *index*, requested on chart data *revision*.
+
+        Run by the page as its own worker (see ``ShelfRequested``). A request
+        made on chart data a later load has replaced is dropped.
+        """
+        if revision != self._revision or not (0 <= index < len(self._dailies)):
+            return
+        self._active_daily = index
+        self._refresh_pill_active_class()
+        await self._load_active_daily()
+
     def on_click(self, event: Click) -> None:
-        """Pill click → switch active daily shelf."""
+        """Pill click → ask the page to switch to that shelf."""
         widget = getattr(event, "widget", None)
         wid = getattr(widget, "id", None) if widget is not None else None
         if not isinstance(wid, str) or not wid.startswith("charts-pill-"):
@@ -873,14 +934,11 @@ class ChartsSection(Widget):
             return
         if new_index == self._active_daily or not (0 <= new_index < len(self._dailies)):
             return
-        self._active_daily = new_index
-        self._refresh_pill_active_class()
-        self.run_worker(
-            self._load_active_daily(),
-            name="charts-switch-shelf",
-            exclusive=True,
-            exit_on_error=False,
-        )
+        if self.is_loading:
+            # The load in flight is about to replace these pills, or is still
+            # fetching their first shelf.
+            return
+        self.post_message(self.ShelfRequested(self, new_index, self._data_revision))
 
     def _populate_charts(self, tracks: list[dict[str, Any]]) -> None:
         loading = self.query_one("#charts-loading", Static)
@@ -1351,6 +1409,12 @@ class BrowsePage(Widget):
         super().__init__(name=name, id=id, classes=classes)
         self._tabs_loaded: set[int] = set()
         self._restore_tab = active_tab
+        # The latest loader started for each tab, and the latest pill fetch:
+        # only their outcomes count in on_worker_state_changed. A loader this
+        # page has since replaced (a region change during the Charts load)
+        # says nothing about the newer one.
+        self._tab_workers: dict[int, Worker] = {}
+        self._shelf_worker: Worker | None = None
         # One home feed per page visit, shared by For You and Playlists and
         # expanded lazily: For You alone fetches ``home_shelves`` shelves;
         # opening Playlists fetches up to _PLAYLISTS_SHELF_DEPTH unless the
@@ -1451,13 +1515,61 @@ class BrowsePage(Widget):
         """Lazy-load data for a tab if not already loaded."""
         if index in self._tabs_loaded:
             return
+        if index == self._CHARTS_TAB:
+            self._load_charts()
+            return
         self._tabs_loaded.add(index)
         section = self._section(index)
         if section is None:
             return
-        self.run_worker(
+        self._tab_workers[index] = self.run_worker(
             section.load_data(),
             name=self._LOAD_WORKERS[index],
+            group=self._LOAD_GROUP,
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    def _load_charts(self, country: str | None = None) -> None:
+        """Run the Charts loader: the tab's first load, a retry, or a region change.
+
+        One worker name and group for all three, so a region change that a
+        tab switch cancels is forgotten like any other cancelled load and
+        fetched again when Charts is next selected. The pill fetch in flight
+        is cancelled first and the section moved past its current chart
+        data, so a click on the old pills cannot land on the new ones.
+        """
+        section = self._section(self._CHARTS_TAB)
+        if not isinstance(section, ChartsSection):
+            return
+        self._tabs_loaded.add(self._CHARTS_TAB)
+        self.workers.cancel_group(self, self._SHELF_GROUP)
+        self._shelf_worker = None
+        section.begin_load()
+        self._tab_workers[self._CHARTS_TAB] = self.run_worker(
+            section.load_data(country=country),
+            name=self._LOAD_WORKERS[self._CHARTS_TAB],
+            group=self._LOAD_GROUP,
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    def on_charts_section_shelf_requested(self, message: ChartsSection.ShelfRequested) -> None:
+        """Fetch a clicked pill's shelf as this page's worker.
+
+        A request the load in flight has overtaken — queued before a region
+        change, or clicked before the reload's coroutine started — is
+        refused: its index belongs to the previous chart data. So is one
+        made during the load that rendered its pills.
+        """
+        message.stop()
+        section = message.section
+        if message.revision != section.revision or section.is_loading:
+            return
+        self._shelf_worker = self.run_worker(
+            section.load_shelf(message.index, message.revision),
+            name=self._SHELF_WORKER,
+            group=self._SHELF_GROUP,
             exclusive=True,
             exit_on_error=False,
         )
@@ -1491,6 +1603,12 @@ class BrowsePage(Widget):
         "load-subscriptions",
     )
     _LOAD_WORKER_TABS = {name: index for index, name in enumerate(_LOAD_WORKERS)}
+    # The tab loaders are mutually exclusive: a tab switch cancels the loader
+    # in flight. The Charts pill fetch is exclusive among pill fetches only.
+    _LOAD_GROUP = "browse-load"
+    _CHARTS_TAB = 1
+    _SHELF_WORKER = "load-charts-shelf"
+    _SHELF_GROUP = "charts-shelf"
 
     def _focus_active_tab_label(self) -> None:
         """Focus the currently-active tab label."""
@@ -1586,8 +1704,15 @@ class BrowsePage(Widget):
         that raised also gets a visible failure message: ``exit_on_error``
         is off, so nothing else would replace its "Loading..." placeholder.
         """
-        index = self._LOAD_WORKER_TABS.get(event.worker.name or "")
+        name = event.worker.name or ""
+        if name == self._SHELF_WORKER:
+            self._on_shelf_worker_state(event)
+            return
+        index = self._LOAD_WORKER_TABS.get(name)
         if index is None:
+            return
+        current = self._tab_workers.get(index)
+        if current is not None and event.worker is not current:
             return
         if event.state in (WorkerState.ERROR, WorkerState.CANCELLED):
             self._tabs_loaded.discard(index)
@@ -1602,6 +1727,23 @@ class BrowsePage(Widget):
         if self._pending_focus_tab == index:
             self._pending_focus_tab = None
             self._focus_section_content(index)
+
+    def _on_shelf_worker_state(self, event: Worker.StateChanged) -> None:
+        """Keep Charts retryable after a pill fetch fails.
+
+        Only the latest pill fetch counts: one cancelled by a newer pill or
+        by a region change is no failure, and a stale one's outcome is
+        ignored.
+        """
+        if event.worker is not self._shelf_worker:
+            return
+        if event.state == WorkerState.ERROR:
+            self._tabs_loaded.discard(self._CHARTS_TAB)
+            self._show_load_failure(self._CHARTS_TAB)
+        elif event.state == WorkerState.SUCCESS:
+            section = self._section(self._CHARTS_TAB)
+            if section is not None and getattr(section, "load_failed", False):
+                self._tabs_loaded.discard(self._CHARTS_TAB)
 
     def _show_load_failure(self, index: int) -> None:
         section = self._section(index)
@@ -1757,13 +1899,4 @@ class BrowsePage(Widget):
             settings.save()
         except Exception:
             logger.exception("Failed to persist new region setting")
-        try:
-            section = self.query_one("#section-charts", ChartsSection)
-            self.run_worker(
-                section.load_data(country=code),
-                name="reload-charts",
-                exclusive=True,
-                exit_on_error=False,
-            )
-        except Exception:
-            logger.exception("Failed to reload charts after region change")
+        self._load_charts(country=code)

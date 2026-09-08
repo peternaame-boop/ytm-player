@@ -250,6 +250,7 @@ class LyricsSidebar(Widget):
         self.run_worker(
             self._fetch_lyrics(video_id),
             name="fetch_sidebar_lyrics",
+            group="sidebar-lyrics",
             exclusive=True,
         )
 
