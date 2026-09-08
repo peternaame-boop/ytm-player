@@ -82,7 +82,7 @@ def _exclusive_workers() -> list[tuple[str, str | None]]:
             if not (isinstance(exclusive, ast.Constant) and exclusive.value is True):
                 continue
             group = keywords.get("group")
-            site = f"{path.relative_to(SRC.parent)}:{node.lineno}"
+            site = f"{path.relative_to(SRC.parent).as_posix()}:{node.lineno}"
             sites.append((site, None if group is None else _group_of(group, constants)))
     return sites
 
