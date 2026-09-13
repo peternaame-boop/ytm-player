@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**Fixes**
+
+- **Duration column cut off again once a track list needs scrolling** — the Title column is sized from the table's width before the layout has settled, so the fit misses the row-label gutter, the width Artist and Album grow into, and the vertical scrollbar that appears as soon as the list is longer than the window. The table came out wider than its viewport, scrolled sideways, and pushed the rightmost column off the right edge — the same symptom the v1.9.2 fix addressed. The fit now runs once more after the layout settles, including when rows are appended to a table that has already been painted.
+
 ### v2.1.0 (2026-09-08)
 
 #### Upgrade notes
