@@ -52,7 +52,7 @@ For Windows-specific libmpv setup, see [docs/installation.md#windows-setup](inst
 - If auto-detection fails, use the manual paste method: `ytm setup --manual`.
 - Re-run `ytm setup` to re-authenticate.
 - **"Your YouTube Music session expired" even though the browser is signed in**: automatic renewal only replaces a session with the *same* account, using the channel ID `ytm setup` records in `account.json`. Sessions set up before that file existed keep working until they expire, but can't be renewed automatically; run `ytm setup` once and renewal works from then on. Renewal is also refused when the browser no longer has that account signed in, or when the account has no YouTube channel. After a renewal attempt fails, ytm waits 60 seconds before trying the browser again, so signing back in can take up to a minute to be picked up.
-- For multi-account or Brand Account setups: `ytm setup` will detect multiple Google accounts and prompt you to pick. Brand Accounts can also be configured via `[general] brand_account_id` in `config.toml`.
+- For multi-account or Brand Account setups: `ytm setup` will detect multiple Google accounts and prompt you to pick. By default it probes slots 0–9 (10 accounts); if your account is in a higher slot, use `ytm setup --slots 15`. Brand Accounts can also be configured via `[general] brand_account_id` in `config.toml`.
 
 ## No sound / wrong audio device
 

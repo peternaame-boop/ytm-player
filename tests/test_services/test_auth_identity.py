@@ -373,6 +373,32 @@ class TestSilentRenewal:
         recorded = auth._load_recorded_identity()
         assert recorded is not None and (recorded.slot, recorded.channel_id) == (0, ME_ID)
 
+    def test_reordered_slot_recovers_at_higher_slot_within_default_probe_limit(
+        self, tmp_path, browser, monkeypatch
+    ):
+        """Account recorded at slot 2 moving to slot 7 recovers within default 10 slots."""
+        auth = _auth(tmp_path, "2")
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({2: OTHER, 7: ME}))
+
+        assert auth.try_auto_refresh() is True
+        assert _saved_slot(auth) == "7"
+        recorded = auth._load_recorded_identity()
+        assert recorded is not None and (recorded.slot, recorded.channel_id) == (7, ME_ID)
+
+    def test_reordered_slot_recovers_at_high_slot_beyond_default_probe_limit(
+        self, tmp_path, browser, monkeypatch
+    ):
+        """Account recorded at slot 12 moving to slot 11 recovers because
+        probe_limit = max(slots, recorded.slot + 1).
+        """
+        auth = _auth(tmp_path, "12")
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({12: OTHER, 11: ME}))
+
+        assert auth.try_auto_refresh() is True
+        assert _saved_slot(auth) == "11"
+        recorded = auth._load_recorded_identity()
+        assert recorded is not None and (recorded.slot, recorded.channel_id) == (11, ME_ID)
+
     def test_ambiguous_identity_match_refuses(self, tmp_path, browser, monkeypatch):
         auth = _auth(tmp_path, "2")
         monkeypatch.setattr(

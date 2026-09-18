@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+- **Probe up to 10 account slots by default during setup** — `ytm setup` now probes slots 0–9 (previously 0–4) so multi-account sessions with more than 5 accounts are discovered automatically. A new `--slots` flag allows customizing the probe limit (`ytm setup --slots 15`).
+
 ### v2.1.0 (2026-09-08)
 
 #### Upgrade notes
