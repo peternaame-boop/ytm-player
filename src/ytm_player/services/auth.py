@@ -67,6 +67,7 @@ _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
 # to probe during interactive setup and silent renewal. Google multi-login
 # supports at least 10 accounts in browser sessions.
 DEFAULT_ACCOUNT_PROBE_SLOTS = 10
+MAX_ACCOUNT_PROBE_SLOTS = 30
 _yt_dlp_patched = False
 
 
@@ -782,6 +783,12 @@ def _probe_account(auth_path: str, slot: int) -> _ProbedAccount | None:
     return _ProbedAccount(slot=slot, name=str(name), handle=str(handle), channel_id=channel_id)
 
 
+def _recovery_hint(slots: int) -> str:
+    if slots < MAX_ACCOUNT_PROBE_SLOTS:
+        return f"retry with `ytm setup --slots {min(slots + 5, MAX_ACCOUNT_PROBE_SLOTS)}`."
+    return "retry with `ytm setup --manual`."
+
+
 class AuthManager:
     """Manages YouTube Music authentication via browser cookie extraction,
     and the yt-dlp stream cookiejar consumed by stream.py."""
@@ -1210,9 +1217,10 @@ class AuthManager:
                 "No valid YouTube Music account found in extracted cookies (tried indices %s)",
                 list(range(slots)),
             )
+            slot_desc = "slot 0" if slots == 1 else f"slots 0-{slots - 1}"
             print(
-                f"\n  No valid YouTube Music account found in slots 0-{slots - 1}."
-                f"\n  If your account is in a higher slot, retry with `ytm setup --slots {slots + 5}`."
+                f"\n  No valid YouTube Music account found in {slot_desc}."
+                f"\n  If your account is in a higher slot, {_recovery_hint(slots)}"
             )
             return None
 
@@ -1229,9 +1237,7 @@ class AuthManager:
             print("  browser's account list — slot 0 is the first account you added,")
             print("  slot 1 the second, and so on. To check, click your profile picture")
             print("  in Chrome/Firefox: accounts are listed in the same order.")
-            print(
-                f"  If your account isn't listed, retry with `ytm setup --slots {max(slots + 5, 15)}`."
-            )
+            print(f"  If your account isn't listed, {_recovery_hint(slots)}")
             print()
             for i, account in enumerate(valid_accounts):
                 print(f"  [{i + 1}] {account.label()}")

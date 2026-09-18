@@ -97,3 +97,23 @@ def test_refresh_from_cookies_file_commits_the_probed_session_without_validate(
     saved = json.loads(auth_file.read_text(encoding="utf-8"))
     assert saved["x-goog-authuser"] == "0"
     assert "abc123" in saved["cookie"]
+
+
+def test_extract_from_cookies_file_passes_custom_slots(tmp_path):
+    """_extract_and_save_from_cookies_file forwards slots parameter."""
+    cookies_file = tmp_path / "cookies.txt"
+    _write_netscape_cookie_file(cookies_file)
+
+    auth = AuthManager(
+        auth_file=tmp_path / "headers_auth.json",
+        stream_cookies_file=tmp_path / "stream_cookies.txt",
+    )
+
+    with patch.object(auth, "_save_youtube_cookies", return_value=True) as mock_save:
+        assert (
+            auth._extract_and_save_from_cookies_file(cookies_file, interactive=True, slots=7)
+            is True
+        )
+
+    mock_save.assert_called_once()
+    assert mock_save.call_args.kwargs["slots"] == 7

@@ -38,7 +38,11 @@ from ytm_player.config.paths import (
 )
 from ytm_player.config.settings import get_settings
 from ytm_player.ipc import get_running_pid, ipc_request, is_tui_running, try_claim_pid
-from ytm_player.services.auth import DEFAULT_ACCOUNT_PROBE_SLOTS, AuthManager
+from ytm_player.services.auth import (
+    DEFAULT_ACCOUNT_PROBE_SLOTS,
+    MAX_ACCOUNT_PROBE_SLOTS,
+    AuthManager,
+)
 from ytm_player.utils.logging import install_excepthooks, setup_logging
 
 # ---------------------------------------------------------------------------
@@ -223,7 +227,7 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
 )
 @click.option(
     "--slots",
-    type=click.IntRange(min=1, max=30),
+    type=click.IntRange(min=1, max=MAX_ACCOUNT_PROBE_SLOTS),
     default=DEFAULT_ACCOUNT_PROBE_SLOTS,
     show_default=True,
     help="Number of Google account slots to probe in multi-account sessions.",
