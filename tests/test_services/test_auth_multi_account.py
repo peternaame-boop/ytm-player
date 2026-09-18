@@ -213,8 +213,8 @@ def test_multiple_accounts_retries_on_invalid_input(tmp_path, monkeypatch):
 # ── Index probing ─────────────────────────────────────────────────────────────
 
 
-def test_always_probes_all_five_indices(tmp_path):
-    """All five indices (0-4) are always probed regardless of cookie names."""
+def test_always_probes_all_ten_indices_by_default(tmp_path):
+    """All ten indices (0-9) are probed by default regardless of cookie names."""
     auth = _make_auth(tmp_path)
     cookies = [_make_cookie("SAPISID", "secret")]
 
@@ -235,7 +235,34 @@ def test_always_probes_all_five_indices(tmp_path):
     ):
         result = auth._save_youtube_cookies(cookies, interactive=True)
 
-    assert probed == [0, 1, 2, 3, 4]
+    assert probed == list(range(10))
+    assert result is True
+    saved = json.loads((tmp_path / "headers_auth.json").read_text())
+    assert saved["x-goog-authuser"] == "2"
+
+
+def test_probes_custom_slots(tmp_path):
+    """Passing slots limits or expands the probed indices."""
+    auth = _make_auth(tmp_path)
+    cookies = [_make_cookie("SAPISID", "secret")]
+
+    probed = []
+
+    def _ytmusic_factory(path):
+        saved = json.loads(Path(path).read_text())
+        probed.append(int(saved["x-goog-authuser"]))
+        m = MagicMock()
+        m.get_account_info.return_value = _account("Charlie") if probed[-1] == 2 else {}
+        return m
+
+    with (
+        _PATCH_SAPISID,
+        _PATCH_AUTH,
+        patch("ytm_player.services.auth.YTMusic", side_effect=_ytmusic_factory),
+    ):
+        result = auth._save_youtube_cookies(cookies, interactive=True, slots=6)
+
+    assert probed == list(range(6))
     assert result is True
     saved = json.loads((tmp_path / "headers_auth.json").read_text())
     assert saved["x-goog-authuser"] == "2"

@@ -62,6 +62,11 @@ _BROWSERS = (
 _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
     "helium": ("net.imput.helium", "Chromium"),
 }
+
+# Default number of Google multi-login account slots (x-goog-authuser 0..N-1)
+# to probe during interactive setup and silent renewal. Google multi-login
+# supports at least 10 accounts in browser sessions.
+DEFAULT_ACCOUNT_PROBE_SLOTS = 10
 _yt_dlp_patched = False
 
 
@@ -924,12 +929,18 @@ class AuthManager:
 
     # ── Setup entry point ────────────────────────────────────────────
 
-    def setup_interactive(self, manual: bool = False, browser: str | None = None) -> bool:
+    def setup_interactive(
+        self,
+        manual: bool = False,
+        browser: str | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
+    ) -> bool:
         """Interactive setup — auto-extract from browser, manual paste as fallback.
 
         Args:
             manual: Skip browser detection, go straight to manual header paste.
             browser: Extract from a specific browser instead of auto-detecting.
+            slots: Number of Google account slots to probe (default 10).
         """
         print()
         print("=" * 60)
@@ -943,7 +954,9 @@ class AuthManager:
         # Try cookies file first (unless a specific browser was requested).
         if self._cookies_file and not browser:
             print(f"  Trying cookies file: {self._cookies_file}")
-            if self._refresh_from_cookies_file(Path(self._cookies_file), interactive=True):
+            if self._refresh_from_cookies_file(
+                Path(self._cookies_file), interactive=True, slots=slots
+            ):
                 return True
             print("  Cookies file extraction failed. Falling back to browser/manual setup.")
             print()
@@ -952,7 +965,7 @@ class AuthManager:
             # User specified a browser explicitly.
             print(f"  Trying browser: {browser}")
             print()
-            if self._extract_and_save(browser, interactive=True):
+            if self._extract_and_save(browser, interactive=True, slots=slots):
                 return True
             print(f"  Could not extract from {browser}. Falling back to manual setup.")
             print()
@@ -965,7 +978,7 @@ class AuthManager:
             print(f"  Found YouTube cookies in {browser}.")
             print("  Extracting automatically...")
             print()
-            if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar):
+            if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar, slots=slots):
                 return True
             print("  Auto-extraction failed. Falling back to manual setup.")
             print()
@@ -1002,6 +1015,7 @@ class AuthManager:
         *,
         recorded: _RecordedIdentity | None = None,
         owner: _SessionOwner | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
     ) -> bool:
         """Refresh auth from a cookies file.
 
@@ -1017,6 +1031,7 @@ class AuthManager:
             expected_channel_id=expected_channel_id,
             recorded=recorded,
             owner=owner,
+            slots=slots,
         )
 
     def _extract_and_save_from_cookies_file(
@@ -1027,6 +1042,7 @@ class AuthManager:
         *,
         recorded: _RecordedIdentity | None = None,
         owner: _SessionOwner | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
     ) -> bool:
         """Extract YouTube cookies from a Netscape cookies.txt file and write auth.json."""
         if not cookies_file.exists():
@@ -1067,13 +1083,19 @@ class AuthManager:
             expected_channel_id=expected_channel_id,
             recorded=recorded,
             owner=owner,
+            slots=slots,
         ):
             if interactive:
                 print(f"  Cookies extracted from file and saved: {cookies_file}")
             return True
         return False
 
-    def _extract_and_save(self, browser: str, interactive: bool = False) -> bool:
+    def _extract_and_save(
+        self,
+        browser: str,
+        interactive: bool = False,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
+    ) -> bool:
         """Extract YouTube cookies from *browser* and write auth.json."""
         try:
             _patch_yt_dlp_browsers()
@@ -1089,7 +1111,9 @@ class AuthManager:
             logger.warning("No .youtube.com cookies found in %s", browser)
             return False
 
-        if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
+        if self._save_youtube_cookies(
+            yt_cookies, interactive=interactive, stream_jar=jar, slots=slots
+        ):
             if interactive:
                 print(f"  Cookies extracted from {browser} and saved.")
             return True
@@ -1104,6 +1128,7 @@ class AuthManager:
         *,
         recorded: _RecordedIdentity | None = None,
         owner: _SessionOwner | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
     ) -> bool:
         """Persist YouTube cookie headers into auth.json and record the account.
 
@@ -1137,9 +1162,11 @@ class AuthManager:
         self._config_dir.mkdir(parents=True, exist_ok=True)
 
         if interactive:
-            chosen = self._select_account_interactively(base_headers)
+            chosen = self._select_account_interactively(base_headers, slots=slots)
         else:
-            chosen = self._find_recorded_account(base_headers, expected_channel_id, recorded)
+            chosen = self._find_recorded_account(
+                base_headers, expected_channel_id, recorded, slots=slots
+            )
         if chosen is None:
             return False
 
@@ -1168,18 +1195,24 @@ class AuthManager:
                 except OSError:
                     pass
 
-    def _select_account_interactively(self, base_headers: dict) -> _ProbedAccount | None:
+    def _select_account_interactively(
+        self, base_headers: dict, slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS
+    ) -> _ProbedAccount | None:
         """``ytm setup``: list every account the browser is signed in to and pick one."""
         valid_accounts = [
             account
-            for slot in range(5)
+            for slot in range(slots)
             if (account := self._probe_payload(_candidate_payload(base_headers, slot), slot))
             is not None
         ]
         if not valid_accounts:
             logger.warning(
                 "No valid YouTube Music account found in extracted cookies (tried indices %s)",
-                list(range(5)),
+                list(range(slots)),
+            )
+            print(
+                f"\n  No valid YouTube Music account found in slots 0-{slots - 1}."
+                f"\n  If your account is in a higher slot, retry with `ytm setup --slots {slots + 5}`."
             )
             return None
 
@@ -1196,6 +1229,9 @@ class AuthManager:
             print("  browser's account list — slot 0 is the first account you added,")
             print("  slot 1 the second, and so on. To check, click your profile picture")
             print("  in Chrome/Firefox: accounts are listed in the same order.")
+            print(
+                f"  If your account isn't listed, retry with `ytm setup --slots {max(slots + 5, 15)}`."
+            )
             print()
             for i, account in enumerate(valid_accounts):
                 print(f"  [{i + 1}] {account.label()}")
@@ -1224,6 +1260,7 @@ class AuthManager:
         base_headers: dict,
         expected_channel_id: str | None = None,
         recorded: _RecordedIdentity | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
     ) -> _ProbedAccount | None:
         """Silent renewal: locate the account recorded by the last setup, or None.
 
@@ -1253,9 +1290,10 @@ class AuthManager:
         if probed is not None and probed.channel_id == recorded.channel_id:
             return probed
 
+        probe_limit = max(slots, recorded.slot + 1)
         matches = [
             account
-            for slot in range(5)
+            for slot in range(probe_limit)
             if slot != recorded.slot
             and (account := self._probe_payload(_candidate_payload(base_headers, slot), slot))
             is not None

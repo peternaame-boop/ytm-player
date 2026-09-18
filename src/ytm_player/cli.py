@@ -38,7 +38,7 @@ from ytm_player.config.paths import (
 )
 from ytm_player.config.settings import get_settings
 from ytm_player.ipc import get_running_pid, ipc_request, is_tui_running, try_claim_pid
-from ytm_player.services.auth import AuthManager
+from ytm_player.services.auth import DEFAULT_ACCOUNT_PROBE_SLOTS, AuthManager
 from ytm_player.utils.logging import install_excepthooks, setup_logging
 
 # ---------------------------------------------------------------------------
@@ -221,7 +221,14 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
     default=None,
     help="Extract cookies from a specific browser (chrome, firefox, brave, edge, etc.).",
 )
-def setup(manual: bool, browser: str | None) -> None:
+@click.option(
+    "--slots",
+    type=click.IntRange(min=1, max=30),
+    default=DEFAULT_ACCOUNT_PROBE_SLOTS,
+    show_default=True,
+    help="Number of Google account slots to probe in multi-account sessions.",
+)
+def setup(manual: bool, browser: str | None, slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS) -> None:
     """Interactive authentication wizard for YouTube Music."""
     auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
 
@@ -237,7 +244,7 @@ def setup(manual: bool, browser: str | None) -> None:
             click.echo("Setup cancelled.")
             return
 
-    success = auth.setup_interactive(manual=manual, browser=browser)
+    success = auth.setup_interactive(manual=manual, browser=browser, slots=slots)
     if not success:
         _error("Authentication setup failed.")
 

@@ -28,7 +28,7 @@ def test_setup_says_to_restart_a_running_instance(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "ytm is running (PID 4242). Restart it after setup" in result.output
-    manager.setup_interactive.assert_called_once_with(manual=False, browser=None)
+    manager.setup_interactive.assert_called_once_with(manual=False, browser=None, slots=10)
 
 
 def test_setup_is_quiet_when_no_instance_is_running(monkeypatch):
@@ -39,3 +39,13 @@ def test_setup_is_quiet_when_no_instance_is_running(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "ytm is running" not in result.output
+
+
+def test_setup_passes_custom_slots(monkeypatch):
+    manager = _fake_manager(monkeypatch)
+    monkeypatch.setattr("ytm_player.cli.get_running_pid", lambda: None)
+
+    result = CliRunner().invoke(main, ["setup", "--slots", "15"])
+
+    assert result.exit_code == 0, result.output
+    manager.setup_interactive.assert_called_once_with(manual=False, browser=None, slots=15)
