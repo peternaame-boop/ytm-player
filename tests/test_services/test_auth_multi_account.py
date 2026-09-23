@@ -210,6 +210,45 @@ def test_multiple_accounts_retries_on_invalid_input(tmp_path, monkeypatch):
     assert saved["x-goog-authuser"] == "1"
 
 
+# ── Cookie header scope ───────────────────────────────────────────────────────
+
+
+def test_tracking_cookies_excluded_from_auth_header(tmp_path):
+    """Heavy tracking cookies (e.g. multi-KB ST-*) must not reach auth.json.
+
+    Joining the whole .youtube.com jar into one Cookie header (300+ KB
+    observed) gets the request rejected, so only session/auth names persist.
+    """
+    auth = _make_auth(tmp_path)
+    cookies = [
+        _make_cookie("SAPISID", "secret"),
+        _make_cookie("SID", "sid-val"),
+        _make_cookie("ST-1g10wvg", "x" * 3000),
+        _make_cookie("__Secure-3PAPISID", "pap"),
+    ]
+
+    def _ytmusic_factory(path):
+        saved = json.loads(Path(path).read_text())
+        m = MagicMock()
+        m.get_account_info.return_value = (
+            _account("Alice") if saved["x-goog-authuser"] == "0" else {}
+        )
+        return m
+
+    with (
+        _PATCH_SAPISID,
+        _PATCH_AUTH,
+        patch("ytm_player.services.auth.YTMusic", side_effect=_ytmusic_factory),
+    ):
+        result = auth._save_youtube_cookies(cookies, interactive=True)
+
+    assert result is True
+    saved = json.loads((tmp_path / "headers_auth.json").read_text())
+    assert "SAPISID=secret" in saved["cookie"]
+    assert "SID=sid-val" in saved["cookie"]
+    assert "ST-1g10wvg" not in saved["cookie"]
+
+
 # ── Index probing ─────────────────────────────────────────────────────────────
 
 

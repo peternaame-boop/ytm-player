@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+- **Zen Browser setup no longer fails on stale profile dirs** — a leftover `~/.zen` (e.g. after Zen migrated profiles to `~/.config/zen`) used to shadow the real profile, so `ytm setup` never found Zen cookies. Every candidate profile root is now tried and the results merged; the Flatpak `config/zen` location and Windows `%LOCALAPPDATA%` are also covered.
+- **`ytm setup` no longer reports "no valid account" in signed-in browsers with large cookie jars** — only the session/auth cookies are sent in the auth header instead of the whole `.youtube.com` jar (hundreds of multi-KB tracking cookies made the request rejected).
+
 ### v2.1.0 (2026-09-08)
 
 #### Upgrade notes
