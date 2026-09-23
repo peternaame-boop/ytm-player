@@ -57,6 +57,42 @@ _BROWSERS = (
     "opera",
 )
 
+# Cookies actually sent with an authenticated music.youtube.com request.
+# The jar dump for .youtube.com can hold hundreds of heavy tracking cookies
+# (notably the multi-KB ``ST-*`` series) — joining all of them into one Cookie
+# header (300+ KB observed) gets the request rejected, so probing finds "no
+# valid account" in a browser that is signed in. Only these session/auth names
+# reach auth.json; the full jar still feeds the stream cookiejar file.
+_AUTH_COOKIE_NAMES = frozenset(
+    {
+        "SID",
+        "HSID",
+        "SSID",
+        "APISID",
+        "SAPISID",
+        "SIDCC",
+        "LOGIN_INFO",
+        "__Secure-1PAPISID",
+        "__Secure-3PAPISID",
+        "__Secure-1PSID",
+        "__Secure-3PSID",
+        "__Secure-1PSIDTS",
+        "__Secure-3PSIDTS",
+        "PREF",
+        "VISITOR_INFO1_LIVE",
+        "VISITOR_PRIVACY_METADATA",
+        "YSC",
+        "GPS",
+        "CONSISTENCY",
+        "__Secure-YNID",
+        "__Secure-ROLLOUT_TOKEN",
+        "OTZ",
+        "NID",
+        "AEC",
+        "SOCS",
+        "DV",
+    }
+)
 # Custom Chromium-based browsers not in yt-dlp's built-in list.
 # Maps browser name → (config_dir_name, keyring_name).
 _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
@@ -68,8 +104,14 @@ _yt_dlp_patched = False
 def _zen_profile_roots() -> list[Path]:
     """Return candidate Zen profile roots for the current platform."""
     if sys.platform == "win32":
+        roots: list[Path] = []
         appdata = os.environ.get("APPDATA")
-        return [Path(appdata) / "zen"] if appdata else []
+        if appdata:
+            roots.append(Path(appdata) / "zen")
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            roots.append(Path(local_appdata) / "zen")
+        return roots
 
     home = Path.home()
     if sys.platform == "darwin":
@@ -77,23 +119,63 @@ def _zen_profile_roots() -> list[Path]:
 
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
     xdg_root = Path(xdg_config_home) if xdg_config_home else home / ".config"
-    return [
-        home / ".zen",
-        xdg_root / "zen",
-        home / ".var" / "app" / "app.zen_browser.zen" / ".zen",
-        home / ".var" / "app" / "app.zen_browser.zen" / "zen",
-    ]
+    candidates = [home / ".zen", xdg_root / "zen"]
+    flatpak_base = home / ".var" / "app" / "app.zen_browser.zen"
+    candidates.extend(
+        [
+            flatpak_base / ".zen",
+            flatpak_base / "zen",
+            flatpak_base / "config" / "zen",
+        ]
+    )
+    # De-duplicate while preserving order (XDG_CONFIG_HOME may equal ~/.config).
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
 
 
 def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
-    """Extract cookies from a supported browser, including Zen profiles."""
+    """Extract cookies from a supported browser, including Zen profiles.
+
+    Zen keeps Firefox-format profiles in its own directories, which yt-dlp
+    does not search. Every candidate root that exists is tried through the
+    Firefox extractor and the results merged — a stale/empty directory (e.g.
+    a leftover ``~/.zen`` after Zen migrated to ``~/.config/zen``) must not
+    shadow the real profile.
+    """
     from yt_dlp.cookies import extract_cookies_from_browser
 
     if browser == "zen":
+        from yt_dlp.cookies import YoutubeDLCookieJar
+
+        merged: Any = YoutubeDLCookieJar()
+        found_root = False
+        succeeded = False
+        last_error: Exception | None = None
         for root in _zen_profile_roots():
-            if root.exists():
-                return extract_cookies_from_browser("firefox", profile=str(root))
-        raise FileNotFoundError("no Zen profile directory found")
+            if not root.is_dir():
+                continue
+            found_root = True
+            try:
+                jar = extract_cookies_from_browser("firefox", profile=str(root))
+            except Exception as exc:  # noqa: BLE001 — one bad root must not hide the rest
+                logger.debug("Zen profile root %s not usable: %s", root, exc)
+                last_error = exc
+                continue
+            succeeded = True
+            for cookie in jar:
+                merged.set_cookie(cookie)
+        if not found_root:
+            raise FileNotFoundError("no Zen profile directory found")
+        if not succeeded:
+            assert last_error is not None
+            raise last_error
+        return merged
 
     return extract_cookies_from_browser(browser)
 
@@ -1119,7 +1201,8 @@ class AuthManager:
         session as expired and the user runs ``ytm setup`` once. The commit
         itself refuses when the files no longer match *owner*.
         """
-        cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
+        auth_cookies = [c for c in cookies if c.name in _AUTH_COOKIE_NAMES]
+        cookie_str = "; ".join(f"{c.name}={c.value}" for c in auth_cookies)
 
         # Verify we have the critical SAPISID cookie.
         try:
