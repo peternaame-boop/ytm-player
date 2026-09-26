@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**Fixes**
+
+- **Playing a search result queues YouTube's recommendations, not the other results** — Enter on a search row used to put every result for the query into the queue and start from the chosen one, so "up next" was just the rest of the result list. Only the played song replaces the queue now; with autoplay enabled, YouTube's related tracks fill the queue behind it, as on the web player.
+
 ### v2.1.0 (2026-09-08)
 
 #### Upgrade notes

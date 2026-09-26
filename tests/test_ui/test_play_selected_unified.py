@@ -231,7 +231,6 @@ async def test_liked_songs_selection_uses_unified_path(monkeypatch):
 @pytest.mark.parametrize(
     ("page_cls", "attrs", "expected_entity"),
     [
-        (SearchPage, {}, None),
         (BrowsePage, {}, None),  # charts table
         (ContextPage, {"context_id": "PLctx"}, "PLctx"),
         (LibraryPage, {"_active_playlist_id": "PLlib"}, "PLlib"),
@@ -254,3 +253,45 @@ async def test_correct_sites_still_use_unified_path(page_cls, attrs, expected_en
     assert [t["video_id"] for t in args[0]] == ["s1", "s2"]
     assert kwargs == {"entity_id": expected_entity, "start_index": 1, "autoplay": False}
     host.play_track.assert_awaited_once_with(tracks[1])
+
+
+# ── Search: play one result, not the whole result list ───────────────
+
+
+async def test_search_selection_queues_only_played_track(monkeypatch):
+    """Playing search result #2 must not queue results #1 and #3+; a search
+    result list is not a collection, so only the played song replaces the
+    queue and YouTube's recommendations fill "up next"."""
+    tracks = [_track("s1"), _track("s2"), _track("s3")]
+    page = SearchPage.__new__(SearchPage)
+    host = _make_host()
+    _attach_fake_app(page, host, monkeypatch)
+    table = MagicMock()
+    table.tracks = list(tracks)
+    object.__setattr__(page, "query_one", lambda selector, *a, **kw: table)
+
+    await page.on_track_table_track_selected(TrackTable.TrackSelected(tracks[1], 1))
+
+    args, kwargs = host._replace_queue_and_play.call_args
+    assert [t["video_id"] for t in args[0]] == ["s2"]
+    assert kwargs == {}
+    host._fetch_and_play_radio.assert_called_once_with(tracks[1], append=True)
+    host.run_worker.assert_called_once()
+    assert host.run_worker.call_args.kwargs["group"] == "queue_extend"
+
+
+async def test_search_selection_skips_radio_when_autoplay_off(monkeypatch):
+    tracks = [_track("s1"), _track("s2")]
+    page = SearchPage.__new__(SearchPage)
+    host = _make_host()
+    host.settings.playback.autoplay = False
+    _attach_fake_app(page, host, monkeypatch)
+    table = MagicMock()
+    table.tracks = list(tracks)
+    object.__setattr__(page, "query_one", lambda selector, *a, **kw: table)
+
+    await page.on_track_table_track_selected(TrackTable.TrackSelected(tracks[1], 1))
+
+    args, _ = host._replace_queue_and_play.call_args
+    assert [t["video_id"] for t in args[0]] == ["s2"]
+    host.run_worker.assert_not_called()
