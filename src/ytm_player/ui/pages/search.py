@@ -904,17 +904,25 @@ class SearchPage(Widget):
     # ------------------------------------------------------------------
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
-        """Play the selected song and populate the queue with search results."""
+        """Play the selected song and queue YouTube's recommendations behind it."""
         event.stop()
-        table = self.query_one("#songs-table", TrackTable)
         host = cast("YTMHostBase", self.app)
-        await host._replace_queue_and_play(
-            table.tracks,
-            entity_id=None,
-            start_index=event.index,
-            autoplay=False,
-        )
-        await host.play_track(event.track)
+        await host._replace_queue_and_play([event.track])
+        if host.settings.playback.autoplay:
+            # A search result list is not a collection: the rest of the rows
+            # are just other matches for the query, not something the user
+            # asked to listen through. Queue YouTube's related tracks for
+            # the played song instead, exactly as the web player does. The
+            # shared queue_extend worker group keeps this from racing the
+            # background refill (at most one radio fetch runs at a time).
+            for worker in host.workers:
+                if worker.group == "queue_extend" and worker.is_running:
+                    return
+            host.run_worker(
+                host._fetch_and_play_radio(event.track, append=True),
+                group="queue_extend",
+                exclusive=True,
+            )
 
     async def on_search_result_panel_item_selected(
         self, event: SearchResultPanel.ItemSelected
