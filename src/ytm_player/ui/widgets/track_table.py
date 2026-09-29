@@ -961,14 +961,13 @@ class TrackTable(DataTable):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Forward track selection as a TrackSelected message."""
-        if self._right_clicked:
+        # A right-click, a popup dismissal, or both can deliver a stray
+        # RowSelected here; whichever flag eats it, reset them ALL so no
+        # stale flag eats the next genuine selection.
+        if self._right_clicked or self._suppress_select_on_refocus:
             self._right_clicked = False
-            return
-        # Suppress the spurious RowSelected that fires when a modal popup
-        # (e.g. ActionsPopup) dismisses and focus returns to this table.
-        # The flag is set on right-click and consumed here once.
-        if self._suppress_select_on_refocus:
             self._suppress_select_on_refocus = False
+            self._popup_pending = False
             return
         # A genuine selection got through — drop any pending right-click intent
         # so it can't linger and arm suppression on a later, unrelated blur.
@@ -977,6 +976,33 @@ class TrackTable(DataTable):
         if 0 <= row_idx < len(self._tracks):
             original_idx = self._filtered_map[row_idx] if self._filtered_map else row_idx
             self.post_message(self.TrackSelected(self._tracks[row_idx], original_idx))
+
+    def note_popup_opening(self) -> None:
+        """A modal popup is opening over this table's row without a
+        right-click (keyboard actions menu, playback-bar menu).
+
+        Behaves like the right-click arm: if the popup takes focus, the
+        blur escalation arms the one-shot suppression so the stray
+        selection the dismissal delivers to the refocused table is eaten.
+        """
+        self._popup_pending = True
+
+    def arm_spurious_selection_suppression(self) -> None:
+        """The popup over this table was dismissed by activation (Enter or
+        click on an action): its stray key/click reaches the refocused table
+        as a RowSelected and would replay the row. Arm the one-shot
+        suppression directly — harmless if the blur arm already caught it.
+        """
+        self._suppress_select_on_refocus = True
+        self._popup_pending = False
+
+    def clear_popup_suppression(self) -> None:
+        """The popup dismissed by cancel (Escape or backdrop click): no stray
+        selection follows, so disarm instead of eating the next genuine one.
+        """
+        self._suppress_select_on_refocus = False
+        self._right_clicked = False
+        self._popup_pending = False
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Forward row highlight as a TrackHighlighted message and update SelectionInfoBar.

@@ -205,6 +205,23 @@ class TrackActionsMixin(YTMHostBase):
 
         self._open_actions_for_track(track, queue_entry_id=queue_entry_id, from_queue=from_queue)
 
+    def _arm_popup_refocus_suppression(self) -> None:
+        """A popup over a track table was dismissed by activation (Enter or
+        click on an action): its stray key/click reaches the refocused table
+        as a RowSelected and would replay the row. Arm the table's one-shot
+        suppression to eat it."""
+        table = self._focused_track_table()
+        if table is not None:
+            table.arm_spurious_selection_suppression()
+
+    def _cancel_popup_refocus_suppression(self) -> None:
+        """A popup over a track table was dismissed by cancel (Escape or
+        backdrop click): no stray selection follows, so disarm the table's
+        suppression instead of eating the next genuine selection."""
+        table = self._focused_track_table()
+        if table is not None:
+            table.clear_popup_suppression()
+
     def _open_actions_for_track(
         self, track: dict, *, queue_entry_id: int | None = None, from_queue: bool = False
     ) -> None:
@@ -214,12 +231,21 @@ class TrackActionsMixin(YTMHostBase):
         (a Queue page row); *from_queue* says the track came from that page
         even if no id could be read, so removal never guesses by video id.
         """
+        # Arm the suppression for popups opened without a right-click (the
+        # keyboard actions menu, the playback-bar menu): the right-click arm
+        # never ran for those, so the stray selection the dismissal delivers
+        # to the refocused table would replay the row.
+        table = self._focused_track_table()
+        if table is not None:
+            table.note_popup_opening()
 
         def _handle_action_result(action_id: str | None) -> None:
             """Callback when the user picks an action from the popup."""
             if action_id is None:
+                self._cancel_popup_refocus_suppression()
                 return
 
+            self._arm_popup_refocus_suppression()
             if action_id == "add_to_playlist":
                 video_id = get_video_id(track)
                 if video_id:
@@ -521,7 +547,9 @@ class TrackActionsMixin(YTMHostBase):
 
         def _on_pick(action_id: str | None) -> None:
             if action_id is None:
+                self._cancel_popup_refocus_suppression()
                 return
+            self._arm_popup_refocus_suppression()
             self._show_artist_actions(artists[int(action_id)], back_to=(track, artists))
 
         self.push_screen(ActionsPopup(picker_item, actions=picker_actions), _on_pick)
@@ -540,7 +568,9 @@ class TrackActionsMixin(YTMHostBase):
 
         def _handle(action_id: str | None) -> None:
             if action_id is None:
+                self._cancel_popup_refocus_suppression()
                 return
+            self._arm_popup_refocus_suppression()
             if action_id == "_back" and back_to:
                 self._show_artist_picker(back_to[0], back_to[1])
             elif action_id == "toggle_subscribe":
@@ -581,7 +611,9 @@ class TrackActionsMixin(YTMHostBase):
 
         def _handle(action_id: str | None) -> None:
             if action_id is None:
+                self._cancel_popup_refocus_suppression()
                 return
+            self._arm_popup_refocus_suppression()
             if action_id == "copy_link":
                 link = f"https://music.youtube.com/browse/{album_id}"
                 if copy_to_clipboard(link):
