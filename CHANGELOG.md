@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+### Unreleased
+
+**Fixes**
+
+- **The actions menu no longer replays the row underneath it, or swallows the next selection** — picking an action from the menu opened with the keyboard or from the playback bar delivered the dismissal's stray Enter/click to the table underneath and started playing that row immediately, so "Play Next" skipped to the song instead of waiting for the current one to finish. Closing any actions menu with Escape also left the right-click path's suppression armed, which silently ate the next genuine Enter. An activated menu now eats its stray selection, a cancelled menu disarms cleanly, and the table resets all popup flags on any eaten selection.
+
 ### v2.1.0 (2026-09-08)
 
 #### Upgrade notes
