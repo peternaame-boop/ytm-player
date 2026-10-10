@@ -224,6 +224,9 @@ def extract_spotify_tracks(url: str) -> tuple[str, list[dict]]:
 
 def _fuzzy_score(spotify_track: dict, ytm_track: dict) -> int:
     """Compute a fuzzy match score between a Spotify track and a YTM result."""
+    if not _HAS_SPOTIFY_DEPS:
+        raise ImportError("thefuzz is required for Spotify playlist import. Install with: pip install ytm-player[spotify]")
+
     sp_title = spotify_track.get("name", "").lower()
     sp_artist = spotify_track.get("artist", "").lower()
 
