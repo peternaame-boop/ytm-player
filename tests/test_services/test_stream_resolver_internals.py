@@ -263,6 +263,57 @@ class TestActiveResolvesCounter:
         assert resolver._active_resolves == 0
 
 
+class TestAvailableAtWait:
+    """yt-dlp marks formats behind a pre-roll ad with ``available_at``;
+    googlevideo answers 403 until then, so the URL must not reach mpv early."""
+
+    @staticmethod
+    def _resolve_with(info: dict, now: float = 1000.0) -> list[float]:
+        resolver = StreamResolver()
+        fake_ydl = MagicMock()
+        fake_ydl.extract_info.return_value = info
+
+        def fake_get_ydl():
+            resolver._active_resolves += 1
+            return fake_ydl
+
+        resolver._get_ydl = fake_get_ydl
+        sleeps: list[float] = []
+        with (
+            patch("ytm_player.services.stream.time.time", return_value=now),
+            patch("ytm_player.services.stream.time.sleep", side_effect=sleeps.append),
+        ):
+            assert resolver._try_resolve("https://example.com", "abc12345678", 0) is not None
+        return sleeps
+
+    def test_waits_until_available_at(self):
+        info = {"url": "https://example.com/stream", "acodec": "opus", "available_at": 1006}
+        assert self._resolve_with(info) == [6.0]
+
+    def test_uses_latest_available_at_of_requested_formats(self):
+        info = {
+            "requested_formats": [
+                {
+                    "url": "https://example.com/v",
+                    "vcodec": "avc1",
+                    "acodec": "none",
+                    "available_at": 1009,
+                },
+                {
+                    "url": "https://example.com/a",
+                    "vcodec": "none",
+                    "acodec": "opus",
+                    "available_at": 1003,
+                },
+            ]
+        }
+        assert self._resolve_with(info) == [9.0]
+
+    def test_no_wait_when_already_available_or_absent(self):
+        assert self._resolve_with({"url": "https://example.com/s", "available_at": 999}) == []
+        assert self._resolve_with({"url": "https://example.com/s"}) == []
+
+
 class TestStreamCookiejarLoading:
     """The setup-written stream cookiejar is loaded only when
     ``[yt_dlp] use_session_cookies`` is on (streaming is anonymous by

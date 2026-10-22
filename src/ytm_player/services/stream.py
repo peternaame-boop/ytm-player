@@ -388,6 +388,19 @@ class StreamResolver:
                 logger.error("No stream URL found for video_id=%s", video_id)
                 return None
 
+            # Formats served behind a pre-roll ad carry yt-dlp's available_at;
+            # googlevideo answers 403 until it passes. yt-dlp's own downloader
+            # sleeps for it, but mpv fetches the URL directly, so wait here
+            # (worker thread, outside the extract lock).
+            available_at = max(
+                (f.get("available_at") or 0 for f in info.get("requested_formats") or [info]),
+                default=0,
+            )
+            wait = available_at - time.time()
+            if wait > 0:
+                logger.debug("Waiting %.1fs for %s to become available", wait, video_id)
+                time.sleep(wait)
+
             # Determine audio format and bitrate from the info dict.
             acodec = info.get("acodec", "unknown")
             audio_ext = info.get("audio_ext") or info.get("ext", "unknown")
