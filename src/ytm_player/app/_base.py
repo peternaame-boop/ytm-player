@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from ytm_player.config.keymap import KeyMap
     from ytm_player.config.settings import Settings
     from ytm_player.ipc import IPCServer
+    from ytm_player.services.auth import AuthManager
     from ytm_player.services.cache import CacheManager
     from ytm_player.services.discord_rpc import DiscordRPC
     from ytm_player.services.download import DownloadService
@@ -71,6 +72,7 @@ if TYPE_CHECKING:
 
         # ── Core services (initialized in on_mount; may be None pre-mount) ──
         ytmusic: YTMusicService | None
+        auth: AuthManager | None
         player: Player | None
         queue: QueueManager
         stream_resolver: StreamResolver | None
@@ -105,6 +107,7 @@ if TYPE_CHECKING:
         # ── Playback state tracking ────────────────────────────────────
         _track_start_position: float
         _consecutive_failures: int
+        _last_cookie_refresh: float
         _last_play_video_id: str
         _last_play_time: float
         _play_generation: int

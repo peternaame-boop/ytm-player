@@ -216,6 +216,7 @@ class YTMPlayerApp(
 
         # Services (initialized in on_mount).
         self.ytmusic: YTMusicService | None = None
+        self.auth: AuthManager | None = None
         self.player: Player | None = None
         self.queue: QueueManager = QueueManager()
         self.stream_resolver: StreamResolver | None = None
@@ -262,6 +263,9 @@ class YTMPlayerApp(
 
         # Consecutive stream failure counter (prevents infinite skip loops).
         self._consecutive_failures: int = 0
+        # Last time stale browser cookies were refreshed after a stream
+        # failure (monotonic seconds); rate-limits the refresh attempt.
+        self._last_cookie_refresh: float = 0.0
 
         # Debounce rapid play_track calls (e.g. double-click).
         self._last_play_video_id: str = ""
@@ -624,6 +628,7 @@ class YTMPlayerApp(
 
         # Check authentication.
         auth = AuthManager(cookies_file=self.settings.yt_dlp.cookies_file)
+        self.auth = auth
         if not auth.is_authenticated():
             self.notify(
                 "Not signed in to YouTube Music. Run `ytm setup` to connect your account.",

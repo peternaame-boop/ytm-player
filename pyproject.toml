@@ -39,6 +39,11 @@ dependencies = [
     # the pure-Python fallback vs ~2.4s with pycryptodomex's native AES
     # for a ~3500-cookie Chromium-based profile.
     "pycryptodomex>=3.19.1",
+    # Chromium-based browsers on Linux (Brave, Chrome, Chromium, Helium)
+    # encrypt the cookie database with the desktop keyring. yt-dlp needs
+    # this to decrypt it; without it browser cookie extraction silently
+    # yields zero usable cookies and sign-in appears to fail out of nowhere.
+    "secretstorage>=3.3; sys_platform == 'linux'",
     "python-mpv>=1.0.0",
     "aiosqlite>=0.20.0",
     "click>=8.1.0",

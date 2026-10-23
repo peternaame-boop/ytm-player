@@ -85,6 +85,13 @@ def _zen_profile_roots() -> list[Path]:
     ]
 
 
+def _has_youtube_auth_cookies(cookies) -> bool:  # type: ignore[no-untyped-def]
+    """True when *cookies* contains the pair ytmusicapi needs to sign in."""
+    return any(
+        c.domain == ".youtube.com" and c.name in ("SAPISID", "__Secure-3PAPISID") for c in cookies
+    )
+
+
 def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
     """Extract cookies from a supported browser, including Zen profiles."""
     from yt_dlp.cookies import extract_cookies_from_browser
@@ -95,7 +102,37 @@ def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
                 return extract_cookies_from_browser("firefox", profile=str(root))
         raise FileNotFoundError("no Zen profile directory found")
 
-    return extract_cookies_from_browser(browser)
+    jar = extract_cookies_from_browser(browser)
+    if _has_youtube_auth_cookies(jar):
+        return jar
+
+    # yt-dlp guesses which Chromium keyring encrypted the cookie database
+    # from XDG_CURRENT_DESKTOP / DESKTOP_SESSION. On desktops it does not
+    # recognise (e.g. Hyprland/omarchy, Sway/i3) it picks BASICTEXT, which
+    # cannot decrypt a libsecret-backed profile: extraction "succeeds" with
+    # zero usable cookies and every later step fails with no clear cause.
+    # Retry with the concrete keyring backends instead of giving up.
+    if sys.platform.startswith("linux"):
+        for keyring in ("GNOMEKEYRING", "KWALLET6", "KWALLET5", "KWALLET", "BASICTEXT"):
+            try:
+                retried = extract_cookies_from_browser(
+                    browser,
+                    # yt-dlp accepts the keyring name string at runtime.
+                    keyring=keyring,  # pyright: ignore[reportArgumentType]
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Cookie extraction from %s with keyring %s failed: %s",
+                    browser,
+                    keyring,
+                    exc,
+                )
+                continue
+            if _has_youtube_auth_cookies(retried):
+                logger.debug("Cookies from %s decrypted with keyring %s", browser, keyring)
+                return retried
+
+    return jar
 
 
 def _patch_yt_dlp_browsers() -> None:

@@ -34,6 +34,8 @@ def _fresh_playback_host():
     p.queue.peek_next = MagicMock(return_value=None)
     p.history = None
     p.cache = None
+    p.auth = None
+    p._last_cookie_refresh = 0.0
     p.discord = None
     p.lastfm = None
     p.mpris = None
@@ -893,6 +895,22 @@ class TestPlayerErrorRecovery:
         assert host._recovery_generation == 2
         host.notify.assert_not_called()
         assert host._consecutive_failures == 0
+
+    async def test_first_failure_refreshes_browser_cookies_before_the_retry(self):
+        host = _recovery_host()
+        host.settings = SimpleNamespace(
+            yt_dlp=SimpleNamespace(use_session_cookies=True, cookies_file="")
+        )
+        host.auth = MagicMock()
+        host.auth.try_auto_refresh = MagicMock(return_value=True)
+        await host.play_track(_TRACK)
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+
+        host.auth.try_auto_refresh.assert_called_once_with()
+        host.notify.assert_any_call("Cookies refreshed from browser.", timeout=4)
+        host.stream_resolver.clear_cache.assert_called_once()
+        assert _attempts(host) == [1, 2]
 
     async def test_failed_recovery_applies_the_failure_policy_once(self):
         host = _recovery_host()

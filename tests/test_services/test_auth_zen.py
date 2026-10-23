@@ -44,7 +44,11 @@ def test_extract_zen_raises_when_no_profile_root_exists(tmp_path, monkeypatch):
 
 
 def test_extract_non_zen_browser_unchanged(monkeypatch):
-    extractor = MagicMock()
+    auth_cookie = MagicMock()
+    auth_cookie.domain = ".youtube.com"
+    auth_cookie.name = "SAPISID"
+    auth_cookie.value = "token"
+    extractor = MagicMock(return_value=[auth_cookie])
     monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", extractor)
 
     _extract_browser_jar("brave")

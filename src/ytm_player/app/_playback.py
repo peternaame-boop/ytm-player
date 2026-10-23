@@ -24,6 +24,10 @@ from ytm_player.utils.formatting import get_video_id, normalize_tracks
 logger = logging.getLogger(__name__)
 
 _MAX_CONSECUTIVE_FAILURES = 5
+# Browsers rotate their YouTube cookies on their own, so a stream snapshot can
+# go stale while the API session still validates. Rate-limit the recovery
+# refresh instead of reading the browser/keyring on every failed attempt.
+_COOKIE_REFRESH_COOLDOWN_SECONDS = 60.0
 # Plays the account accepted while no account history was cached; the next
 # fetch merges them in. Bounded so a session that never opens the page
 # cannot grow it without limit.
@@ -357,6 +361,35 @@ class PlaybackMixin(YTMHostBase):
             self.notify(exhausted_message, severity="error", timeout=6)
             self._consecutive_failures = 0
 
+    async def _refresh_session_from_browser(self) -> bool:
+        """Re-snapshot browser cookies after a stream failure.
+
+        Browsers rotate their YouTube cookies independently of the API
+        session, so a URL built from an older snapshot can 403 even though
+        ``validate()`` still passes. When streaming uses the session jar,
+        refresh it from the configured/auto-detected browser before the one
+        retry. At most once per cooldown, and never for an explicit
+        ``cookies_file`` (that is yt-dlp's to manage).
+        """
+        auth = getattr(self, "auth", None)
+        if auth is None:
+            return False
+        settings = self.settings.yt_dlp
+        if not settings.use_session_cookies or settings.cookies_file.strip():
+            return False
+        now = time.monotonic()
+        if now - getattr(self, "_last_cookie_refresh", 0.0) < _COOKIE_REFRESH_COOLDOWN_SECONDS:
+            return False
+        self._last_cookie_refresh = now
+        try:
+            refreshed = await asyncio.to_thread(auth.try_auto_refresh)
+        except Exception:
+            logger.exception("Refreshing stream cookies from the browser failed")
+            return False
+        if refreshed:
+            logger.info("Refreshed stream cookies from the browser after a stream failure")
+        return refreshed
+
     async def _on_player_error(self, event: Any = None) -> None:
         """Recover once from a play attempt whose stream failed to open or died.
 
@@ -406,6 +439,12 @@ class PlaybackMixin(YTMHostBase):
             return
         if not self.stream_resolver:
             return
+        # Browsers rotate their YouTube cookies independently of the API
+        # session, so a URL built from an older snapshot can 403 while
+        # validate() still succeeds. Re-snapshot from the browser before the
+        # retry; the next resolve then uses the fresh jar.
+        if await self._refresh_session_from_browser():
+            self.notify("Cookies refreshed from browser.", timeout=4)
         logger.warning(
             "Stream for %s failed to open (%s) — resetting the resolver and retrying once",
             video_id,
