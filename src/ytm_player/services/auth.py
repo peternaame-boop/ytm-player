@@ -65,6 +65,22 @@ _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
 _yt_dlp_patched = False
 
 
+def _configured_browser() -> str | None:
+    """Browser pinned in ``[yt_dlp] cookie_browser``, or None for auto-detect.
+
+    Pinning makes ``ytm setup`` and the automatic session renewal read that
+    browser only, instead of taking whichever browser happens to be found
+    first. An explicit ``ytm setup --browser`` still overrides it.
+    """
+    from ytm_player.config.settings import get_settings
+
+    value = get_settings().yt_dlp.cookie_browser
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    return value or None
+
+
 def _zen_profile_roots() -> list[Path]:
     """Return candidate Zen profile roots for the current platform."""
     if sys.platform == "win32":
@@ -940,6 +956,11 @@ class AuthManager:
         if manual:
             return self._setup_manual()
 
+        # A browser pinned in [yt_dlp] cookie_browser is the default source;
+        # an explicit --browser argument still wins.
+        if browser is None:
+            browser = _configured_browser()
+
         # Try cookies file first (unless a specific browser was requested).
         if self._cookies_file and not browser:
             print(f"  Trying cookies file: {self._cookies_file}")
@@ -983,7 +1004,9 @@ class AuthManager:
         """
         _patch_yt_dlp_browsers()
 
-        for browser in _BROWSERS:
+        configured = _configured_browser()
+        candidates = (configured,) if configured else _BROWSERS
+        for browser in candidates:
             try:
                 jar = _extract_browser_jar(browser)
                 yt_cookies = [c for c in jar if c.domain == ".youtube.com"]

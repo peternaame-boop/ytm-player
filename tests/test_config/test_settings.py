@@ -24,6 +24,7 @@ class TestDefaultValues:
         assert s.playback.autoplay is True
         assert s.search.default_mode == "music"
         assert s.yt_dlp.use_session_cookies is False
+        assert s.yt_dlp.cookie_browser == ""
         assert s.cache.enabled is True
         assert s.cache.max_size_mb == 1024
         assert s.ui.theme == "ytm-dark"
@@ -64,6 +65,16 @@ def test_settings_load_respects_show_selection_info_false(tmp_config_dir):
     config_file.write_text("[ui]\nshow_selection_info = false\n", encoding="utf-8")
     s = Settings.load(config_file)
     assert s.ui.show_selection_info is False
+
+
+def test_settings_load_respects_cookie_browser(tmp_config_dir):
+    """cookie_browser in [yt_dlp] is honoured as the selected cookie source."""
+    config_file = tmp_config_dir / "config.toml"
+    config_file.write_text('[yt_dlp]\ncookie_browser = "brave"\n', encoding="utf-8")
+
+    s = Settings.load(config_file)
+
+    assert s.yt_dlp.cookie_browser == "brave"
 
 
 def test_ui_settings_show_queue_source_default():

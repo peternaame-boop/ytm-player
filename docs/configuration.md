@@ -81,6 +81,9 @@ Tracks saved with **Download for Offline** live in this cache and count toward `
 [yt_dlp]
 cookies_file = ""            # Optional: path to yt-dlp Netscape cookies.txt
 use_session_cookies = false  # Stream with the session from `ytm setup` (see below)
+cookie_browser = ""          # Optional: browser to read cookies from for `ytm setup` and
+                             # automatic renewal (brave, chrome, chromium, firefox, zen, ...).
+                             # Empty = auto-detect.
 ca_bundle = ""               # Optional: path to a custom CA cert bundle for SSL-inspecting
                              # corporate proxies (Zscaler, Netskope, etc.)
 remote_components = ""       # Optional: ejs:npm/ejs:github (enables remote JS component downloads)
@@ -101,6 +104,13 @@ supported JavaScript runtime installed (`deno` is used automatically; for `node`
 `use_session_cookies` is on; anonymous streaming is unaffected. yt-dlp never writes
 `stream_cookies.txt` back; re-run `ytm setup` to refresh it. An explicit `cookies_file` takes
 precedence and is used the way yt-dlp normally uses it.
+
+Set `cookie_browser` to pin which browser `ytm setup` and the automatic session renewal read
+cookies from — for example `cookie_browser = "brave"` if Brave is your main browser. With it
+empty, the first browser that has a signed-in YouTube session is used. `ytm setup --browser`
+overrides the setting for a single run. Pinning keeps renewal deterministic when several
+browsers are installed: a session set up from Brave keeps renewing from Brave instead of
+whichever browser detection happens to reach first.
 
 ### `[search]`
 

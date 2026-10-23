@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Unreleased
 
+**New features**
+
+- **Pin the browser used for cookie extraction** — `[yt_dlp] cookie_browser = "brave"` makes `ytm setup` and automatic session renewal read that browser only, instead of whichever installed browser detection reaches first. With multiple browsers signed in, renewal now stays on the browser the session was set up with. `ytm setup --browser` still overrides the setting for a single run. (#193)
+
 **Fixes**
 
 - **Duration column cut off again once a track list needs scrolling** — the Title column is sized from the table's width before the layout has settled, so the fit misses the row-label gutter, the width Artist and Album grow into, and the vertical scrollbar that appears as soon as the list is longer than the window. The table came out wider than its viewport, scrolled sideways, and pushed the rightmost column off the right edge — the same symptom the v1.9.2 fix addressed. The fit now runs once more after the layout settles, including when rows are appended to a table that has already been painted.
