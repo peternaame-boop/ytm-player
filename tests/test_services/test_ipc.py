@@ -321,6 +321,7 @@ class TestIPCCommandWhitelist:
             "like",
             "dislike",
             "unlike",
+            "play_index",
         }
         assert _VALID_COMMANDS == expected
 

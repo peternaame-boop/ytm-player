@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Unreleased
 
+**New features**
+
+- **Jump to a queue position from the CLI** — `ytm play-index <n>` plays the track at 0-based position `<n>` in the current queue, backed by a new `play_index` IPC command. Enables external tools (overlays, launchers, scripts) that mirror the queue via `ytm queue` to select a specific track in one call, instead of looping through `next`/`prev` — which is slow for large jumps and unreliable for backwards navigation. Validates `0 <= n < queue.length` and returns a clear error otherwise. `self.queue.tracks[n]` respects the visible order, so it works correctly with shuffle enabled. (#197)
+
 **Fixes**
 
 - **Duration column cut off again once a track list needs scrolling** — the Title column is sized from the table's width before the layout has settled, so the fit misses the row-label gutter, the width Artist and Album grow into, and the vertical scrollbar that appears as soon as the list is longer than the window. The table came out wider than its viewport, scrolled sideways, and pushed the rightmost column off the right edge — the same symptom the v1.9.2 fix addressed. The fit now runs once more after the layout settles, including when rows are appended to a table that has already been painted.

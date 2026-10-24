@@ -68,7 +68,15 @@ class IPCMixin(YTMHostBase):
 
                 case "unlike":
                     return await self._ipc_rate("INDIFFERENT")
-
+                case "play_index":
+                    if not self.player:
+                        return {"ok": False, "error": "player not ready"}
+                    index = args.get("index")
+                    if not isinstance(index, int) or not (0 <= index < self.queue.length):
+                        return {"ok": False, "error": f"invalid index: {index}"}
+                    track = self.queue.tracks[index]
+                    await self.play_track(track)
+                    return {"ok": True}
                 case _:
                     return {"ok": False, "error": f"unknown command: {command}"}
         except Exception as exc:
