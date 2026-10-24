@@ -57,7 +57,7 @@ def _host(order: list[str], monkeypatch, *, failing: str | None = None) -> Magic
     h = MagicMock()
 
     def sync(name: str):
-        def run() -> None:
+        def run(**_kwargs: object) -> None:
             if name == failing:
                 raise OSError(f"synthetic {name} failure")
             order.append(name)

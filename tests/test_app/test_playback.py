@@ -1089,3 +1089,33 @@ class TestPlayerErrorRecovery:
         host._poll_position()
 
         assert host._consecutive_failures == 3
+
+
+class TestDislikeCurrent:
+    async def test_a_new_dislike_rates_the_track_and_skips_to_the_next(self):
+        host = _fresh_playback_host()
+        track = {"video_id": "abc", "title": "X", "likeStatus": "INDIFFERENT"}
+        host.player.current_track = track
+        host.ytmusic = MagicMock()
+        host.ytmusic.rate_song = AsyncMock(return_value="success")
+        host._play_next = AsyncMock()
+
+        await host._rate_current("DISLIKE")
+
+        host.ytmusic.rate_song.assert_awaited_once_with("abc", "DISLIKE")
+        assert track["likeStatus"] == "DISLIKE"
+        host._play_next.assert_awaited_once()
+
+    async def test_disliking_a_disliked_track_clears_it_and_keeps_playing(self):
+        host = _fresh_playback_host()
+        track = {"video_id": "abc", "title": "X", "likeStatus": "DISLIKE"}
+        host.player.current_track = track
+        host.ytmusic = MagicMock()
+        host.ytmusic.rate_song = AsyncMock(return_value="success")
+        host._play_next = AsyncMock()
+
+        await host._rate_current("DISLIKE")
+
+        host.ytmusic.rate_song.assert_awaited_once_with("abc", "INDIFFERENT")
+        assert track["likeStatus"] == "INDIFFERENT"
+        host._play_next.assert_not_awaited()

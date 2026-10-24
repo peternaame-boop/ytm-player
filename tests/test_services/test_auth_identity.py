@@ -278,6 +278,9 @@ def browser(monkeypatch):
     monkeypatch.setattr(
         AuthManager, "_detect_browser", staticmethod(lambda: ("brave", [_cookie()], [_cookie()]))
     )
+    monkeypatch.setattr(
+        AuthManager, "_browser_candidates", staticmethod(lambda skip=frozenset(): iter(()))
+    )
     monkeypatch.setattr("ytm_player.services.auth.sapisid_from_cookie", lambda s: "sapisid")
     monkeypatch.setattr("ytm_player.services.auth.get_authorization", lambda s: "SAPISIDHASH x")
 

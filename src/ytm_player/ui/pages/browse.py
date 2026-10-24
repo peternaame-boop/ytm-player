@@ -215,7 +215,11 @@ async def navigate_browse_item(host: "YTMHostBase", item: dict[str, Any]) -> Non
     browse_id = item.get("browseId")
     playlist_id = item.get("playlistId") or item.get("audioPlaylistId")
 
-    if result_type in ("song", "video", "flat_song") or video_id:
+    if playlist_id == "LM":
+        # "Liked Music" is a virtual playlist the playlist page cannot load
+        # ("No data found"). The Liked Songs page is built for it.
+        await host.navigate_to("liked_songs")
+    elif result_type in ("song", "video", "flat_song") or video_id:
         normalized_tracks = normalize_tracks([item])
         track_to_play = normalized_tracks[0] if normalized_tracks else item
         # Replace the queue instead of playing around it — otherwise the
@@ -295,8 +299,8 @@ class BrowseTabBar(Widget):
            already-reserved rows — they never add/remove a row, so the text
            stays vertically centred whether the tab is plain, active, or
            focused. (A `tall transparent` border occupies its row invisibly.) */
-        border-top: tall transparent;
-        border-bottom: tall transparent;
+        border-top: solid transparent;
+        border-bottom: solid transparent;
     }
 
     BrowseTabBar .tab-item:hover {
@@ -306,7 +310,7 @@ class BrowseTabBar(Widget):
     BrowseTabBar .tab-item.active {
         text-style: bold;
         color: $text;
-        border-bottom: tall $primary;
+        border-bottom: solid $primary;
     }
 
     /* Focused tab label — where Tab is currently sitting. Distinct from
@@ -316,8 +320,8 @@ class BrowseTabBar(Widget):
     BrowseTabBar .tab-item:focus {
         color: $text;
         background: $primary 30%;
-        border-top: tall $primary;
-        border-bottom: tall $accent;
+        border-top: solid $primary;
+        border-bottom: solid $accent;
     }
     """
 

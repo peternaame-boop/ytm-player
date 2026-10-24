@@ -10,6 +10,13 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Static
 
+from ytm_player.config.settings import get_settings
+from ytm_player.ui.icons import icon
+from ytm_player.utils.usage import UsageSampler, format_usage
+
+# Seconds between refreshes of the CPU and memory readout.
+USAGE_REFRESH_SECONDS = 2.0
+
 
 class HeaderBar(Widget):
     """Top bar with toggle buttons for playlist and lyrics sidebars."""
@@ -19,6 +26,9 @@ class HeaderBar(Widget):
 
     class ToggleLyricsSidebar(Message):
         """Emitted when the lyrics sidebar toggle is clicked."""
+
+    class SearchRequested(Message):
+        """The top bar's search box was clicked."""
 
     class BackRequested(Message):
         """Emitted when the back button is clicked."""
@@ -36,9 +46,28 @@ class HeaderBar(Widget):
         height: 1;
         width: 1fr;
     }
+    HeaderBar #header-search {
+        width: 1fr;
+        max-width: 60;
+        height: 1;
+        margin: 0 2;
+        padding: 0 2;
+        background: $boost;
+        color: $text-muted;
+    }
+    HeaderBar #header-search:hover {
+        color: $text;
+        background: $primary 20%;
+    }
     HeaderBar #header-spacer {
         width: 1fr;
         height: 1;
+    }
+    HeaderBar #header-usage {
+        width: auto;
+        height: 1;
+        padding: 0 1;
+        color: $primary;
     }
     HeaderBar .hb-toggle {
         height: 1;
@@ -76,11 +105,31 @@ class HeaderBar(Widget):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-inner"):
-            yield Static("\u2630 Playlists", id="toggle-playlist", classes="hb-toggle")
-            yield Static("\u2190 Back", id="back-btn", classes="hb-toggle")
-            yield Static("Forward \u2192", id="forward-btn", classes="hb-toggle")
+            yield Static(f"{icon('menu')} Playlists", id="toggle-playlist", classes="hb-toggle")
+            yield Static(f"{icon('back')} Back", id="back-btn", classes="hb-toggle")
+            yield Static(f"Forward {icon('forward')}", id="forward-btn", classes="hb-toggle")
+            yield Static(
+                f"{icon('search')}  Search songs, albums, artists, podcasts", id="header-search"
+            )
             yield Static(id="header-spacer")
-            yield Static("\u266b Lyrics", id="toggle-lyrics", classes="hb-toggle")
+            if get_settings().ui.show_usage:
+                yield Static(id="header-usage")
+            yield Static(f"{icon('lyrics')} Lyrics", id="toggle-lyrics", classes="hb-toggle")
+
+    def on_mount(self) -> None:
+        if get_settings().ui.show_usage:
+            self._usage = UsageSampler()
+            # A sample needs some elapsed time behind it to mean anything.
+            self.set_timer(0.5, self.refresh_usage)
+            self.set_interval(USAGE_REFRESH_SECONDS, self.refresh_usage)
+
+    def refresh_usage(self) -> None:
+        """Show CPU use since the last refresh and current memory."""
+        try:
+            label = self.query_one("#header-usage", Static)
+        except Exception:
+            return
+        label.update(format_usage(self._usage.sample()))
 
     def on_click(self, event: Click) -> None:
         """Route clicks on toggle buttons to the correct message."""
@@ -93,6 +142,9 @@ class HeaderBar(Widget):
         elif target.id == "toggle-lyrics":
             event.stop()
             self.post_message(self.ToggleLyricsSidebar())
+        elif target.id == "header-search":
+            event.stop()
+            self.post_message(self.SearchRequested())
         elif target.id == "back-btn":
             event.stop()
             self.post_message(self.BackRequested())

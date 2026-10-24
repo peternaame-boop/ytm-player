@@ -40,6 +40,7 @@ from ytm_player.config.settings import get_settings
 from ytm_player.ipc import get_running_pid, ipc_request, is_tui_running, try_claim_pid
 from ytm_player.services.auth import AuthManager
 from ytm_player.utils.logging import install_excepthooks, setup_logging
+from ytm_player.utils.memory import limit_malloc_arenas
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -134,6 +135,7 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
     Launch without arguments to start the interactive TUI.
     Use subcommands for headless / scripting control.
     """
+    limit_malloc_arenas()  # before Textual, mpv or a worker starts a thread
     if ctx.invoked_subcommand is None:
         # Single-instance guard, before ANY startup side effects (settings
         # load can rewrite a corrupt config.toml; logging setup rotates
@@ -203,7 +205,12 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
         faulthandler.enable(file=_faulthandler_log, all_threads=True)
 
         from ytm_player.app import YTMPlayerApp
+        from ytm_player.ui.widgets.cover import prime_image_support
 
+        prime_image_support()  # textual-image must query the terminal before Textual starts
+        from ytm_player.ui.widgets.thin_scrollbar import install as thin_scrollbars
+
+        thin_scrollbars()
         app = YTMPlayerApp()
         app.run()
 

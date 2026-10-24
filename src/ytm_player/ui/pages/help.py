@@ -47,6 +47,7 @@ ACTION_DESCRIPTIONS: dict[Action, str] = {
     Action.GO_BACK: "Go back / close page",
     Action.GO_FORWARD: "Go forward (after going back)",
     # Pages
+    Action.HOME: "Go to home",
     Action.LIBRARY: "Go to library",
     Action.SEARCH: "Go to search",
     Action.BROWSE: "Go to browse",
@@ -115,6 +116,7 @@ ACTION_CATEGORIES: dict[str, list[Action]] = {
         Action.GO_FORWARD,
     ],
     "Pages": [
+        Action.HOME,
         Action.LIBRARY,
         Action.SEARCH,
         Action.BROWSE,

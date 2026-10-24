@@ -1044,3 +1044,13 @@ class TrackActionsMixin(YTMHostBase):
             bar.text = getattr(message, "text", "")
         except Exception:
             logger.debug("Failed to relay SelectionChanged to bar", exc_info=True)
+        # The player bar shows the selection on its artist line when it fits.
+        try:
+            from ytm_player.ui.playback_bar import PlaybackBar
+
+            if self.settings.ui.show_selection_info:
+                self.query_one("#playback-bar", PlaybackBar).set_selection(
+                    getattr(message, "text", "")
+                )
+        except Exception:
+            logger.debug("Failed to relay SelectionChanged to the player bar", exc_info=True)

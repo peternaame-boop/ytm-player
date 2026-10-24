@@ -34,6 +34,15 @@ _YTM_PENDING_MAX = 100
 # frozen during pause. Best of both: focus-independent, pause-aware.
 _YTM_HISTORY_POLL_SECONDS = 1.0
 
+# Seconds a track row stays highlighted before the player resolves its stream
+# ahead of a play. A resolve takes about 2 s, and the web app is near 1 s.
+SPECULATE_DWELL = 0.5
+# Songs a page or track list warms at a time. Each takes about 2 s, and the
+# result stays valid for hours.
+WARM_LIMIT = 12
+# Guesses resolved at once, each on its own spare resolver.
+WARM_WORKERS = 3
+
 
 @dataclass
 class _LocalHistoryClaim:
@@ -692,6 +701,84 @@ class PlaybackMixin(YTMHostBase):
         except Exception:
             logger.debug("Failed to prefetch next track", exc_info=True)
 
+    def on_track_table_track_highlighted(self, event: TrackTable.TrackHighlighted) -> None:
+        """Resolve the highlighted track's stream before the click, as the web app does.
+
+        A row must stay highlighted for ``SPECULATE_DWELL`` seconds first.
+        Resolves run one at a time, so a resolve for a row the cursor only
+        passed over would delay the track that is then played.
+        """
+        timer = getattr(self, "_speculate_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._speculate_timer = None
+        video_id = get_video_id(event.track) if event.track else ""
+        if video_id and self.stream_resolver:
+            self._speculate_timer = self.set_timer(
+                SPECULATE_DWELL, lambda: self._speculate(video_id)
+            )
+
+    def _speculate(self, video_id: str) -> None:
+        self._speculate_timer = None
+        playing = self.player.current_track if self.player else None
+        if not self.stream_resolver or (playing and get_video_id(playing) == video_id):
+            return
+        self.run_worker(self._warm([video_id]), group="speculate", exclusive=True)
+
+    def warm_streams(
+        self, video_ids: list[str], limit: int = WARM_LIMIT, *, ahead: bool = False
+    ) -> None:
+        """Resolve the first songs a page shows, so a click on them starts at once.
+
+        A newer page's list replaces an older one that has not finished.
+        """
+        wanted = [v for v in dict.fromkeys(video_ids) if v][:limit]
+        if wanted and self.stream_resolver:
+            # Rows ahead of the cursor run in a group of their own, so moving the
+            # cursor does not cancel the warming of the page or the rows in view.
+            if ahead:
+                self.run_worker(self._warm(wanted), group="warm-ahead", exclusive=True)
+            else:
+                self.run_worker(self._warm(wanted), group="warm-streams", exclusive=True)
+
+    def _spare_resolvers(self) -> list[Any]:
+        """Resolvers for guesses, each with its own yt-dlp lock, so a guess never
+        holds the lock a click waits on, and several guesses run at once."""
+        from ytm_player.services.stream import StreamResolver
+
+        main = self.stream_resolver
+        if main is None:
+            return []
+        spares = getattr(self, "_spare_stream_resolvers", None)
+        if not spares or spares[0].quality != main.quality:
+            spares = [StreamResolver(main.quality) for _ in range(WARM_WORKERS)]
+            self._spare_stream_resolvers = spares
+        return spares
+
+    async def _warm(self, video_ids: list[str]) -> None:
+        main = self.stream_resolver
+        if main is None:
+            return
+        todo = list(video_ids)
+
+        async def work(spare: Any) -> None:
+            while todo:
+                video_id = todo.pop(0)
+                if main._get_cached(video_id) is not None:
+                    continue
+                if main._current_pending(video_id, main._cache_generation) is not None:
+                    continue
+                generation = main._cache_generation
+                try:
+                    info = await spare.resolve(video_id)
+                except Exception:
+                    logger.debug("Warm resolve failed for %s", video_id, exc_info=True)
+                    continue
+                if info is not None:
+                    main._put_cache(info, generation)
+
+        await asyncio.gather(*(work(spare) for spare in self._spare_resolvers()))
+
     def _prefetch_next_track(self) -> None:
         """Prefetch the next track's stream URL in the background.
 
@@ -1129,7 +1216,13 @@ class PlaybackMixin(YTMHostBase):
 
         Cycles between LIKE and INDIFFERENT (no rating). Pressing this
         on a disliked track switches it to LIKE (clearing the dislike).
-        Dislike state is left to the existing track-actions popup.
+        """
+        await self._rate_current("LIKE")
+
+    async def _rate_current(self, rating: str) -> None:
+        """Give the playing track *rating* ("LIKE" or "DISLIKE"), or clear it if it has it.
+
+        As on the web app, a new dislike also skips to the next track.
         """
         if not self.player or not self.player.current_track:
             return
@@ -1138,18 +1231,19 @@ class PlaybackMixin(YTMHostBase):
         if not video_id:
             return
         if not self.ytmusic:
-            self.notify("Sign in to like songs", severity="warning", timeout=2)
+            verb = "like" if rating == "LIKE" else "rate"
+            self.notify(f"Sign in to {verb} songs", severity="warning", timeout=2)
             return
 
         current_status = (track.get("likeStatus") or "INDIFFERENT").upper()
-        new_status = "INDIFFERENT" if current_status == "LIKE" else "LIKE"
+        new_status = "INDIFFERENT" if current_status == rating else rating
 
         result = await self.ytmusic.rate_song(video_id, new_status)
         if result != "success":
             from ytm_player.services.ytmusic import mutation_failure_suffix
 
             self.notify(
-                f"Couldn't update like — {mutation_failure_suffix(result)}",
+                f"Couldn't update the rating — {mutation_failure_suffix(result)}",
                 severity="error",
                 timeout=3,
             )
@@ -1157,9 +1251,13 @@ class PlaybackMixin(YTMHostBase):
 
         # Update the track dict so subsequent reads reflect the new state.
         track["likeStatus"] = new_status
-        # Notify the user of the change.
-        msg = "Added to Liked songs" if new_status == "LIKE" else "Removed from Liked songs"
-        self.notify(msg, timeout=2)
+        messages = {
+            ("LIKE", "LIKE"): "Added to Liked songs",
+            ("LIKE", "INDIFFERENT"): "Removed from Liked songs",
+            ("DISLIKE", "DISLIKE"): "Disliked",
+            ("DISLIKE", "INDIFFERENT"): "Dislike removed",
+        }
+        self.notify(messages[(rating, new_status)], timeout=2)
         # Push the new state to the playback bar.
         try:
             from ytm_player.ui.playback_bar import PlaybackBar
@@ -1168,6 +1266,8 @@ class PlaybackMixin(YTMHostBase):
             bar.update_like_status(new_status)
         except Exception:
             logger.debug("Failed to push like status to playback bar", exc_info=True)
+        if new_status == "DISLIKE":
+            await self._play_next()
 
     # ── Download ─────────────────────────────────────────────────────
 

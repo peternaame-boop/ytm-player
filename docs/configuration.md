@@ -69,6 +69,7 @@ If one source can't be loaded, All shows the other and says so in the footer. Re
 [cache]
 enabled = true
 max_size_mb = 1024           # 1GB default LRU audio cache
+covers_max_mb = 150          # cover image cache; least recently shown covers go first
 prefetch_next = true         # resolve next track's stream URL in background for instant skip
 location = ""                # blank = default cache dir; set a path to override
 ```
@@ -128,10 +129,17 @@ bidi_mode = "auto"           # auto, reorder, passthrough — RTL text handling
 region = "ZZ"                # ISO 3166-1 alpha-2 (or "ZZ" = Global, default) — Browse → Charts. 68 regions selectable; locale-style codes like "ES-ES" auto-normalise to "ES".
 home_shelves = 3             # number of recommendation shelves on Browse → For You (1–25);
                              # the Playlists tab always reads up to 25
-show_selection_info = true   # show focused-item full name in the row above the playback bar
+show_selection_info = true   # show the focused item in the player bar, beside the artist, when it fits
 sidebar_overflow = "truncate"  # "truncate" (1-row + ellipsis) or "wrap" (multi-line names)
 show_queue_source = true     # show "Generated from: …" header on radio/discovery queues
+remember_layout = true       # reopen the lyrics panel and album art as the last run left them
+show_usage = true            # show ytm's own CPU and memory use in the top bar, beside Lyrics
+uppercase = true             # draw all text in capitals; titles and search queries keep their case
+track_covers = true          # a small cover on each track row, as on music.youtube.com; album pages keep numbers
+icons = "auto"               # nerd, unicode, or auto (Nerd Font icons when you have a Nerd Font installed)
 ```
+
+ytm-player saves the resume point to `resume.json` every 5 seconds while the app runs. Volume, shuffle, repeat, the queue and each page's playlist sidebar go to `session.json`, which is rewritten only when one of them changes. Neither file waits for a clean exit. A closed terminal or a killed process keeps them.
 
 `theme` is the startup default. Changing theme from Textual's command palette (`Ctrl+P` → `Theme`) updates the current session and is saved in `session.json`, not `config.toml`. To make the active theme the new default, run `Ctrl+P` → `Set Current Theme as Default`.
 

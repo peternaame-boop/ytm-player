@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from rich.text import Text
-from textual.events import Click, MouseScrollDown, MouseScrollUp
+from textual.events import Click, Leave, MouseMove, MouseScrollDown, MouseScrollUp
 from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
@@ -224,3 +224,81 @@ class PlaybackProgress(Widget):
         self.position = position
         if duration is not None:
             self.duration = duration
+
+
+class SeekLine(PlaybackProgress):
+    """The web player's seek bar: a thin line along the top edge of the player bar.
+
+    It is two rows tall, so the hitbox is two rows. At rest it draws a thin
+    line where the rows meet (lower one-eighth block in the top row). Under the
+    mouse it grows into a full-height band across that boundary (lower half of
+    the top row, upper half of the bottom row), lights the stretch up to the
+    pointer, and shows the time there as a tooltip. Click to seek. Scroll to
+    preview a seek, as before. The elapsed and total time live in the bar.
+    """
+
+    DEFAULT_CSS = """
+    SeekLine {
+        height: 2;
+        width: 1fr;
+    }
+    """
+
+    THIN = "▁"  # lower one-eighth block
+    BAND_TOP = "▄"  # lower half block
+    BAND_BOTTOM = "▀"  # upper half block
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._hover_x: int | None = None
+
+    def _bar_metrics(self) -> tuple[str, str, int]:
+        return "", "", max(0, self.size.width)
+
+    def _x_to_seconds(self, x: int) -> float | None:
+        width = self.size.width
+        if self.duration <= 0 or width <= 0:
+            return None
+        return min(max(x, 0), width - 1) / width * self.duration
+
+    def on_leave(self, event: Leave) -> None:
+        self._hover_x = None
+        self.tooltip = None
+        self.refresh()
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        self._hover_x = event.x
+        seconds = self._x_to_seconds(event.x)
+        self.tooltip = format_duration(int(seconds)) if seconds is not None else None
+        self.refresh()
+
+    def render(self) -> Text:
+        width = self.size.width
+        theme = get_theme()
+        position = self.position if self._preview_position is None else self._preview_position
+        played = int(width * (position / self.duration)) if self.duration > 0 else 0
+        played = min(width, max(0, played))
+        hover = self._hover_x
+        result = Text()
+        if hover is None and self._preview_position is None:
+            result.append(" " * width + "\n")
+            result.append(self.THIN * played, style=theme.progress_filled)
+            result.append(self.THIN * (width - played), style=theme.progress_empty)
+            return result
+        # Hover or scroll preview: a thick band, with the stretch up to the
+        # pointer (or the preview point) lit and a marker on it.
+        mark = hover if hover is not None else played
+        for row, glyph in ((0, self.BAND_TOP), (1, self.BAND_BOTTOM)):
+            for col in range(width):
+                if col == mark:
+                    style = f"bold {theme.foreground}"
+                elif col < played:
+                    style = theme.progress_filled
+                elif col < mark:
+                    style = theme.secondary
+                else:
+                    style = theme.progress_empty
+                result.append(glyph, style=style)
+            if row == 0:
+                result.append("\n")
+        return result

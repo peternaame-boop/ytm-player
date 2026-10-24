@@ -6,12 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-### Unreleased
+### v2.2.0 (2026-10-24)
+
+**New features**
+
+- **Look of the fork in the README**: four captures show Home's last shelves, a playlist, Now playing with Up next, and the word-by-word lyrics panel. Each one keeps the sidebar collapsed.
+- **The web app's spelling note in Search**: a corrected query shows "Showing results for X" with a "Search instead for Y" link. A suggestion alone shows "Did you mean: X". Changed words take the primary colour.
+- **Mix chips, Autoplay and Save in Up next**: a track radio offers the web app's mix chips, such as All, Familiar and Deep cuts. A pick replaces the tracks after the playing one. A queue that is not a radio ends with an Autoplay switch, which saves `[playback] autoplay`. Save opens the playlist picker with every queued track.
 
 **Fixes**
 
 - **Duration column cut off again once a track list needs scrolling** — the Title column is sized from the table's width before the layout has settled, so the fit misses the row-label gutter, the width Artist and Album grow into, and the vertical scrollbar that appears as soon as the list is longer than the window. The table came out wider than its viewport, scrolled sideways, and pushed the rightmost column off the right edge — the same symptom the v1.9.2 fix addressed. The fit now runs once more after the layout settles, including when rows are appended to a table that has already been painted.
 - **Choosing an action with Enter no longer replaces the queue**: picking Play Next, Add to Queue or Go to Artist from the track actions menu with the keyboard also played the row the menu was opened on, replacing the queue with the page's list. The menu now consumes the Enter that picks the action, so the keyboard does exactly what a mouse click does. Thanks for the report @tmbrid (#177).
+- **`ytm setup` gave up on the first browser it found**: setup read one browser and stopped. A stale Firefox profile then hid a working Zen profile behind it. Setup now tries every browser that holds YouTube cookies. It stops at the first one with a live account. A signed-out session reads as "no account here" instead of raising `KeyError`.
+- **The playlist pane painted grey instead of black**: the sidebar and its library panels set no background, so the app body's grey showed through. All four surfaces now paint the theme background, which is pure black under the bundled dark theme.
+- **Up next could fail to redraw when the queue changed**: the list mounted its new rows before the old ones had gone. A second Autoplay row then took the id that was still in use, and the mount raised `DuplicateIds`. The list now waits for the old rows to leave before it mounts the new ones.
 
 ### v2.1.0 (2026-09-08)
 

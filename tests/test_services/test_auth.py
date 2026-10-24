@@ -18,6 +18,7 @@ class TestAutoRefresh:
         detect = MagicMock(return_value=("brave", cookies, jar))
         save = MagicMock(return_value=True)
         monkeypatch.setattr(manager, "_detect_browser", detect)
+        monkeypatch.setattr(manager, "_browser_candidates", lambda skip=frozenset(): iter(()))
         monkeypatch.setattr(manager, "_save_youtube_cookies", save)
 
         assert manager.try_auto_refresh()
@@ -39,6 +40,7 @@ class TestAutoRefresh:
         manager = AuthManager(config_dir=tmp_path, auth_file=tmp_path / "auth.json")
         detect = MagicMock(return_value=("brave", [MagicMock()], [MagicMock()]))
         monkeypatch.setattr(manager, "_detect_browser", detect)
+        monkeypatch.setattr(manager, "_browser_candidates", lambda skip=frozenset(): iter(()))
 
         assert manager.try_auto_refresh() is False
         detect.assert_not_called()

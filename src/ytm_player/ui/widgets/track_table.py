@@ -16,7 +16,14 @@ from textual.widgets.data_table import Column, RowKey
 
 from ytm_player.config import Action
 from ytm_player.config.settings import get_settings
+from ytm_player.ui.icons import icon
 from ytm_player.ui.selection_info_bar import SelectionChanged
+from ytm_player.ui.widgets.cover import (
+    cover_image_gap,
+    cover_image_turn,
+    load_cover_picture,
+    track_thumbnail,
+)
 from ytm_player.utils.formatting import extract_artist, extract_duration, format_duration
 
 logger = logging.getLogger(__name__)
@@ -32,6 +39,16 @@ _SORT_KEYS: dict[str, Callable[[dict], Any]] = {
     "album": lambda t: (t.get("album") or "").lower(),
     "duration": lambda t: extract_duration(t),
 }
+
+
+# Seconds a scroll must pause before the rows in view are warmed.
+WARM_SCROLL_PAUSE = 0.3
+# Rows below the cursor warmed as it moves.
+WARM_AHEAD = 3
+# A cover row, as the web app lists tracks: a small cover beside one line of
+# text. 6 x 3 cells is about square. The text sits on the middle line.
+COVER_COLUMNS = 6
+COVER_ROW_HEIGHT = 3
 
 
 class TrackTable(DataTable):
@@ -66,6 +83,12 @@ class TrackTable(DataTable):
     }
     TrackTable > .datatable--cursor {
         background: $selected-item;
+    }
+    /* The web app has no table header. This one stays for sorting and
+       column resizing, drawn quietly. */
+    TrackTable.-covers > .datatable--header {
+        background: transparent;
+        color: $text-muted;
     }
     TrackTable.-marked {
         border-bottom: hkey $accent;
@@ -145,12 +168,17 @@ class TrackTable(DataTable):
         *,
         show_index: bool = True,
         show_album: bool = True,
-        zebra_stripes: bool = True,
+        show_covers: bool | None = None,
+        zebra_stripes: bool | None = None,
         queue_entry_keys: bool = False,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
     ) -> None:
+        if show_covers is None:
+            show_covers = get_settings().ui.track_covers
+        if zebra_stripes is None:
+            zebra_stripes = not show_covers
         super().__init__(
             cursor_type="row",
             zebra_stripes=zebra_stripes,
@@ -161,6 +189,13 @@ class TrackTable(DataTable):
         )
         self._show_index = show_index
         self._show_album = show_album
+        self._show_covers = show_covers
+        self._row_height = COVER_ROW_HEIGHT if show_covers else 1
+        # Loaded cover pictures by thumbnail URL, kept across reloads and sorts.
+        self._cover_pictures: dict[str, Any] = {}
+        self._covers_pending: set[str] = set()
+        if show_covers:
+            self.add_class("-covers")
         # True on the Queue page only: its rows are loaded with QueueManager
         # entry ids as keys, so a row names one queue occurrence.
         self.queue_entry_keys = queue_entry_keys
@@ -288,6 +323,8 @@ class TrackTable(DataTable):
     # -- Setup ------------------------------------------------------------
 
     def on_mount(self) -> None:
+        self._warm_timer: Any = None
+        self.watch(self, "scroll_y", self._scrolled, init=False)
         # Pick up the currently-playing video_id from the app's player so
         # the playing-row highlight survives navigating away and back.
         try:
@@ -312,6 +349,8 @@ class TrackTable(DataTable):
 
         # Mark column first: one cell, blank or a check mark.
         self.add_column(" ", width=1, key="mark")
+        if self._show_covers:
+            self.add_column(" ", width=COVER_COLUMNS, key="cover")
         if self._show_index:
             self.add_column("#", width=w(ui.col_index), key="index")
         self.add_column("Title", width=w(ui.col_title), key="title")
@@ -332,6 +371,10 @@ class TrackTable(DataTable):
         """
         if keys is not None and len(keys) != len(tracks):
             raise ValueError("keys must have one entry per track")
+        # Resolve the first songs ahead of a click, as Home and Search do.
+        warm = getattr(self.app, "warm_streams", None) if self.is_attached else None
+        if warm is not None:
+            warm([t.get("video_id") or t.get("videoId") or "" for t in tracks])
         self._occurrence_keys = list(keys) if keys is not None else None
         self._reset_selection()
         self.clear()
@@ -559,22 +602,89 @@ class TrackTable(DataTable):
 
         from ytm_player.utils.bidi import isolate_bidi, reorder_rtl_line
 
-        cells: list[str | int] = [self._mark_glyph(track.get("_original_index", index))]
+        centre = self._centre
+        cells: list[Any] = [self._mark_glyph(track.get("_original_index", index))]
+        if self._show_covers:
+            cells.append(self._cover_cell(track))
         if self._show_index:
             # Always show original playlist position, not current row number.
             orig = track.get("_original_index", index)
-            cells.append(str(orig + 1))
-        cells.append(isolate_bidi(reorder_rtl_line(title)))
-        cells.append(isolate_bidi(reorder_rtl_line(artist)))
+            cells.append(centre(str(orig + 1)))
+        cells.append(centre(isolate_bidi(reorder_rtl_line(title))))
+        cells.append(centre(isolate_bidi(reorder_rtl_line(artist))))
         if self._show_album:
-            cells.append(isolate_bidi(reorder_rtl_line(album)))
-        cells.append(format_duration(duration) if duration else "--:--")
+            cells.append(centre(isolate_bidi(reorder_rtl_line(album))))
+        cells.append(centre(format_duration(duration) if duration else "--:--"))
 
         video_id = track.get("video_id", f"row_{index}")
         # Pass label=" " on every row so Textual reserves the row-label
         # column once any row has a non-None label. _highlight_playing
         # mutates this slot to show ▶ on the playing row.
-        return self.add_row(*cells, key=f"{video_id}_{index}", label=" ")
+        return self.add_row(*cells, key=f"{video_id}_{index}", label=" ", height=self._row_height)
+
+    def _centre(self, value: str) -> str:
+        """*value* on the middle line of a cover row, unchanged in a one-line row."""
+        return "\n" * (self._row_height // 2) + value
+
+    # -- Covers -----------------------------------------------------------
+
+    def _cover_cell(self, track: dict) -> Any:
+        """The row's cover picture once loaded, else blank space of the cover's size."""
+        url = track_thumbnail(track)
+        picture = self._cover_pictures.get(url) if url else None
+        if picture is not None:
+            return picture
+        return "\n".join([" " * COVER_COLUMNS] * COVER_ROW_HEIGHT)
+
+    def _load_visible_covers(self) -> None:
+        """Fetch the covers of the rows in view that are not loaded yet."""
+        if not self._show_covers or not self.is_attached:
+            return
+        first, stop = self._visible_row_range()
+        wanted: list[tuple[str, int]] = []
+        for row in range(first, min(stop, len(self._tracks))):
+            url = track_thumbnail(self._tracks[row])
+            if url and url not in self._cover_pictures and url not in self._covers_pending:
+                self._covers_pending.add(url)
+                wanted.append((url, row))
+        if wanted:
+            self.run_worker(self._fetch_covers(wanted), group="track-covers")
+
+    async def _fetch_covers(self, wanted: list[tuple[str, int]]) -> None:
+        """Load each cover off the event loop, then show it in every row that uses it."""
+        for url, _row in wanted:
+            try:
+                picture = await load_cover_picture(url, COVER_COLUMNS, COVER_ROW_HEIGHT)
+            finally:
+                self._covers_pending.discard(url)
+            if picture is None or not self.is_attached:
+                continue
+            async with cover_image_turn():
+                self._cover_pictures[url] = picture
+                for row, track in enumerate(self._tracks):
+                    if row < len(self._row_keys) and track_thumbnail(track) == url:
+                        try:
+                            self.update_cell(self._row_keys[row], "cover", picture)
+                        except Exception:
+                            logger.debug("Failed to show cover on row %d", row, exc_info=True)
+                await cover_image_gap()
+
+    def _visible_row_range(self) -> tuple[int, int]:
+        """Rows from the first in view to one past the last, as indexes into the visible rows."""
+        header = self.header_height if self.show_header else 0
+        first = max(0, int(self.scroll_y) // self._row_height)
+        return first, first + max(1, (self.size.height - header) // self._row_height) + 1
+
+    def on_unmount(self) -> None:
+        """Delete this table's kitty images from the terminal."""
+        pictures, self._cover_pictures = self._cover_pictures, {}
+        for picture in pictures.values():
+            cleanup = getattr(picture, "cleanup", None)
+            if cleanup is not None:
+                try:
+                    cleanup()
+                except Exception:
+                    logger.debug("Cover cleanup failed", exc_info=True)
 
     # -- Playing state ----------------------------------------------------
 
@@ -649,14 +759,15 @@ class TrackTable(DataTable):
             artist = _extract_artist(track)
             album = track.get("album") or ""
             duration = _extract_duration(track)
+            centre = self._centre
             cells: dict[str, Any] = {}
             cells["mark"] = self._mark_glyph(track.get("_original_index", row_index))
-            cells["index"] = str(track.get("_original_index", row_index) + 1)
-            cells["title"] = isolate_bidi(reorder_rtl_line(title))
-            cells["artist"] = isolate_bidi(reorder_rtl_line(artist))
+            cells["index"] = centre(str(track.get("_original_index", row_index) + 1))
+            cells["title"] = centre(isolate_bidi(reorder_rtl_line(title)))
+            cells["artist"] = centre(isolate_bidi(reorder_rtl_line(artist)))
             if self._show_album:
-                cells["album"] = isolate_bidi(reorder_rtl_line(album))
-            cells["duration"] = _format_duration(duration) if duration else "--:--"
+                cells["album"] = centre(isolate_bidi(reorder_rtl_line(album)))
+            cells["duration"] = centre(_format_duration(duration) if duration else "--:--")
             return cells
 
         def _styled_cells(track: dict, row_index: int, style: str) -> dict[str, Any]:
@@ -717,7 +828,7 @@ class TrackTable(DataTable):
                 text_hex = Color.parse(get_theme().text or "#ffffff").hex
             except Exception:
                 text_hex = "#ffffff"
-            _set_row_label(row_key, Text("▶", style=f"bold {text_hex}"))
+            _set_row_label(row_key, Text(self._centre(icon("play")), style=f"bold {text_hex}"))
 
         self._playing_index = new_index
 
@@ -744,7 +855,7 @@ class TrackTable(DataTable):
         self._selection_generation += 1
 
     def _mark_glyph(self, original: int) -> str:
-        return _MARK_GLYPH if original in self._marked else " "
+        return self._centre(_MARK_GLYPH if original in self._marked else " ")
 
     def _set_marks(self, marks: set[int], *, bump: bool = True) -> None:
         """Make *marks* the marked set, repainting only the rows that changed."""
@@ -864,6 +975,10 @@ class TrackTable(DataTable):
         if not self._refill_pending:
             self._refill_pending = True
             self.call_after_refresh(self._refill_after_layout)
+        # Covers load after the row heights settle, so the visible window is
+        # known by then.
+        if self.is_attached:
+            self.call_after_refresh(self._load_visible_covers)
 
     def _refill_after_layout(self) -> None:
         """Re-run the title fill against the settled layout (see above).
@@ -996,6 +1111,25 @@ class TrackTable(DataTable):
             original_idx = self._filtered_map[row_idx] if self._filtered_map else row_idx
             self.post_message(self.TrackSelected(self._tracks[row_idx], original_idx))
 
+    def _scrolled(self, _old: float, _new: float) -> None:
+        # Warm the rows that scrolled into view once scrolling pauses.
+        if self._warm_timer is not None:
+            self._warm_timer.stop()
+        self._warm_timer = self.set_timer(WARM_SCROLL_PAUSE, self._warm_visible)
+
+    def _warm_visible(self) -> None:
+        self._warm_timer = None
+        self._warm_rows(*self._visible_row_range())
+        self._load_visible_covers()
+
+    def _warm_rows(self, start: int, stop: int, *, ahead: bool = False) -> None:
+        """Resolve the songs of rows start..stop ahead of a click, on the app's spare resolvers."""
+        warm = getattr(self.app, "warm_streams", None)
+        if warm is None:
+            return
+        rows = self._tracks[max(0, start) : stop]
+        warm([t.get("video_id") or t.get("videoId") or "" for t in rows], ahead=ahead)
+
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Forward row highlight as a TrackHighlighted message and update SelectionInfoBar.
 
@@ -1003,6 +1137,8 @@ class TrackTable(DataTable):
         otherwise a freshly-mounted table fires RowHighlighted at row 0
         on init and stomps the sidebar's selection in the info bar.
         """
+        # Moving the cursor warms the rows just below it, where it is heading.
+        self._warm_rows(event.cursor_row + 1, event.cursor_row + 1 + WARM_AHEAD, ahead=True)
         row_idx = event.cursor_row
         track = self._tracks[row_idx] if 0 <= row_idx < len(self._tracks) else None
         self.post_message(self.TrackHighlighted(track, row_idx))

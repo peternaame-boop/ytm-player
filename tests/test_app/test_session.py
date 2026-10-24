@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ytm_player.app import _session as _session_module
 from ytm_player.app._mpris import MPRISMixin
 from ytm_player.app._playback import PlaybackMixin
 from ytm_player.app._session import SessionMixin
@@ -195,9 +196,7 @@ class TestSaveSessionResumeGuard:
 
         h._save_session_state()
 
-        import json
-
-        written = json.loads(target.read_text(encoding="utf-8"))
+        written = _saved(target)
         assert written["resume"] is None
 
     def test_resume_skipped_when_position_below_threshold(self, tmp_path, monkeypatch):
@@ -208,9 +207,7 @@ class TestSaveSessionResumeGuard:
 
         h._save_session_state()
 
-        import json
-
-        written = json.loads(target.read_text(encoding="utf-8"))
+        written = _saved(target)
         assert written["resume"] is None
 
     def test_resume_skipped_at_exact_boundary(self, tmp_path, monkeypatch):
@@ -222,9 +219,7 @@ class TestSaveSessionResumeGuard:
 
         h._save_session_state()
 
-        import json
-
-        written = json.loads(target.read_text(encoding="utf-8"))
+        written = _saved(target)
         assert written["resume"] is None
 
     def test_resume_saved_when_position_above_threshold(self, tmp_path, monkeypatch):
@@ -235,9 +230,7 @@ class TestSaveSessionResumeGuard:
 
         h._save_session_state()
 
-        import json
-
-        written = json.loads(target.read_text(encoding="utf-8"))
+        written = _saved(target)
         assert written["resume"] is not None
         assert written["resume"]["video_id"] == "abc"
         assert written["resume"]["position"] == 42.5
@@ -294,7 +287,10 @@ def _restore_host(tmp_path, monkeypatch, *, resume_on_launch: bool, queue_ids=("
 
 
 def _saved(target) -> dict:
-    return json.loads(target.read_text(encoding="utf-8"))
+    """session.json with the resume point that resume.json holds beside it."""
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    resume = json.loads(target.with_name("resume.json").read_text(encoding="utf-8"))
+    return {**saved, "resume": resume["resume"]}
 
 
 class TestUntouchedSessionPreserved:
@@ -740,3 +736,141 @@ class TestFirstRunHint:
         h = _fresh_session_host()
         await h._restore_session_state()
         assert h._first_run_hint_shown is False
+
+
+class TestLayoutAndAutosave:
+    """The lyrics panel and album art reopen as left, and the session saves while the app runs."""
+
+    def _host_with_file(self, tmp_path, monkeypatch, state: dict | None = None):
+        path = tmp_path / "session.json"
+        if state is not None:
+            path.write_text(json.dumps({"schema_version": 1, **state}), encoding="utf-8")
+        monkeypatch.setattr("ytm_player.config.paths.SESSION_STATE_FILE", path, raising=False)
+        h = _fresh_session_host()
+        h.settings.playback.resume_on_launch = False
+        h._apply_lyrics_sidebar = MagicMock()
+        art = MagicMock(display=True)
+        h.query_one = MagicMock(return_value=art)
+        h.player.volume = 35
+        h.player.current_track = None
+        h.queue.repeat_mode = RepeatMode.ALL
+        h.queue.shuffle_enabled = True
+        h.queue.current_index = 0
+        h._get_transliteration_state = lambda: False
+        return h, path, art
+
+    async def test_lyrics_and_album_art_restore_when_remembered(self, tmp_path, monkeypatch):
+        h, _path, art = self._host_with_file(
+            tmp_path, monkeypatch, {"lyrics_open": True, "album_art": False}
+        )
+        h.settings.ui.remember_layout = True
+        await h._restore_session_state()
+        assert h._lyrics_sidebar_open is True
+        h._apply_lyrics_sidebar.assert_called_once_with(True)
+        assert art.display is False
+
+    async def test_layout_is_not_restored_when_the_option_is_off(self, tmp_path, monkeypatch):
+        h, _path, art = self._host_with_file(
+            tmp_path, monkeypatch, {"lyrics_open": True, "album_art": False}
+        )
+        h.settings.ui.remember_layout = False
+        await h._restore_session_state()
+        assert h._lyrics_sidebar_open is False
+        assert art.display is True
+
+    def test_save_writes_volume_shuffle_repeat_and_layout(self, tmp_path, monkeypatch):
+        h, path, art = self._host_with_file(tmp_path, monkeypatch)
+        h._lyrics_sidebar_open = True
+        art.display = False
+        h._save_session_state()
+        saved = json.loads(path.read_text())
+        assert (saved["volume"], saved["shuffle"], saved["repeat"]) == (35, True, "all")
+        assert (saved["lyrics_open"], saved["album_art"]) == (True, False)
+
+    def test_autosave_skips_the_write_when_nothing_changed(self, tmp_path, monkeypatch):
+        h, path, _art = self._host_with_file(tmp_path, monkeypatch)
+        h._save_session_state()
+        stamp = path.stat().st_mtime_ns
+        h._save_session_state()
+        assert path.stat().st_mtime_ns == stamp
+        h.player.volume = 60
+        h._save_session_state()
+        assert json.loads(path.read_text())["volume"] == 60
+
+    def test_a_failing_autosave_warns_once(self, tmp_path, monkeypatch):
+        h, _path, _art = self._host_with_file(tmp_path, monkeypatch)
+        h.notify = MagicMock()
+        h._sidebar_per_page = {"x": object()}  # not JSON-serialisable
+        for _ in range(3):
+            h._save_session_state()
+        assert h.notify.call_count == 1
+
+
+class TestResumeFileSplit:
+    """The resume point lives in resume.json, so playback leaves session.json alone."""
+
+    def _playing_host(self, tmp_path, monkeypatch):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=True)
+        h._session_restored = True
+        h._loaded_resume = None
+        h.queue.add_multiple([{"video_id": "A"}, {"video_id": "B"}])
+        h.player.current_track = {"video_id": "A"}
+        return h, target
+
+    def test_playback_rewrites_only_the_resume_file(self, tmp_path, monkeypatch):
+        h, target = self._playing_host(tmp_path, monkeypatch)
+        writes: list[str] = []
+        real = _session_module._write_atomic
+        monkeypatch.setattr(
+            _session_module, "_write_atomic", lambda p, t: (writes.append(p.name), real(p, t))
+        )
+        for second in range(2, 12):
+            h.player.position = float(second)
+            h._save_session_state()
+        assert writes.count("session.json") == 1
+        assert writes.count("resume.json") == 10
+        assert _saved(target)["resume"]["position"] == 11.0
+
+    def test_a_queue_change_rewrites_session_json(self, tmp_path, monkeypatch):
+        h, target = self._playing_host(tmp_path, monkeypatch)
+        h.player.position = 5.0
+        h._save_session_state()
+        h.queue.add({"video_id": "C"})
+        h._save_session_state()
+        assert [t["video_id"] for t in _saved(target)["queue_tracks"]] == ["A", "B", "C"]
+
+    def test_force_writes_a_track_edited_in_place(self, tmp_path, monkeypatch):
+        h, target = self._playing_host(tmp_path, monkeypatch)
+        h._save_session_state()
+        h.queue.tracks[0]["title"] = "Renamed"
+        h._save_session_state()
+        assert "title" not in _saved(target)["queue_tracks"][0]
+        h._save_session_state(force=True)
+        assert _saved(target)["queue_tracks"][0]["title"] == "Renamed"
+
+    async def test_restore_prefers_resume_json(self, tmp_path, monkeypatch):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=True)
+        newer = {"video_id": "B", "position": 99.0, "playlist_id": "PL"}
+        target.with_name("resume.json").write_text(
+            json.dumps({"schema_version": 1, "resume": newer}), encoding="utf-8"
+        )
+        await h._restore_session_state()
+        assert h._loaded_resume == newer
+        assert h._pending_resume_video_id == "B"
+
+    async def test_a_cleared_resume_json_overrides_the_legacy_key(self, tmp_path, monkeypatch):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=True)
+        target.with_name("resume.json").write_text(
+            json.dumps({"schema_version": 1, "resume": None}), encoding="utf-8"
+        )
+        await h._restore_session_state()
+        assert h._loaded_resume is None
+
+    @pytest.mark.parametrize("content", ["not json", "[]", '{"schema_version": 99}'])
+    async def test_an_unusable_resume_json_falls_back_to_session_json(
+        self, tmp_path, monkeypatch, content
+    ):
+        h, target = _restore_host(tmp_path, monkeypatch, resume_on_launch=True)
+        target.with_name("resume.json").write_text(content, encoding="utf-8")
+        await h._restore_session_state()
+        assert h._loaded_resume == _RESUME_A

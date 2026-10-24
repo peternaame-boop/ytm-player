@@ -15,6 +15,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Rule, Static
 
 from ytm_player.config.settings import get_settings
+from ytm_player.ui.icons import icon
 from ytm_player.ui.selection_info_bar import SelectionChanged
 from ytm_player.utils.formatting import copy_to_clipboard, truncate
 
@@ -34,40 +35,62 @@ class LibraryPanel(Widget):
     """
 
     DEFAULT_CSS = """
+    /* No box: a quiet heading, then names only with room between them. */
     LibraryPanel {
         height: 1fr;
-        border: solid $secondary;
-        padding: 0 1;
+        padding: 1 1 0 1;
+        background: $background;
     }
 
     LibraryPanel .panel-title {
         text-style: bold;
-        color: $text;
+        color: $text-muted;
         height: 1;
-        padding: 0 0 0 0;
+        padding: 0 1;
+        margin-bottom: 1;
     }
 
     LibraryPanel .panel-count {
-        color: $text-muted;
-        dock: bottom;
-        height: 1;
+        display: none;
+    }
+
+    LibraryPanel ListView ListItem {
+        padding: 0 1;
+        margin-bottom: 1;
     }
 
     LibraryPanel ListView {
         height: 1fr;
         width: 1fr;
+        background: $background;
     }
 
     LibraryPanel ListView ListItem:hover {
-        background: $accent 30%;
+        background: $boost;
     }
 
     LibraryPanel.truncate-items ListView ListItem {
-        height: 1;
+        height: 2;
     }
 
     LibraryPanel.truncate-items ListView ListItem Static {
+        height: 2;
+    }
+
+    /* The web app's "+ New playlist" pill, above the list. */
+    LibraryPanel .panel-new {
+        display: none;
+        width: auto;
         height: 1;
+        padding: 0 2;
+        margin: 0 1 1 1;
+        background: $boost;
+    }
+    LibraryPanel .panel-new.visible {
+        display: block;
+    }
+    LibraryPanel .panel-new:hover {
+        background: $primary 30%;
     }
 
     LibraryPanel .panel-loading {
@@ -107,6 +130,9 @@ class LibraryPanel(Widget):
             self.item_data = item_data
             self.panel_id = panel_id
 
+    class NewRequested(Message):
+        """The "+ New playlist" button was clicked."""
+
     class ItemRightClicked(Message):
         """Emitted when an item (or empty space) is right-clicked."""
 
@@ -136,6 +162,7 @@ class LibraryPanel(Widget):
 
     def compose(self) -> ComposeResult:
         yield Label(self._title, classes="panel-title")
+        yield Static(f"{icon('save')}  New playlist", id=self._new_id, classes="panel-new")
         yield Static("Loading...", classes="panel-loading")
         yield ListView(id=f"{self.id}-list")
         yield Static("", classes="panel-count")
@@ -177,10 +204,8 @@ class LibraryPanel(Widget):
         """Optimistically insert *item* at the top of the panel."""
         self._items.insert(0, item)
         self._filtered_items.insert(0, item)
-        full_text = self._format_item(item)
-        lbl = Static(self._render_text(full_text))
         list_view = self.query_one(ListView)
-        list_view.insert(0, [ListItem(lbl)])
+        list_view.insert(0, [ListItem(self._item_label(item))])
         count_label = self.query_one(".panel-count", Static)
         total = len(self._items)
         shown = len(self._filtered_items)
@@ -239,9 +264,7 @@ class LibraryPanel(Widget):
         list_view = self.query_one(ListView)
         list_view.clear()
         for item in items:
-            full_text = self._format_item(item)
-            lbl = Static(self._render_text(full_text))
-            list_view.append(ListItem(lbl))
+            list_view.append(ListItem(self._item_label(item)))
         count_label = self.query_one(".panel-count", Static)
         total = len(self._items)
         shown = len(items)
@@ -252,10 +275,42 @@ class LibraryPanel(Widget):
 
     def _format_item(self, item: dict[str, Any]) -> str:
         title = item.get("title", item.get("name", "Unknown"))
-        count = item.get("count")
-        if count is not None:
-            return f"{title} ({count} tracks)"
+        # Names only: the track count cut most names off mid-word.
         return title
+
+    @staticmethod
+    def _owner(item: dict[str, Any]) -> str:
+        """The line under a playlist's name, as the web app shows it.
+
+        That is the owner, or the subtitle when there is none, such as "Auto playlist".
+        """
+        authors = item.get("author")
+        if isinstance(authors, list):
+            names = [a.get("name", "") for a in authors if isinstance(a, dict)]
+            if any(names):
+                return ", ".join(n for n in names if n)
+        description = item.get("description")
+        return description if isinstance(description, str) else ""
+
+    def _item_label(self, item: dict[str, Any]) -> Static:
+        """A list row: the name, with the owner under it in the muted colour."""
+        from rich.text import Text
+
+        from ytm_player.ui.theme import get_theme
+
+        text = Text(self._render_text(self._format_item(item)))
+        owner = self._owner(item)
+        if owner:
+            text.append("\n" + self._render_text(owner), style=get_theme().muted_text)
+        return Static(text)
+
+    @property
+    def _new_id(self) -> str:
+        return f"{self.id or 'panel'}-new"
+
+    def show_new_button(self, visible: bool = True) -> None:
+        """Show the "+ New playlist" button above the list."""
+        self.query_one(".panel-new", Static).set_class(visible, "visible")
 
     def _render_text(self, full_text: str) -> str:
         """Apply the configured overflow rule to *full_text*.
@@ -388,6 +443,10 @@ class LibraryPanel(Widget):
             return None
 
     def on_click(self, event: Click) -> None:
+        if event.button == 1 and getattr(event.widget, "id", None) == self._new_id:
+            event.stop()
+            self.post_message(self.NewRequested())
+            return
         if event.button == 3:
             event.stop()
             idx = self._find_clicked_item_index(event)
@@ -436,6 +495,17 @@ class LibraryPanel(Widget):
 # ---------------------------------------------------------------------------
 
 
+# Pinned items that open a page directly, and the page each one opens.
+# Mood pages and the Browse tabs belong to Explore, so Explore stays highlighted there.
+_NAV_PAGES = {"ps-nav-home": "home", "ps-nav-explore": "explore", "ps-nav-library": "library"}
+_PINNED_PAGE = {
+    **_NAV_PAGES,
+    "ps-nav-liked": "liked_songs",
+    "ps-nav-recent": "recently_played",
+    "ps-nav-queue": "queue",
+}
+
+
 class PlaylistSidebar(Widget):
     """Persistent playlist sidebar visible across all views."""
 
@@ -443,6 +513,7 @@ class PlaylistSidebar(Widget):
     PlaylistSidebar {
         width: 30;
         height: 1fr;
+        background: $background;
         border-right: solid $border;
     }
 
@@ -450,19 +521,22 @@ class PlaylistSidebar(Widget):
         display: none;
     }
 
+    /* Same rhythm as the playlist list: one blank row between items. */
     #ps-pinned-nav {
         height: auto;
-        padding: 0 1;
+        padding: 1 1 0 1;
+        background: $background;
     }
 
     .ps-pinned-item {
         height: 1;
         padding: 0 1;
+        margin-bottom: 1;
         color: $text-muted;
     }
 
     .ps-pinned-item:hover {
-        background: $accent 30%;
+        background: $boost;
         color: $text;
     }
 
@@ -503,6 +577,9 @@ class PlaylistSidebar(Widget):
             super().__init__()
             self.item_data = item_data
 
+    class NewPlaylistRequested(Message):
+        """The "+ New playlist" button above the playlists was clicked."""
+
     class NavItemClicked(Message):
         """A pinned nav item (Liked Songs / Recently Played) was clicked."""
 
@@ -516,9 +593,27 @@ class PlaylistSidebar(Widget):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="ps-pinned-nav"):
-            yield Static("\u2665 Liked Songs", id="ps-nav-liked", classes="ps-pinned-item")
-            yield Static("\u23f1 Recently Played", id="ps-nav-recent", classes="ps-pinned-item")
-            yield Static("\u266b Discovery Mix", id="ps-nav-discovery", classes="ps-pinned-item")
+            # The web app's left menu: Home, Explore, Library.
+            yield Static(f"{icon('home')}  Home", id="ps-nav-home", classes="ps-pinned-item")
+            yield Static(
+                f"{icon('explore')}  Explore", id="ps-nav-explore", classes="ps-pinned-item"
+            )
+            yield Static(
+                f"{icon('library')}  Library", id="ps-nav-library", classes="ps-pinned-item"
+            )
+            yield Static(
+                f"{icon('liked')}  Liked Songs", id="ps-nav-liked", classes="ps-pinned-item"
+            )
+            yield Static(
+                f"{icon('recent')}  Recently Played", id="ps-nav-recent", classes="ps-pinned-item"
+            )
+            yield Static(
+                f"{icon('discovery')}  Discovery Mix",
+                id="ps-nav-discovery",
+                classes="ps-pinned-item",
+            )
+            yield Static(f"{icon('queue')}  Queue", id="ps-nav-queue", classes="ps-pinned-item")
+            yield Static(f"{icon('import')}  Import", id="ps-nav-import", classes="ps-pinned-item")
         yield Rule(id="ps-separator")
         yield LibraryPanel("Playlists", id="ps-playlists", instant_select=True)
         yield Rule(id="ps-separator-bottom")
@@ -526,6 +621,7 @@ class PlaylistSidebar(Widget):
     def on_mount(self) -> None:
         settings = get_settings()
         self.styles.width = settings.ui.sidebar_width
+        self.query_one("#ps-playlists", LibraryPanel).show_new_button()
 
     async def ensure_loaded(self) -> None:
         """Load playlists if not already loaded. Gated by auth readiness."""
@@ -552,6 +648,9 @@ class PlaylistSidebar(Widget):
 
     async def refresh_playlists(self) -> None:
         """Force-reload playlists."""
+        from ytm_player.ui.pages.library import LibraryPage
+
+        LibraryPage.invalidate_grid_cache()  # the Library grid shows the same list
         self._loaded = False
         await self.ensure_loaded()
 
@@ -578,13 +677,20 @@ class PlaylistSidebar(Widget):
         event.stop()
         self.post_message(self.PlaylistRightClicked(event.item_data))
 
+    def on_library_panel_new_requested(self, event: LibraryPanel.NewRequested) -> None:
+        event.stop()
+        self.post_message(self.NewPlaylistRequested())
+
     # -- Pinned nav clicks --
 
     def on_click(self, event: Click) -> None:
         target = event.widget
         if target is None:
             return
-        if target.id == "ps-nav-liked":
+        if target.id in _NAV_PAGES:
+            event.stop()
+            self.post_message(self.NavItemClicked(_NAV_PAGES[target.id]))
+        elif target.id == "ps-nav-liked":
             event.stop()
             self.post_message(self.NavItemClicked("liked_songs"))
         elif target.id == "ps-nav-recent":
@@ -593,6 +699,18 @@ class PlaylistSidebar(Widget):
         elif target.id == "ps-nav-discovery":
             event.stop()
             self.post_message(self.NavItemClicked("discovery_mix"))
+        elif target.id == "ps-nav-queue":
+            event.stop()
+            self.post_message(self.NavItemClicked("queue"))
+        elif target.id == "ps-nav-import":
+            event.stop()
+            self.post_message(self.NavItemClicked("spotify_import"))
+
+    def set_active_page(self, page_name: str) -> None:
+        """Highlight the pinned item for the page now showing, as the web menu does."""
+        page_name = "explore" if page_name in ("mood", "browse") else page_name
+        for item in self.query(".ps-pinned-item"):
+            item.set_class(_PINNED_PAGE.get(item.id or "") == page_name, "active")
 
     # -- Public helpers for sidebar actions --
 

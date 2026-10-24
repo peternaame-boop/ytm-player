@@ -14,6 +14,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import io
+import itertools
 import json
 import logging
 import os
@@ -23,7 +24,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
@@ -63,6 +64,27 @@ _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
     "helium": ("net.imput.helium", "Chromium"),
 }
 _yt_dlp_patched = False
+
+# Cookies that carry the Google sign-in. A browser profile that has used
+# YouTube for a while holds hundreds of youtube.com cookies, and sending all
+# of them makes a Cookie header so large that YouTube answers
+# 413 Request Entity Too Large, which ytmusicapi surfaces as a JSON error.
+_AUTH_COOKIE_NAMES = frozenset(
+    {
+        "SID", "HSID", "SSID", "APISID", "SAPISID",
+        "__Secure-1PSID", "__Secure-3PSID",
+        "__Secure-1PAPISID", "__Secure-3PAPISID",
+        "__Secure-1PSIDTS", "__Secure-3PSIDTS",
+        "__Secure-1PSIDCC", "__Secure-3PSIDCC", "SIDCC",
+        "LOGIN_INFO", "PREF", "VISITOR_INFO1_LIVE", "YSC",
+    }
+)  # fmt: skip
+
+
+def _auth_cookie_header(cookies: Iterable[Cookie]) -> str:
+    """Cookie header for the API session: only the sign-in cookies, one per name."""
+    kept = {c.name: c.value for c in cookies if c.name in _AUTH_COOKIE_NAMES}
+    return "; ".join(f"{name}={value}" for name, value in kept.items())
 
 
 def _zen_profile_roots() -> list[Path]:
@@ -764,7 +786,12 @@ def _probe_account(auth_path: str, slot: int) -> _ProbedAccount | None:
     raw form because ytmusicapi only parses the display fields out of it.
     """
     ytm = YTMusic(auth_path)
-    account = ytm.get_account_info()
+    try:
+        account = ytm.get_account_info()
+    except KeyError:
+        # A signed-out or expired session answers with a menu that has no
+        # account header. That is "no account here", not a bad request.
+        return None
     name = account.get("accountName")
     if not name:
         return None
@@ -909,17 +936,24 @@ class AuthManager:
         detected = self._detect_browser()
         if detected is None:
             return False
-        browser, cookies, jar = detected
-        try:
-            return self._save_youtube_cookies(
-                cookies,
-                stream_jar=jar,
-                expected_channel_id=expected_channel_id,
-                recorded=recorded,
-                owner=owner,
-            )
-        except Exception:
-            logger.debug("Auto-refresh failed", exc_info=True)
+        # The first browser with sign-in cookies is not always the one the
+        # account lives in: a stale Firefox profile sorts before Zen. So a
+        # refusal moves on to every other browser that has sign-in cookies.
+        candidates = itertools.chain(
+            [detected], self._browser_candidates(skip=frozenset({detected[0]}))
+        )
+        for browser, cookies, jar in candidates:
+            try:
+                if self._save_youtube_cookies(
+                    cookies,
+                    stream_jar=jar,
+                    expected_channel_id=expected_channel_id,
+                    recorded=recorded,
+                    owner=owner,
+                ):
+                    return True
+            except Exception:
+                logger.debug("Auto-refresh from %s failed", browser, exc_info=True)
         return False
 
     # ── Setup entry point ────────────────────────────────────────────
@@ -958,16 +992,25 @@ class AuthManager:
             print()
             return self._setup_manual()
 
-        # Auto-detect browser.
-        detected = self._detect_browser()
-        if detected:
-            browser, cookies, jar = detected
+        # Auto-detect browser, then try the rest. A browser with stale
+        # sign-in cookies sorts first here, as Firefox does before Zen, and
+        # its cookies fail the account probe while a later browser works.
+        tried = False
+        for browser, cookies, jar in self._browser_candidates():
+            tried = True
             print(f"  Found YouTube cookies in {browser}.")
             print("  Extracting automatically...")
             print()
-            if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar):
-                return True
-            print("  Auto-extraction failed. Falling back to manual setup.")
+            try:
+                if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar):
+                    return True
+            except Exception:
+                logger.debug("Setup from %s failed", browser, exc_info=True)
+            print(f"  {browser} did not authenticate. Trying the next browser.")
+            print()
+        if tried:
+            print("  No browser had a working YouTube Music sign-in.")
+            print("  Falling back to manual setup.")
             print()
 
         return self._setup_manual()
@@ -975,24 +1018,31 @@ class AuthManager:
     # ── Browser cookie extraction ────────────────────────────────────
 
     @staticmethod
-    def _detect_browser() -> tuple[str, list, list] | None:
-        """Find a browser that has YouTube cookies.
+    def _browser_candidates(
+        skip: frozenset[str] = frozenset(),
+    ) -> Iterator[tuple[str, list, list]]:
+        """Yield every browser, in preference order, that has YouTube sign-in cookies.
 
-        Returns ``(browser, youtube_cookies, full_jar)`` — the full jar feeds
-        the stream cookiejar (youtube.com + google.com) via _commit_session.
+        Each item is ``(browser, youtube_cookies, full_jar)``. The full jar
+        feeds the stream cookiejar (youtube.com + google.com) via _commit_session.
         """
         _patch_yt_dlp_browsers()
 
         for browser in _BROWSERS:
+            if browser in skip:
+                continue
             try:
                 jar = _extract_browser_jar(browser)
                 yt_cookies = [c for c in jar if c.domain == ".youtube.com"]
                 if any(c.name in ("SAPISID", "__Secure-3PAPISID") for c in yt_cookies):
-                    return browser, yt_cookies, list(jar)
+                    yield browser, yt_cookies, list(jar)
             except Exception:
                 logger.debug("Browser %s not available", browser, exc_info=True)
-                continue
-        return None
+
+    @staticmethod
+    def _detect_browser() -> tuple[str, list, list] | None:
+        """The first browser that has YouTube sign-in cookies, or None."""
+        return next(AuthManager._browser_candidates(), None)
 
     def _refresh_from_cookies_file(
         self,
@@ -1119,7 +1169,7 @@ class AuthManager:
         session as expired and the user runs ``ytm setup`` once. The commit
         itself refuses when the files no longer match *owner*.
         """
-        cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
+        cookie_str = _auth_cookie_header(cookies)
 
         # Verify we have the critical SAPISID cookie.
         try:

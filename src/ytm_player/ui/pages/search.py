@@ -1,4 +1,10 @@
-"""Search page — query YouTube Music and display categorized results."""
+"""Search page — query YouTube Music and display categorized results.
+
+Under the search box sit the web app's filter chips: All, Songs, Albums,
+Artists and Community playlists. All shows the top result, songs and one shelf
+per category. Any other chip shows only that category and fetches more of it,
+songs as a full-width list and the rest as a grid of cover cards.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +12,9 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ItemGrid, Vertical, VerticalScroll
 from textual.events import Click
 from textual.message import Message
 from textual.reactive import reactive
@@ -17,7 +24,17 @@ from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from ytm_player.config.keymap import Action
 from ytm_player.config.settings import get_settings
+from ytm_player.ui.icons import icon
+from ytm_player.ui.pages.home import (
+    CARD_WIDTH,
+    HomeCard,
+    Shelf,
+    card_subtitle,
+    navigate_browse_item,
+    relayout_soon,
+)
 from ytm_player.ui.theme import get_theme
+from ytm_player.ui.widgets.cover import Cover, best_thumbnail
 from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.formatting import (
     copy_to_clipboard,
@@ -260,6 +277,196 @@ class SuggestionList(Widget):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Web layout: top result card and shelves of cover cards
+# ---------------------------------------------------------------------------
+
+# Shelf title and the panel id its right-click menu maps to, per category.
+# The filter chips, as the web app labels them, in its order.
+FILTER_CHIPS = (("all", "All"), ("songs", "Songs"), ("albums", "Albums"),
+                ("artists", "Artists"), ("playlists", "Community playlists"))  # fmt: skip
+# Results a chip other than All fetches for its category.
+FILTERED_LIMIT = 40
+
+
+class SearchChips(Horizontal):
+    """All, Songs, Albums, Artists, Community playlists. The active chip is filled."""
+
+    DEFAULT_CSS = """
+    SearchChips { height: 2; padding: 0 1; display: none; }
+    SearchChips.visible { display: block; }
+    SearchChips > .search-chip { width: auto; height: 1; padding: 0 2; margin-right: 1;
+        background: $boost; }
+    SearchChips > .search-chip:hover { background: $primary 30%; }
+    SearchChips > .search-chip.-active { background: $foreground; color: $background; }
+    """
+
+    def compose(self) -> ComposeResult:
+        for key, label in FILTER_CHIPS:
+            yield Static(label, id=f"chip-{key}", classes="search-chip")
+
+    def on_click(self, event: Click) -> None:
+        widget = event.widget
+        if widget is None or not (widget.id or "").startswith("chip-") or event.button != 1:
+            return
+        event.stop()
+        page = next((a for a in self.ancestors if isinstance(a, SearchPage)), None)
+        if page is not None:
+            page.show_filter((widget.id or "").removeprefix("chip-"))
+
+
+class SpellingNote(Horizontal):
+    """The web app's spelling note above the results.
+
+    "Showing results for <corrected>  Search instead for <original>" when the
+    server corrected the query, or "Did you mean: <corrected>" when it only
+    suggests one. Changed words are in the primary colour. Each query is a link.
+    """
+
+    DEFAULT_CSS = """
+    SpellingNote { height: 2; padding: 0 1; display: none; }
+    SpellingNote.visible { display: block; }
+    SpellingNote > Static { width: auto; height: 1; }
+    SpellingNote > .spell-label { color: $text-muted; margin-right: 1; }
+    SpellingNote > .spell-link:hover { text-style: underline; }
+    SpellingNote > #spell-original { margin-right: 0; }
+    SpellingNote > #spell-instead { margin-left: 3; }
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.correction: dict[str, Any] | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="spell-lead", classes="spell-label")
+        yield Static("", id="spell-corrected", classes="spell-link")
+        yield Static("", id="spell-instead", classes="spell-label")
+        yield Static("", id="spell-original", classes="spell-link")
+
+    def show(self, correction: dict[str, Any] | None) -> None:
+        """Show *correction* (see YTMusicService.get_search_correction), or hide on None."""
+        self.correction = correction
+        self.set_class(correction is not None, "visible")
+        if correction is None:
+            return
+        primary = get_theme().primary
+        corrected = Text()
+        for text, changed in correction.get("runs") or [(correction["corrected"], True)]:
+            corrected.append(text, style=primary if changed else "")
+        showing = correction.get("kind") == "showing"
+        self.query_one("#spell-lead", Static).update(
+            "Showing results for" if showing else "Did you mean:"
+        )
+        self.query_one("#spell-corrected", Static).update(corrected)
+        self.query_one("#spell-instead", Static).update("Search instead for" if showing else "")
+        self.query_one("#spell-original", Static).update(
+            correction.get("original", "") if showing else ""
+        )
+        for widget_id in ("#spell-instead", "#spell-original"):
+            self.query_one(widget_id).display = showing
+
+    def on_click(self, event: Click) -> None:
+        widget = event.widget
+        if widget is None or event.button != 1 or self.correction is None:
+            return
+        page = next((a for a in self.ancestors if isinstance(a, SearchPage)), None)
+        if page is None:
+            return
+        if widget.id == "spell-corrected":
+            event.stop()
+            page.search_for(self.correction["corrected"])
+        elif widget.id == "spell-original":
+            event.stop()
+            page.search_for(self.correction["original"], ignore_spelling=True)
+
+
+_SHELVES = (
+    ("albums", "Albums", "albums-panel"),
+    ("artists", "Artists", "artists-panel"),
+    ("playlists", "Community playlists", "playlists-panel"),
+)
+_PANEL_FOR_TYPE = {"album": "albums-panel", "single": "albums-panel", "ep": "albums-panel",
+                   "artist": "artists-panel", "playlist": "playlists-panel"}  # fmt: skip
+
+
+def as_card(item: dict[str, Any]) -> dict[str, Any]:
+    """A search result shaped for a cover card: artists carry their name in ``artist``."""
+    card = dict(item)
+    if not card.get("title"):
+        artist = (card.get("artists") or [{}])[0]
+        card["title"] = card.get("artist") or artist.get("name", "")
+        card.setdefault("browseId", artist.get("id"))
+    if (card.get("resultType") or "").lower() == "playlist" and not card.get("description"):
+        card["description"] = " • ".join(
+            p for p in ("Playlist", card.get("author") or "", card.get("itemCount") or "") if p
+        )
+    if (card.get("resultType") or "").lower() == "artist" and card.get("subscribers"):
+        card["description"] = f"Artist • {card['subscribers']} subscribers"
+    return card
+
+
+def top_result(raw: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The item an unfiltered search marks as its top result, shaped for a card."""
+    for item in raw:
+        if item.get("category") == "Top result":
+            return as_card(item)
+    return None
+
+
+class TopResult(Horizontal, can_focus=True):
+    """The web's "Top result" card: a cover, the name, what it is, and Play for a song or album."""
+
+    DEFAULT_CSS = """
+    TopResult { height: 13; width: 1fr; padding: 1 1 0 1; background: $boost; }
+    TopResult > Cover { width: 22; height: 11; margin-right: 2; }
+    TopResult .top-text { width: 1fr; height: auto; }
+    TopResult .top-title { text-style: bold; margin-top: 3; }
+    TopResult .top-sub { width: 1fr; color: $text-muted; }
+    TopResult #top-play { width: auto; height: 3; padding: 1 2; margin-top: 1;
+        background: $foreground; color: $background; text-style: bold; }
+    TopResult #top-play:hover { background: $primary; }
+    TopResult:focus .top-title { color: $accent; text-style: bold underline; }
+    """
+
+    def __init__(self, item: dict[str, Any], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.item = item
+
+    def compose(self) -> ComposeResult:
+        kind = (self.item.get("resultType") or "").lower()
+        yield Cover(best_thumbnail(self.item, min_width=226))
+        with Vertical(classes="top-text"):
+            yield Label(self.item.get("title", ""), classes="top-title")
+            yield Label(card_subtitle(self.item) if kind != "artist" else
+                        self.item.get("description") or "Artist", classes="top-sub")  # fmt: skip
+            if kind in ("song", "video") or (kind in ("album", "playlist") and self._playlist_id):
+                yield Static(f"{icon('play')}  Play", id="top-play")
+
+    @property
+    def _playlist_id(self) -> str:
+        return self.item.get("playlistId") or self.item.get("audioPlaylistId") or ""
+
+    def on_click(self, event: Click) -> None:
+        if event.button != 1:
+            return
+        event.stop()
+        play = event.widget is not None and event.widget.id == "top-play"
+        self.app.run_worker(self._open(play=play), group="search-open", exclusive=True)
+
+    async def _open(self, *, play: bool) -> None:
+        host = cast("YTMHostBase", self.app)
+        kind = (self.item.get("resultType") or "").lower()
+        if play and kind in ("album", "playlist"):
+            await host._play_playlist(self._playlist_id, self.item.get("title", ""))
+        else:
+            await navigate_browse_item(host, self.item)
+
+
+# ---------------------------------------------------------------------------
+# Search page
+# ---------------------------------------------------------------------------
+
+
 class SearchPage(Widget):
     """Full search page with input, suggestions, and categorized result panels.
 
@@ -302,6 +509,18 @@ class SearchPage(Widget):
 
     #search-results {
         height: 1fr;
+        padding: 0 2;
+    }
+
+    #search-top {
+        height: 15;
+        margin-bottom: 1;
+    }
+
+    #top-result-box {
+        width: 1fr;
+        min-width: 40;
+        margin-right: 2;
     }
 
     #songs-panel {
@@ -310,18 +529,12 @@ class SearchPage(Widget):
         padding: 0 1;
     }
 
-    #albums-panel {
-        width: 1fr;
-    }
-
-    #artists-panel {
-        width: 1fr;
-    }
-
-    #playlists-panel {
+    #search-shelves {
         height: auto;
-        max-height: 10;
-        width: 1fr;
+    }
+
+    .search-legacy-panel {
+        display: none;
     }
 
     #suggestion-overlay {
@@ -353,17 +566,30 @@ class SearchPage(Widget):
         border: solid $accent;
     }
 
-    #albums-panel:focus-within {
-        border: solid $accent;
+    #search-filtered {
+        display: none;
+        height: auto;
+        padding: 0 1;
     }
 
-    #artists-panel:focus-within {
-        border: solid $accent;
+    SearchPage.-only-songs #top-result-box,
+    SearchPage.-only-songs #search-shelves {
+        display: none;
     }
 
-    #playlists-panel:focus-within {
-        border: solid $accent;
+    SearchPage.-only-songs #search-top {
+        height: 80vh;
     }
+
+    SearchPage.-only-cards #search-top,
+    SearchPage.-only-cards #search-shelves {
+        display: none;
+    }
+
+    SearchPage.-only-cards #search-filtered {
+        display: block;
+    }
+
     """
 
     search_mode: reactive[str] = reactive("music")
@@ -402,7 +628,14 @@ class SearchPage(Widget):
             "albums": [],
             "artists": [],
             "playlists": [],
+            "top": [],
         }
+        self.search_filter = "all"
+        # More results per (query, chip), fetched the first time a chip is picked.
+        self._filtered_cache: dict[tuple[str, str, bool], list[dict[str, Any]]] = {}
+        # True while the shown results are for the query as typed, after
+        # "Search instead for" turned the server's spelling correction off.
+        self._ignore_spelling = False
         # State restoration from navigation.
         self._restore_query = last_query
         self._restore_mode = search_mode
@@ -421,17 +654,26 @@ class SearchPage(Widget):
                 yield Static(f"[{mode_color}]▶[/{mode_color}] Music", id="search-mode")
             yield SuggestionList(id="suggestion-overlay")
             yield Static("", id="loading-msg", classes="loading-indicator")
-            with Horizontal(id="search-results"):
-                with Vertical(id="songs-panel"):
-                    yield Label("Songs", classes="panel-title")
-                    yield TrackTable(
-                        show_album=True,
-                        show_index=True,
-                        id="songs-table",
-                    )
-                yield SearchResultPanel("Albums", id="albums-panel")
-                yield SearchResultPanel("Artists", id="artists-panel")
-            yield SearchResultPanel("Playlists", id="playlists-panel")
+            yield SpellingNote(id="spelling-note")
+            yield SearchChips(id="search-chips")
+            with VerticalScroll(id="search-results"):
+                with Horizontal(id="search-top"):
+                    with Vertical(id="top-result-box"):
+                        yield Label("Top result", classes="panel-title")
+                    with Vertical(id="songs-panel"):
+                        yield Label("Songs", classes="panel-title")
+                        yield TrackTable(
+                            show_album=True,
+                            show_index=True,
+                            id="songs-table",
+                        )
+                yield Vertical(id="search-shelves")
+                yield ItemGrid(id="search-filtered", min_column_width=CARD_WIDTH)
+            # The text panels stay for their keyboard and menu handlers. The
+            # shelves above show the same results as cover cards, as on the web.
+            for name, pid in (("Albums", "albums"), ("Artists", "artists"),
+                              ("Playlists", "playlists")):  # fmt: skip
+                yield SearchResultPanel(name, id=f"{pid}-panel", classes="search-legacy-panel")
 
     def on_mount(self) -> None:
         if self._restore_mode:
@@ -492,6 +734,7 @@ class SearchPage(Widget):
             "albums": [],
             "artists": [],
             "playlists": [],
+            "top": [],
         }
 
     def get_nav_state(self) -> dict[str, Any]:
@@ -705,12 +948,27 @@ class SearchPage(Widget):
     # Search execution
     # ------------------------------------------------------------------
 
-    def _start_search(self, query: str) -> None:
+    def search_for(self, query: str, *, ignore_spelling: bool = False) -> None:
+        """Put *query* in the search box and search it, as the spelling note's links do."""
+        search_input = self.query_one("#search-input", Input)
+        if search_input.value != query:
+            # Same guard as a picked suggestion: the Changed event must not
+            # open the suggestions overlay over the new results.
+            self._restoring = True
+            search_input.value = query
+        self._hide_suggestions()
+        self._last_query = query
+        self._start_search(query, ignore_spelling=ignore_spelling)
+
+    def _start_search(self, query: str, *, ignore_spelling: bool = False) -> None:
         """Run the search as this page's worker.
 
         A suggestions fetch still in flight is cancelled: landing after a
         fast search, it would cover the results with the overlay.
+        *ignore_spelling* searches the query as typed. A new query typed or
+        picked by the user always starts with the server's correction on.
         """
+        self._ignore_spelling = ignore_spelling
         self.workers.cancel_group(self, self.SUGGEST_GROUP)
         self.run_worker(
             self._execute_search(query), name="search", group=self.SEARCH_GROUP, exclusive=True
@@ -722,14 +980,13 @@ class SearchPage(Widget):
         self._update_loading("Searching...")
 
         try:
-            if self.search_mode == "music":
-                results = await self._search_music(query)
-            else:
-                results = await self._search_all(query)
+            search = self._search_music if self.search_mode == "music" else self._search_all
+            results, correction = await asyncio.gather(search(query), self._fetch_correction(query))
 
             self._search_results = results
             self._last_query = query
             self._populate_results(results)
+            self.query_one("#spelling-note", SpellingNote).show(correction)
 
             # Log the search to history.
             total_count = sum(len(v) for v in results.values())
@@ -759,6 +1016,21 @@ class SearchPage(Widget):
         finally:
             self.is_loading = False
 
+    def _spelling_kwargs(self) -> dict[str, Any]:
+        """Search keywords for the current query: ignore_spelling only when it is on."""
+        return {"ignore_spelling": True} if self._ignore_spelling else {}
+
+    async def _fetch_correction(self, query: str) -> dict[str, Any] | None:
+        """The spelling note for *query*, fetched beside the results. None on any failure."""
+        ytmusic = cast("YTMHostBase", self.app).ytmusic
+        if ytmusic is None:
+            return None
+        try:
+            return await ytmusic.get_search_correction(query, ignore_spelling=self._ignore_spelling)
+        except Exception:
+            logger.exception("Spelling note lookup failed for %r", query)
+            return None
+
     async def _search_music(self, query: str) -> dict[str, list[dict[str, Any]]]:
         """Execute filtered searches for each category (music-only mode)."""
         results: dict[str, list[dict[str, Any]]] = {
@@ -766,21 +1038,26 @@ class SearchPage(Widget):
             "albums": [],
             "artists": [],
             "playlists": [],
+            "top": [],
         }
 
         ytmusic = cast("YTMHostBase", self.app).ytmusic
         assert ytmusic is not None
         # Run all four searches concurrently.
         tasks = {
-            category: ytmusic.search(query, filter=api_filter, limit=10)
+            category: ytmusic.search(query, filter=api_filter, limit=10, **self._spelling_kwargs())
             for category, api_filter in self._MUSIC_FILTERS.items()
         }
+        tasks["top"] = ytmusic.search(query, filter=None, limit=1, **self._spelling_kwargs())
 
         gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
         for category, result in zip(tasks.keys(), gathered):
             if isinstance(result, Exception):
                 logger.error("Search for %s failed: %s", category, result)
+            elif category == "top" and isinstance(result, list):
+                top = top_result(result)
+                results["top"] = [top] if top else []
             elif isinstance(result, list):
                 results[category] = result
 
@@ -793,11 +1070,14 @@ class SearchPage(Widget):
             "albums": [],
             "artists": [],
             "playlists": [],
+            "top": [],
         }
 
         ytmusic = cast("YTMHostBase", self.app).ytmusic
         assert ytmusic is not None
-        raw = await ytmusic.search(query, filter=None, limit=40)
+        raw = await ytmusic.search(query, filter=None, limit=40, **self._spelling_kwargs())
+        top = top_result(raw)
+        results["top"] = [top] if top else []
 
         for item in raw:
             result_type = item.get("resultType", "")
@@ -816,8 +1096,71 @@ class SearchPage(Widget):
     # Populate UI
     # ------------------------------------------------------------------
 
+    def show_filter(self, key: str) -> None:
+        """Show the results of chip *key*: "all" or one category."""
+        if key not in dict(FILTER_CHIPS):
+            return
+        self._mark_filter(key)
+        if key == "all":
+            self.query_one("#songs-table", TrackTable).load_tracks(
+                normalize_tracks(self._search_results.get("songs", []))
+            )
+            return
+        self.run_worker(
+            self._load_filtered(self._last_query, key), group="search-filter", exclusive=True
+        )
+
+    def _mark_filter(self, key: str) -> None:
+        """Light chip *key* and lay the page out for it."""
+        self.search_filter = key
+        for chip_key, _label in FILTER_CHIPS:
+            self.query_one(f"#chip-{chip_key}").set_class(chip_key == key, "-active")
+        self.set_class(key == "songs", "-only-songs")
+        self.set_class(key not in ("all", "songs"), "-only-cards")
+
+    async def _load_filtered(self, query: str, key: str) -> None:
+        """Fetch more results of one category, then show them."""
+        if not query:
+            return
+        cache_key = (query, key, self._ignore_spelling)
+        items = self._filtered_cache.get(cache_key)
+        if items is None:
+            ytmusic = cast("YTMHostBase", self.app).ytmusic
+            api_filter = self._MUSIC_FILTERS[key]
+            try:
+                items = (
+                    await ytmusic.search(
+                        query,
+                        filter=api_filter,
+                        limit=FILTERED_LIMIT,
+                        **self._spelling_kwargs(),
+                    )
+                    if ytmusic
+                    else []
+                )
+            except Exception:
+                logger.exception("Filtered search failed for %r (%s)", query, key)
+                items = []
+            items = items or self._search_results.get(key, [])
+            self._filtered_cache[cache_key] = items
+        if self.search_filter != key or self._last_query != query:
+            return
+        if key == "songs":
+            self.query_one("#songs-table", TrackTable).load_tracks(normalize_tracks(items))
+            return
+        grid = self.query_one("#search-filtered", ItemGrid)
+        await grid.remove_children()
+        if items:
+            await grid.mount(*[HomeCard(as_card(item)) for item in items])
+            relayout_soon(self)
+
     def _populate_results(self, results: dict[str, list[dict[str, Any]]]) -> None:
         """Push result data into each panel widget."""
+        # A new search starts on the All chip. The chips show once there is something to filter.
+        self._mark_filter("all")
+        self.query_one("#search-chips", SearchChips).set_class(
+            any(results.get(k) for k, _label in FILTER_CHIPS if k != "all"), "visible"
+        )
         # Songs go into the TrackTable.
         songs_table = self.query_one("#songs-table", TrackTable)
         songs_table.load_tracks(normalize_tracks(results.get("songs", [])))
@@ -832,6 +1175,29 @@ class SearchPage(Widget):
         playlists_panel = self.query_one("#playlists-panel", SearchResultPanel)
         playlists_panel.load_items(results.get("playlists", []))
 
+        self.run_worker(self._mount_web_results(results), group="search-cards", exclusive=True)
+
+    async def _mount_web_results(self, results: dict[str, list[dict[str, Any]]]) -> None:
+        """The top result card and one shelf of cover cards per category."""
+        box = self.query_one("#top-result-box", Vertical)
+        await box.query(TopResult).remove()
+        top = results.get("top") or []
+        if top:
+            await box.mount(TopResult(top[0]))
+        shelves = self.query_one("#search-shelves", Vertical)
+        await shelves.remove_children()
+        new = [
+            Shelf(title, [as_card(item) for item in results.get(key, [])], id=f"shelf-{key}")
+            for key, title, _ in _SHELVES
+            if results.get(key)
+        ]
+        if new:
+            await shelves.mount(*new)
+            relayout_soon(self)
+        warm = getattr(self.app, "warm_streams", None)
+        if warm is not None:
+            warm([t.get("videoId", "") for t in top + results.get("songs", [])])
+
     def _clear_stale_results(self) -> None:
         """Empty all result panels.
 
@@ -844,10 +1210,12 @@ class SearchPage(Widget):
             "albums": [],
             "artists": [],
             "playlists": [],
+            "top": [],
         }
         self._last_query = ""
         try:
             self._populate_results(self._search_results)
+            self.query_one("#spelling-note", SpellingNote).show(None)
         except Exception:
             logger.debug("Failed to clear stale search results", exc_info=True)
 
@@ -863,10 +1231,21 @@ class SearchPage(Widget):
     # ------------------------------------------------------------------
 
     def on_click(self, event: Click) -> None:
-        """Toggle search mode when the mode label is clicked."""
+        """Toggle search mode on the mode label. A right-click on a card opens its menu."""
         widget = event.widget
         if widget is None:
             return
+        if event.button == 3:
+            card = next((w for w in widget.ancestors_with_self if hasattr(w, "item")), None)
+            item = getattr(card, "item", None) if card is not None else None
+            if isinstance(item, dict):
+                event.stop()
+                kind = (item.get("resultType") or "").lower()
+                panel = _PANEL_FOR_TYPE.get(kind, "")
+                self.on_search_result_panel_item_right_clicked(
+                    SearchResultPanel.ItemRightClicked(item, panel)
+                )
+                return
         # Match the #search-mode Static or any child of it.
         try:
             if (
@@ -897,7 +1276,7 @@ class SearchPage(Widget):
 
         # Re-run the last search with the new mode if we have a query.
         if self._last_query:
-            self._start_search(self._last_query)
+            self._start_search(self._last_query, ignore_spelling=self._ignore_spelling)
 
     # ------------------------------------------------------------------
     # Track and item selection handlers

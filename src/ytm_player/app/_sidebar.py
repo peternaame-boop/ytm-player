@@ -35,7 +35,16 @@ class SidebarMixin(YTMHostBase):
         self._apply_playlist_sidebar(new_state)
 
     def _toggle_lyrics_sidebar(self) -> None:
-        """Toggle the lyrics sidebar globally."""
+        """Toggle the lyrics sidebar, or on Now Playing switch its pane to the Lyrics tab.
+
+        The web app shows lyrics only inside the now-playing pane.
+        """
+        from ytm_player.ui.pages.now_playing import NowPlayingPage
+
+        page = next(iter(self.query(NowPlayingPage)), None)
+        if page is not None and getattr(self, "current_page_name", "") == "now_playing":
+            page.toggle_lyrics_tab()
+            return
         self._lyrics_sidebar_open = not self._lyrics_sidebar_open
         self._apply_lyrics_sidebar(self._lyrics_sidebar_open)
 
@@ -102,9 +111,7 @@ class SidebarMixin(YTMHostBase):
     def _toggle_album_art(self) -> None:
         """Toggle album art visibility in the playback bar."""
         try:
-            from ytm_player.ui.widgets.album_art import AlbumArt
-
-            art = self.query_one("#pb-art", AlbumArt)
+            art = self.query_one("#pb-art")  # AlbumArt, or Cover when real images are on
             art.display = not art.display
         except Exception:
             logger.debug("Failed to toggle album art visibility", exc_info=True)
@@ -261,6 +268,18 @@ class SidebarMixin(YTMHostBase):
     def on_header_bar_toggle_lyrics_sidebar(self, message: HeaderBar.ToggleLyricsSidebar) -> None:
         self._toggle_lyrics_sidebar()
 
+    async def on_header_bar_search_requested(self, message: HeaderBar.SearchRequested) -> None:
+        """Top-bar search box click → open Search with the cursor in its box."""
+        await self.navigate_to("search")
+
+        def _focus_input() -> None:
+            try:
+                self.query_one("#search-input").focus()
+            except Exception:
+                logger.debug("Search input not found to focus", exc_info=True)
+
+        self.call_after_refresh(_focus_input)
+
     async def on_header_bar_back_requested(self, message: HeaderBar.BackRequested) -> None:
         """Header back-button click → pop the nav stack."""
         await self.navigate_to("back")
@@ -306,12 +325,24 @@ class SidebarMixin(YTMHostBase):
         else:
             self._prompt_create_playlist()
 
+    def on_playlist_sidebar_new_playlist_requested(
+        self, message: PlaylistSidebar.NewPlaylistRequested
+    ) -> None:
+        self._prompt_create_playlist()
+
     async def on_playlist_sidebar_nav_item_clicked(
         self, message: PlaylistSidebar.NavItemClicked
     ) -> None:
         """Navigate to a pinned page, or start a radio-style mix."""
         if message.nav_id == "discovery_mix":
             self.run_worker(self._start_discovery_mix(), group="discovery-mix", exclusive=True)
+        elif message.nav_id == "spotify_import":
+            from ytm_player.ui.popups.spotify_import import SpotifyImportPopup
+
+            self.push_screen(SpotifyImportPopup())
+        elif message.nav_id == "library":
+            # The web menu's Library is the grid of every playlist, not the last one opened.
+            await self.navigate_to("library", grid=True)
         else:
             await self.navigate_to(message.nav_id)
 

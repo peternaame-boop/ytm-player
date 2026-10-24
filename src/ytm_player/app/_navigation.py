@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
@@ -12,7 +13,6 @@ from textual.widgets import Static
 
 from ytm_player.app._base import YTMHostBase
 from ytm_player.config import Action
-from ytm_player.ui.playback_bar import FooterBar
 
 if TYPE_CHECKING:
     from ytm_player.app._base import PageWidget
@@ -21,10 +21,14 @@ logger = logging.getLogger(__name__)
 
 # Valid page names.
 PAGE_NAMES = (
+    "home",
     "library",
     "search",
     "context",
     "browse",
+    "explore",
+    "mood",
+    "now_playing",
     "queue",
     "help",
     "liked_songs",
@@ -173,9 +177,15 @@ class NavigationMixin(YTMHostBase):
         container = self.query_one("#main-content", Container)
 
         # remove_children and mount are async; must await them.
+        started = time.monotonic()
         await container.remove_children()
+        removed = time.monotonic()
         page_widget = self._create_page(page_name, **kwargs)
         await container.mount(page_widget)
+        logger.debug(
+            "page %s: old page removed in %.2fs, new page mounted in %.2fs",
+            page_name, removed - started, time.monotonic() - removed,
+        )  # fmt: skip
         self._current_page = page_name
         self._current_page_kwargs = dict(kwargs)
         # A page swap moves the user back into the content pane; reset the
@@ -183,12 +193,13 @@ class NavigationMixin(YTMHostBase):
         # sidebar that was focused on the previous page.
         self._active_pane = "content"
 
-        # Update footer active page indicator.
+        # Highlight the sidebar's pinned item for this page, as the web menu does.
         try:
-            footer = self.query_one("#app-footer", FooterBar)
-            footer.set_active_page(page_name)
+            from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
+
+            self.query_one("#playlist-sidebar", PlaylistSidebar).set_active_page(page_name)
         except Exception:
-            logger.debug("Failed to update footer active page indicator", exc_info=True)
+            logger.debug("Failed to update sidebar active item", exc_info=True)
 
         # Show/hide the header back/forward buttons based on stack state.
         try:
@@ -199,6 +210,15 @@ class NavigationMixin(YTMHostBase):
             header.set_forward_visible(bool(self._forward_stack))
         except Exception:
             logger.exception("Failed to update header back/forward button visibility")
+
+        try:
+            from ytm_player.ui.playback_bar import PlaybackBar
+
+            self.query_one("#playback-bar", PlaybackBar).set_now_playing_open(
+                page_name == "now_playing"
+            )
+        except Exception:
+            logger.debug("Failed to update the player bar's expand button", exc_info=True)
 
         # Apply per-page playlist sidebar visibility.
         sidebar_visible = self._sidebar_per_page.get(page_name, self._sidebar_default)
@@ -247,18 +267,25 @@ class NavigationMixin(YTMHostBase):
         """Instantiate the widget for a given page name."""
         from ytm_player.ui.pages.browse import BrowsePage
         from ytm_player.ui.pages.context import ContextPage
+        from ytm_player.ui.pages.explore import ExplorePage, MoodPage
         from ytm_player.ui.pages.help import HelpPage
+        from ytm_player.ui.pages.home import HomePage
         from ytm_player.ui.pages.library import LibraryPage
         from ytm_player.ui.pages.liked_songs import LikedSongsPage
+        from ytm_player.ui.pages.now_playing import NowPlayingPage
         from ytm_player.ui.pages.queue import QueuePage
         from ytm_player.ui.pages.recently_played import RecentlyPlayedPage
         from ytm_player.ui.pages.search import SearchPage
 
         page_map: dict[str, type[Widget]] = {
+            "home": HomePage,
             "library": LibraryPage,
             "search": SearchPage,
             "context": ContextPage,
             "browse": BrowsePage,
+            "explore": ExplorePage,
+            "mood": MoodPage,
+            "now_playing": NowPlayingPage,
             "queue": QueuePage,
             "help": HelpPage,
             "liked_songs": LikedSongsPage,

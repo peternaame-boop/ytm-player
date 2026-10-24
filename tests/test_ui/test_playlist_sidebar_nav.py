@@ -1,4 +1,7 @@
-"""Pinned sidebar navigation; Browse stays in the footer instead."""
+"""Pinned sidebar navigation. The fork adds the web menu (Home, Explore, Library) on top.
+
+The footer keeps its own Browse button, and there is still no ps-nav-browse item.
+"""
 
 from __future__ import annotations
 
@@ -56,9 +59,14 @@ async def test_sidebar_omits_browse_but_footer_keeps_it():
     async with app.run_test() as pilot:
         await pilot.pause()
         assert [item.id for item in app.query(".ps-pinned-item")] == [
+            "ps-nav-home",
+            "ps-nav-explore",
+            "ps-nav-library",
             "ps-nav-liked",
             "ps-nav-recent",
             "ps-nav-discovery",
+            "ps-nav-queue",
+            "ps-nav-import",
         ]
         assert not app.query("#ps-nav-browse")
         assert app.query_one("#footer-browse").display

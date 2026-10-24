@@ -8,6 +8,7 @@ import re
 import time
 from typing import Any
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
@@ -17,6 +18,7 @@ from textual.worker import Worker, WorkerState
 
 from ytm_player.config.keymap import Action
 from ytm_player.services.player import PlayerEvent
+from ytm_player.ui.theme import get_theme
 from ytm_player.utils.bidi import has_rtl, isolate_bidi, wrap_rtl_line
 from ytm_player.utils.transliteration import has_non_ascii, transliterate_line
 
@@ -24,6 +26,41 @@ logger = logging.getLogger(__name__)
 
 _AUTO_SCROLL_RESUME_DELAY = 3.0
 _TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]")
+_WORD_RE = re.compile(r"\S+\s*")
+# A line with no known end lasts this long at most for word timing.
+_MAX_LINE_SECONDS = 8.0
+# Words light this long before their estimated start, so the highlight leads the singer.
+WORD_LEAD_SECONDS = 1.0
+
+
+def word_spans(text: str, start: float, end: float) -> list[tuple[int, float]]:
+    """When each word of a timed line starts, as (end offset in text, start time).
+
+    YouTube times whole lines, not words. Each word gets a share of the line's
+    time in proportion to its length, so a long word stays lit longer than
+    "a", which is close to how a line is sung.
+    """
+    words = list(_WORD_RE.finditer(text))
+    if not words:
+        return []
+    weights = [len(m.group().strip()) + 1 for m in words]
+    total = sum(weights)
+    span = max(0.0, end - start)
+    spans, elapsed = [], 0.0
+    for match, weight in zip(words, weights):
+        spans.append((match.end(), start + span * elapsed / total))
+        elapsed += weight
+    return spans
+
+
+def lit_length(spans: list[tuple[int, float]], position: float) -> int:
+    """How many characters of the line are sung by *position*: every word that has started."""
+    lit = 0
+    for end_offset, start in spans:
+        if position < start:
+            break
+        lit = end_offset
+    return lit
 
 
 def _parse_synced_lyrics(raw: str) -> list[tuple[float, str]]:
@@ -58,6 +95,21 @@ class _LyricLine(Static):
         super().__init__(text, **kwargs)
         self._text = text
         self._timestamp = timestamp
+        self._lit = -1
+
+    def show_lit(self, lit: int, lit_style: str, rest_style: str) -> None:
+        """Draw the sung words in *lit_style* and the rest of the line in *rest_style*."""
+        if lit == self._lit:
+            return
+        self._lit = lit
+        text = Text(self._text[:lit], style=lit_style)
+        text.append(self._text[lit:], style=rest_style)
+        self.update(text)
+
+    def show_plain(self) -> None:
+        if self._lit != -1:
+            self._lit = -1
+            self.update(self._text)
 
     async def on_click(self) -> None:
         if self._timestamp is None:
@@ -125,6 +177,31 @@ class LyricsSidebar(Widget):
         color: $text-muted;
         padding: 0 2;
     }
+
+    LyricsSidebar .ls-source {
+        display: none;
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+    }
+
+    /* In the Now Playing pane, as the web app shows lyrics: centred, the
+       sung line bright and the rest dim, with the source underneath. */
+    LyricsSidebar.in-pane {
+        width: 1fr;
+        border-left: none;
+    }
+    LyricsSidebar.in-pane .ls-header {
+        display: none;
+    }
+    LyricsSidebar.in-pane _LyricLine {
+        text-align: center;
+    }
+    LyricsSidebar.in-pane .ls-source {
+        display: block;
+        text-align: center;
+        width: 1fr;
+    }
     """
 
     current_line_index: reactive[int] = reactive(-1)
@@ -142,11 +219,14 @@ class LyricsSidebar(Widget):
         self._position_callback: Any = None
         self._track_change_callback: Any = None
         self._transliteration_enabled: bool = False
+        self._line_ends: list[float | None] = []
+        self._word_spans: list[tuple[int, float]] = []
 
     def compose(self) -> ComposeResult:
         yield Label("", id="ls-title", classes="ls-header")
         yield Label("No track playing", id="ls-status", classes="ls-status")
         yield VerticalScroll(id="ls-scroll", classes="ls-scroll")
+        yield Label("", id="ls-source", classes="ls-source")
 
     def on_mount(self) -> None:
         self.query_one("#ls-scroll").display = False
@@ -217,6 +297,7 @@ class LyricsSidebar(Widget):
             new_index = idx - 1
             if new_index != self.current_line_index:
                 self.current_line_index = new_index
+            self._light_words(position)
         except Exception:
             logger.debug("Error in lyrics sidebar position handler", exc_info=True)
 
@@ -277,7 +358,7 @@ class LyricsSidebar(Widget):
 
                     lrc = await get_synced_lyrics(title, artist, duration)
                     if lrc:
-                        return {"lyrics": lrc, "hasTimestamps": False}
+                        return {"lyrics": lrc, "hasTimestamps": False, "source": "Source: LRCLIB"}
                 except Exception:
                     logger.debug("LRCLIB fallback failed", exc_info=True)
 
@@ -296,6 +377,10 @@ class LyricsSidebar(Widget):
             self._show_status("Failed to load lyrics.")
 
     def _process_lyrics(self, data: dict[str, Any]) -> None:
+        try:
+            self.query_one("#ls-source", Label).update(data.get("source") or "")
+        except Exception:
+            logger.debug("Lyrics source label not ready", exc_info=True)
         lyrics_data = data.get("lyrics")
         if not lyrics_data:
             self._show_status("No lyrics available.")
@@ -303,10 +388,11 @@ class LyricsSidebar(Widget):
 
         # ytmusicapi with timestamps=True returns hasTimestamps + lyrics as list of LyricLine objects
         if data.get("hasTimestamps") and isinstance(lyrics_data, list):
-            synced = [
-                (entry.start_time / 1000.0, getattr(entry, "text", ""))
-                for entry in lyrics_data
-                if hasattr(entry, "start_time")
+            timed = [entry for entry in lyrics_data if hasattr(entry, "start_time")]
+            synced = [(entry.start_time / 1000.0, getattr(entry, "text", "")) for entry in timed]
+            self._line_ends = [
+                (entry.end_time / 1000.0) if getattr(entry, "end_time", None) else None
+                for entry in timed
             ]
             if synced:
                 self._is_synced = True
@@ -323,6 +409,7 @@ class LyricsSidebar(Widget):
             return
 
         synced = _parse_synced_lyrics(lyrics_text)
+        self._line_ends = [None] * len(synced)
         if synced:
             self._is_synced = True
             self._synced_lines = synced
@@ -410,6 +497,34 @@ class LyricsSidebar(Widget):
 
     # ── Reactive watchers ────────────────────────────────────────────
 
+    def _line_window(self, index: int) -> tuple[float, float]:
+        """Start and end of line *index*: its own end, else the next line's start."""
+        start = self._synced_timestamps[index]
+        end = self._line_ends[index] if index < len(self._line_ends) else None
+        if end is None and index + 1 < len(self._synced_timestamps):
+            end = self._synced_timestamps[index + 1]
+        return start, min(end if end is not None else start + _MAX_LINE_SECONDS,
+                          start + _MAX_LINE_SECONDS)  # fmt: skip
+
+    def _light_words(self, position: float) -> None:
+        """Light the current line word by word, by each word's estimated start."""
+        index = self.current_line_index
+        if not (0 <= index < len(self._lyric_widgets)):
+            return
+        widget = self._lyric_widgets[index]
+        text = self._synced_lines[index][1]
+        if not text or has_rtl(text):
+            return  # right-to-left lines keep whole-line highlighting
+        if getattr(self, "_spans_for", None) != index:
+            self._spans_for = index
+            self._word_spans = word_spans(widget._text, *self._line_window(index))
+        theme = get_theme()
+        widget.show_lit(
+            lit_length(self._word_spans, position + WORD_LEAD_SECONDS),
+            f"bold {theme.lyrics_current}",
+            theme.lyrics_upcoming,
+        )
+
     def watch_current_line_index(self, new_index: int) -> None:
         try:
             self._apply_line_highlight(new_index)
@@ -436,6 +551,8 @@ class LyricsSidebar(Widget):
 
         for i in changed:
             w = self._lyric_widgets[i]
+            if i != new_index:
+                w.show_plain()
             w.remove_class("lyrics-played", "lyrics-current", "lyrics-upcoming")
             if i < new_index:
                 w.add_class("lyrics-played")

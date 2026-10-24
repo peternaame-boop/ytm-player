@@ -21,6 +21,7 @@ from textual.events import Resize
 from textual.reactive import reactive
 from textual.widget import Widget
 
+from ytm_player.ui.icons import icon
 from ytm_player.ui.theme import get_theme
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,6 @@ logger = logging.getLogger(__name__)
 _BLOCK_TOP = "\u2580"  # Upper half block ▀
 _BLOCK_BOTTOM = "\u2584"  # Lower half block ▄
 _BLOCK_FULL = "\u2588"  # Full block █
-_NOTE = "\u266b"  # Beamed eighth notes ♫
 
 # Module-level thumbnail cache: URL -> rendered Text.
 _ART_CACHE: OrderedDict[str, Text] = OrderedDict()
@@ -228,7 +228,7 @@ class AlbumArt(Widget):
             if row == h // 2:
                 pad = (w - 1) // 2
                 result.append(" " * pad, style=muted)
-                result.append(_NOTE, style=muted)
+                result.append(icon("note"), style=muted)
                 result.append(" " * (w - pad - 1), style=muted)
             else:
                 result.append(" " * w, style=muted)
@@ -253,7 +253,7 @@ class AlbumArt(Widget):
                 pad = (w - 1) // 2
                 note_color = _readable_on(accent, theme.foreground, theme.background)
                 result.append(_BLOCK_FULL * pad, style=accent)
-                result.append(_NOTE, style=f"bold {note_color} on {accent}")
+                result.append(icon("note"), style=f"bold {note_color} on {accent}")
                 result.append(_BLOCK_FULL * (w - pad - 1), style=accent)
             else:
                 result.append(_BLOCK_FULL * w, style=accent)

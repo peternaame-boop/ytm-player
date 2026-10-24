@@ -187,6 +187,9 @@ def _no_real_browser_or_network(monkeypatch):
     browser discovery finds nothing, extraction and client construction
     fail loudly. Tests that need them install their own fakes on top."""
     monkeypatch.setattr(AuthManager, "_detect_browser", staticmethod(lambda: None))
+    monkeypatch.setattr(
+        AuthManager, "_browser_candidates", staticmethod(lambda skip=frozenset(): iter(()))
+    )
 
     def _no_extraction(browser):
         raise RuntimeError("browser isolation: extraction attempted in a test")

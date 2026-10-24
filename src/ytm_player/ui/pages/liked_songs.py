@@ -13,6 +13,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, Static
 
 from ytm_player.config.keymap import Action
+from ytm_player.ui.icons import icon
 from ytm_player.ui.track_filter import TRACK_FILTER_CSS, TrackFilterHost
 from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.formatting import normalize_tracks
@@ -98,7 +99,7 @@ class LikedSongsPage(TrackFilterHost, Widget):
         with Vertical(id="liked-header", classes="liked-header"):
             with Horizontal(classes="liked-header-row"):
                 yield Label("Liked Songs", classes="liked-header-title")
-                yield Static("[▶ Start Radio]", id="start-radio-btn", markup=True)
+                yield Static(f"[{icon('radio')} Start Radio]", id="start-radio-btn", markup=True)
         yield Label("Loading liked songs...", id="liked-loading", classes="liked-loading")
         yield TrackTable(show_album=False, id="liked-table")
         yield Static("", id="liked-footer", classes="liked-footer")

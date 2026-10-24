@@ -47,6 +47,9 @@ class QueueManager:
         self._entry_ids: list[int] = []
         self._next_entry_id: int = 0
         self._generation = 0
+        # Counts rewrites of the upcoming tracks (replace_upcoming), so a view can
+        # tell a swapped Up next from one of the same length.
+        self._revision = 0
         # A removed audible occurrence can finish outside the queue. Keep
         # its successor by occurrence, never pretend that successor is playing.
         self._removed_current = False
@@ -75,6 +78,12 @@ class QueueManager:
         """Lifetime of this queue; ordinary navigation/insertion keeps it."""
         with self._lock:
             return self._generation
+
+    @property
+    def revision(self) -> int:
+        """Number of times replace_upcoming rewrote the tracks after the current one."""
+        with self._lock:
+            return self._revision
 
     @property
     def current_index(self) -> int:
@@ -635,6 +644,46 @@ class QueueManager:
                 logger.debug("Adding %d radio tracks to queue", len(new_tracks))
                 # Share the append/shuffle path (we already hold the lock).
                 self._add_multiple_unlocked(new_tracks)
+
+    def replace_upcoming(self, tracks: list[dict]) -> int:
+        """Replace the tracks after the current one with *tracks*, as an Up next chip does.
+
+        Played tracks and the current one stay. A track already kept is not added
+        again. The kept part becomes plain order, and with shuffle on the new
+        tracks follow it in random order. Returns the number of tracks added.
+        """
+        with self._lock:
+            order = self._shuffle_order if self._shuffle else list(range(len(self._tracks)))
+            if self._removed_current:
+                cut = self._removed_next_position()
+            else:
+                position = self._shuffle_position if self._shuffle else self._current_index
+                cut = position + 1
+            kept = order[:cut]
+            kept_tracks = [self._tracks[i] for i in kept]
+            kept_ids = {t.get("video_id") for t in kept_tracks}
+            new_tracks: list[dict] = []
+            for track in tracks:
+                video_id = track.get("video_id")
+                if video_id and video_id not in kept_ids:
+                    kept_ids.add(video_id)
+                    new_tracks.append(track)
+            new_ids = self._new_entry_ids(len(new_tracks))
+            self._tracks = kept_tracks + new_tracks
+            self._entry_ids = [self._entry_ids[i] for i in kept] + new_ids
+            self._revision += 1
+            if self._removed_current:
+                # The successor of the removed occurrence is now the first new track.
+                self._removed_next_id = new_ids[0] if new_ids else None
+                self._current_index = min(cut, len(self._tracks) - 1)
+            else:
+                self._current_index = cut - 1
+            if self._shuffle:
+                upcoming = list(range(cut, len(self._tracks)))
+                random.shuffle(upcoming)
+                self._shuffle_order = list(range(cut)) + upcoming
+                self._shuffle_position = self._current_index
+            return len(new_tracks)
 
     def peek_next(self) -> dict | None:
         """Return the next track WITHOUT advancing the position.

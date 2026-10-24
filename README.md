@@ -27,6 +27,42 @@
 
 > Available on **PyPI**, **AUR**, **NixOS**, and **Gentoo** — actively maintained with cross-platform support.
 
+## Look of this fork
+
+This fork restyles the TUI after the YouTube Music web player. Kitty draws real cover art through
+the graphics protocol. The captures below use kitty with IBM Plex Mono, with the playlist sidebar
+collapsed.
+
+**Home, scrolled to the last shelves.** Each shelf is a row of rounded covers with the title and
+the artist below. A thin scroll line runs under each row.
+
+![Home page, last shelves](docs/images/ui-home.png)
+
+**Playlist.** A hero with the cover, the track count, and Play, Shuffle, Save and Radio sits
+above the track table. The table is pure black. The current row and the playing track are
+dim green.
+
+![Playlist page](docs/images/ui-playlist.png)
+
+**Now playing.** The large cover sits on the left. Up next sits in the middle of the right half:
+each row has a small cover, a bold title over the artist, and the duration. Click a row to play it.
+
+![Now-playing page with Up next](docs/images/ui-now-playing.png)
+
+**Lyrics.** Synced lines light word by word. YouTube times lines only, so each word gets a share
+of the line's time by its length, and it lights 1 s early.
+
+![Now-playing page with the lyrics panel](docs/images/ui-lyrics.png)
+
+**Player bar.** The bar follows the web player:
+
+- The seek line on top is the progress bar. Under the mouse it grows into a band you can click to seek, with a time tooltip.
+- Left: previous, play, next and the time.
+- Middle: the cover and the title as one block, with the focused row after a › when it fits.
+- Right: like, volume, repeat and shuffle. Icons are grey when off and theme green when on.
+
+Volume, shuffle, repeat, the lyrics panel and album art persist across runs. See `remember_layout` in [docs/configuration.md](docs/configuration.md).
+
 ## Features
 
 - **Vim-style keybindings** — j/k movement, multi-key sequences (`g s` for search, `g l` for library), count prefixes (`5j`)

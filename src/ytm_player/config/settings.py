@@ -77,6 +77,8 @@ class SearchSettings:
 class CacheSettings:
     enabled: bool = True
     max_size_mb: int = 1024
+    # Size cap for downloaded cover images. The least recently shown go first.
+    covers_max_mb: int = 150
     prefetch_next: bool = True
     location: str = ""
 
@@ -98,6 +100,16 @@ class UISettings:
     region: str = "ZZ"  # ISO 3166-1 alpha-2 (or "ZZ" = Global) — used by Browse > Charts
     sidebar_overflow: str = "truncate"  # "truncate" or "wrap"
     show_queue_source: bool = True
+    # Reopen with the layout the last run closed with: lyrics panel and album art.
+    remember_layout: bool = True
+    # Show ytm's own CPU and memory use in the top bar, beside Lyrics.
+    show_usage: bool = True
+    # Draw all text in capitals. Only the display changes, not titles or queries.
+    uppercase: bool = True
+    # Track lists show a small cover on each row, as the web app does. Album pages keep numbers.
+    track_covers: bool = True
+    # Icon glyphs: "auto" (Nerd Font icons when one is installed), "nerd", or "unicode".
+    icons: str = "auto"
 
 
 @dataclass

@@ -31,6 +31,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, Static
 
 from ytm_player.config.keymap import Action
+from ytm_player.ui.icons import icon
 from ytm_player.ui.track_filter import TRACK_FILTER_CSS, TrackFilterHost
 from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.formatting import get_video_id, normalize_tracks
@@ -305,7 +306,7 @@ class RecentlyPlayedPage(TrackFilterHost, Widget):
                 ):
                     cls = "recent-tab active" if self._active_tab == index else "recent-tab"
                     yield RecentTab(label, index, id=_TAB_IDS[index], classes=cls)
-                yield Static("[▶ Start Radio]", id="start-radio-btn", markup=True)
+                yield Static(f"[{icon('radio')} Start Radio]", id="start-radio-btn", markup=True)
             yield Static(
                 _TAB_DESCRIPTIONS[self._active_tab], id="recent-tab-desc", classes="recent-tab-desc"
             )

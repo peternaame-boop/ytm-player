@@ -64,7 +64,9 @@ spotify = [
     "thefuzz>=0.22.0",
 ]
 mpris = []  # dbus-fast is now a Linux core dependency; kept for backwards compat.
-images = []  # Pillow is now a default dependency; kept for backwards compat.
+images = [
+    "textual-image>=0.14",  # real cover art over the kitty graphics protocol
+]
 discord = [
     "pypresence>=4.3.0",
 ]

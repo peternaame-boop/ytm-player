@@ -38,8 +38,8 @@
 | `T` | Toggle lyrics transliteration (ASCII) |
 | `s t` / `s a` / `s A` / `s d` | Sort by Title / Artist / Album / Duration |
 | `s r` | Reverse current sort |
-| `backspace` | Go back |
-| `Shift+backspace` | Go forward (after a back) |
+| `backspace`, `Alt+Left` | Go back |
+| `Shift+backspace`, `Alt+Right` | Go forward (after a back). kitty sends Shift+backspace as a plain backspace, so use Alt+Right there |
 | `c` | Pick chart region (Browse → Charts only) |
 | `q` | Quit |
 

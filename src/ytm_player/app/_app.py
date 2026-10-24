@@ -51,8 +51,10 @@ from ytm_player.services.queue import QueueManager
 from ytm_player.services.shuffle_prefs import ShufflePreferences
 from ytm_player.services.stream import StreamResolver
 from ytm_player.services.ytmusic import YTMusicService
+from ytm_player.ui.autohide_scrollbars import AutoHideScrollbarsMixin
 from ytm_player.ui.header_bar import HeaderBar
-from ytm_player.ui.playback_bar import FooterBar, PlaybackBar
+from ytm_player.ui.playback_bar import PlaybackBar
+from ytm_player.ui.regular_weight import RegularWeightMixin
 from ytm_player.ui.selection_info_bar import SelectionInfoBar
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
 from ytm_player.ui.sidebars.playlist_sidebar import PlaylistSidebar
@@ -61,6 +63,8 @@ from ytm_player.ui.theme import DEFAULT_LYRIC_CURRENT, ThemeColors, get_theme
 logger = logging.getLogger(__name__)
 
 _POSITION_POLL_INTERVAL = 0.5
+# Seconds between cover cache trims while the app runs.
+_COVER_PRUNE_SECONDS = 3600
 
 # Cache for theme.toml so get_css_variables doesn't re-parse TOML on
 # every CSS resolution.  Invalidated when the file's mtime changes
@@ -118,6 +122,8 @@ class YTMPlayerApp(
     TrackActionsMixin,
     MPRISMixin,
     IPCMixin,
+    RegularWeightMixin,
+    AutoHideScrollbarsMixin,
     App,
 ):
     """The main ytm-player Textual application.
@@ -133,6 +139,39 @@ class YTMPlayerApp(
     Screen {
         background: $background;
         color: $foreground;
+    }
+
+    /* Up next shows no scroll bar, so its row dividers end as floating lines.
+       It lives here because this sheet's * rule outranks a widget's own CSS. */
+    UpNextList {
+        scrollbar-size-vertical: 0;
+    }
+
+    /* Tables sit on the page's black: no grey panel, header or zebra rows. */
+    DataTable,
+    DataTable > .datatable--header,
+    DataTable > .datatable--odd-row,
+    DataTable > .datatable--even-row {
+        background: $background;
+    }
+
+    /* Thin scroll bars everywhere: one cell wide (about 9 px in kitty), grey
+       on black. Horizontal bars are drawn thin by ThinScrollBarRender.
+       The thumb is hidden, drawn in the background colour, until the pointer
+       is over its list (AutoHideScrollbarsMixin) or it is being dragged. */
+    * {
+        scrollbar-size-vertical: 1;
+        scrollbar-background: $background;
+        scrollbar-background-hover: $background;
+        scrollbar-background-active: $background;
+        scrollbar-color: $background;
+        scrollbar-color-hover: $background;
+        scrollbar-color-active: $primary;
+    }
+
+    .-scroll-hover {
+        scrollbar-color: #2e2e2e;
+        scrollbar-color-hover: #4a4a4a;
     }
 
     ToastRack {
@@ -154,15 +193,15 @@ class YTMPlayerApp(
     }
 
     Toast.-information {
-        border-left: thick $primary;
+        border-left: solid $primary;
     }
 
     Toast.-warning {
-        border-left: thick $warning;
+        border-left: solid $warning;
     }
 
     Toast.-error {
-        border-left: thick $error;
+        border-left: solid $error;
     }
 
     #app-body {
@@ -181,9 +220,8 @@ class YTMPlayerApp(
         height: 1fr;
     }
 
-    #playback-bar {
-        dock: bottom;
-    }
+    /* The player bar stacks in #bottom-stack above the footer. Docking it
+       too put the footer over the bar's last row. */
 
     _PlaceholderPage #placeholder-text {
         width: 1fr;
@@ -339,6 +377,20 @@ class YTMPlayerApp(
         # Persisted via session.json.
         self._mpris_hint_shown: bool = False
 
+    def _on_terminal_supports_synchronized_output(self, message) -> None:  # type: ignore[no-untyped-def]
+        """Keep Textual's synchronized output off while covers draw as kitty images.
+
+        With it on, a page of kitty covers sometimes stayed blank until the next
+        repaint. Verified live: staggered covers alone did not fix it, the two
+        together did.
+        """
+        from ytm_player.ui.widgets.cover import has_real_images
+
+        if has_real_images():
+            logger.debug("Synchronized output left off: kitty images are in use")
+            return
+        super()._on_terminal_supports_synchronized_output(message)
+
     def get_css_variables(self) -> dict[str, str]:
         """Inject app-specific CSS variables alongside Textual's theme variables.
 
@@ -354,7 +406,7 @@ class YTMPlayerApp(
             "active-tab": variables.get("text", "#ffffff"),
             "inactive-tab": variables.get("text-muted", "#999999"),
             "selected-item": variables.get("surface", "#2a2a2a"),
-            "progress-filled": variables.get("primary", "#ff0000"),
+            "progress-filled": variables.get("primary", "#6aa81e"),
             "progress-empty": variables.get("surface", "#555555"),
             "lyrics-played": variables.get("text-muted", "#999999"),
             "lyrics-current": variables.get(
@@ -411,7 +463,7 @@ class YTMPlayerApp(
                 background=t.background or "#0f0f0f",
                 foreground=t.foreground or "#ffffff",
                 secondary=t.secondary or "#aaaaaa",
-                accent=t.accent or "#ff4e45",
+                accent=t.accent or "#86b34a",
                 success=t.success or "#2ecc71",
                 warning=t.warning or "#f39c12",
                 error=t.error or "#e74c3c",
@@ -445,7 +497,7 @@ class YTMPlayerApp(
             # variables dict afterward (see get_css_variables()). Without
             # this, cursor/selection highlights stay pinned to whatever
             # `t.primary` was when the theme was first registered (YTM_DARK's
-            # hardcoded "#ff0000" for the default theme), no matter what
+            # hardcoded "#6aa81e" for the default theme), no matter what
             # theme.toml says. Re-register the active theme with the
             # resolved colors so Textual derives those tokens correctly too,
             # then force a CSS refresh -- re-registering under the same name
@@ -594,7 +646,6 @@ class YTMPlayerApp(
         with Vertical(id="bottom-stack"):
             yield SelectionInfoBar(id="selection-info-bar")
             yield PlaybackBar(id="playback-bar")
-            yield FooterBar(id="app-footer")
         with Horizontal(id="app-body"):
             yield PlaylistSidebar(id="playlist-sidebar")
             yield Container(id="main-content")
@@ -605,6 +656,18 @@ class YTMPlayerApp(
     async def _notify_auth_refresh(self) -> None:
         self.notify("Session expired — refreshing browser credentials…", timeout=10)
         await self.wait_for_refresh()
+
+    def _prune_covers(self) -> None:
+        """Trim the cover cache to [cache] covers_max_mb in a worker thread."""
+        from ytm_player.ui.widgets.cover import prune_covers
+
+        self.run_worker(
+            partial(prune_covers, self.settings.cache.covers_max_mb),
+            thread=True,
+            group="prune-covers",
+            exclusive=True,
+            exit_on_error=False,
+        )
 
     async def on_mount(self) -> None:
         """Initialize services and navigate to the startup page."""
@@ -724,6 +787,9 @@ class YTMPlayerApp(
 
         # Restore session state (volume, shuffle, repeat) from last session.
         await self._restore_session_state()
+        self._start_session_autosave()
+        self._prune_covers()
+        self.set_interval(_COVER_PRUNE_SECONDS, self._prune_covers)
 
         # Start MPRIS if enabled (Linux only — dbus-fast is Linux-only, and
         # macOS/Windows have their own media integrations below).
@@ -831,10 +897,11 @@ class YTMPlayerApp(
             startup = "library"
         await self.navigate_to(startup)
 
-        # Honour the [ui] show_selection_info toggle (TP-3).
+        # The selected item's name now shows in the player bar, when it fits
+        # (see [ui] show_selection_info), so the separate row stays hidden.
         try:
             bar = self.query_one("#selection-info-bar", SelectionInfoBar)
-            bar.display = self.settings.ui.show_selection_info
+            bar.display = False
         except Exception:
             logger.exception("Failed to apply show_selection_info toggle")
 
@@ -896,7 +963,7 @@ class YTMPlayerApp(
                 return False
             return True
 
-        await _step("save session", self._save_session_state)
+        await _step("save session", lambda: self._save_session_state(force=True))
 
         # A reference is dropped only once its resource actually closed.
         if self._ipc_server and await _step("stop IPC server", self._ipc_server.stop):

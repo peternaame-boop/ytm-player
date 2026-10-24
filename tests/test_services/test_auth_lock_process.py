@@ -52,6 +52,9 @@ print("released", flush=True)
 def _no_real_browser_or_network(monkeypatch):
     """Nothing in this module may reach a browser profile or the network."""
     monkeypatch.setattr(AuthManager, "_detect_browser", staticmethod(lambda: None))
+    monkeypatch.setattr(
+        AuthManager, "_browser_candidates", staticmethod(lambda skip=frozenset(): iter(()))
+    )
 
     def _no_network(*args, **kwargs):
         raise RuntimeError("network isolation: YTMusic constructed in a test")

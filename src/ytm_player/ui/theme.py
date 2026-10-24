@@ -26,7 +26,7 @@ from ytm_player.config.paths import THEME_FILE
 # Single source of truth: the dataclass default, the from_css_variables
 # fallback, and the two _app.py fallbacks (get_css_variables, watch_theme)
 # all derive from this constant.  Matches ytm-dark's accent.
-DEFAULT_LYRIC_CURRENT = "#ff4e45"
+DEFAULT_LYRIC_CURRENT = "#86b34a"
 
 
 def rich_safe_color(color: str) -> str:
@@ -59,23 +59,41 @@ _APP_VARS = (
 
 YTM_DARK = Theme(
     name="ytm-dark",
-    primary="#ff0000",
-    secondary="#aaaaaa",
-    accent="#ff4e45",
+    # Full black, with a dim chartreuse kept for accents only. Borders, scroll
+    # bars and the row cursor stay neutral grey.
+    primary="#6aa81e",
+    secondary="#8a8a8a",
+    accent="#86b34a",
     success="#2ecc71",
     warning="#f39c12",
     error="#e74c3c",
-    foreground="#ffffff",
-    background="#0f0f0f",
-    surface="#1a1a1a",
+    foreground="#e8e8e8",
+    background="#000000",
+    surface="#000000",
+    panel="#000000",
     dark=True,
     variables={
-        "playback-bar-bg": "#1a1a1a",
+        "playback-bar-bg": "#000000",
         "active-tab": "#ffffff",
-        "inactive-tab": "#999999",
-        "selected-item": "#2a2a2a",
-        "progress-filled": "#ff0000",
-        "progress-empty": "#555555",
+        "inactive-tab": "#8a8a8a",
+        "selected-item": "#1c1c1c",
+        "progress-filled": "#6aa81e",
+        "progress-empty": "#2a2a2a",
+        "border": "#2a2a2a",
+        "border-blurred": "#1a1a1a",
+        "block-cursor-background": "#1f1f1f",
+        "block-cursor-foreground": "#b5e07a",
+        "block-cursor-text-style": "bold",
+        "block-cursor-blurred-background": "#141414",
+        "block-cursor-blurred-foreground": "#e8e8e8",
+        "block-hover-background": "#121212",
+        "scrollbar": "#2e2e2e",
+        "scrollbar-hover": "#4a4a4a",
+        "scrollbar-active": "#6aa81e",
+        "scrollbar-background": "#000000",
+        "scrollbar-background-hover": "#000000",
+        "scrollbar-background-active": "#000000",
+        "scrollbar-corner-color": "#000000",
         # Note: lyrics-* vars intentionally NOT hardcoded here so they
         # derive from the active theme via from_css_variables fallbacks
         # (played → text-muted, current → accent, upcoming → text).
@@ -93,25 +111,25 @@ class ThemeColors:
     """
 
     # Base colors (populated from Textual theme at runtime).
-    background: str = "#0f0f0f"
+    background: str = "#000000"
     foreground: str = "#ffffff"
-    primary: str = "#ff0000"
+    primary: str = "#6aa81e"
     secondary: str = "#aaaaaa"
-    accent: str = "#ff4e45"
+    accent: str = "#86b34a"
     success: str = "#2ecc71"
     warning: str = "#f39c12"
     error: str = "#e74c3c"
-    surface: str = "#1a1a1a"
-    border: str = "#333333"
+    surface: str = "#000000"
+    border: str = "#2a2a2a"
     muted_text: str = "#999999"
     text: str = "#ffffff"
 
     # App-specific colors (customisable via theme.toml).
-    playback_bar_bg: str = "#1a1a1a"
+    playback_bar_bg: str = "#000000"
     active_tab: str = "#ffffff"
     inactive_tab: str = "#999999"
     selected_item: str = "#2a2a2a"
-    progress_filled: str = "#ff0000"
+    progress_filled: str = "#6aa81e"
     progress_empty: str = "#555555"
     lyrics_played: str = "#999999"
     lyrics_current: str = DEFAULT_LYRIC_CURRENT
