@@ -550,6 +550,79 @@ class TestRadioTracks:
         assert sorted(queue_manager._shuffle_order) == list(range(len(sample_tracks)))
 
 
+class TestAutoplayEntries:
+    """Autoplay picks stay identifiable, and removing one keeps it out."""
+
+    @staticmethod
+    def _autoplay_video_ids(queue: QueueManager) -> list[str]:
+        ids = queue.autoplay_entry_ids
+        return [t["video_id"] for entry_id, t in queue.entries if entry_id in ids]
+
+    def test_plain_radio_tracks_are_not_autoplay(self, queue_manager, sample_tracks):
+        queue_manager.set_radio_tracks(sample_tracks)
+        assert queue_manager.autoplay_entry_ids == frozenset()
+
+    def test_autoplay_marks_only_the_new_entries(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks[:2])
+        queue_manager.set_radio_tracks(
+            [sample_tracks[0], {"video_id": "ap_1"}, {"video_id": "ap_2"}], autoplay=True
+        )
+        assert self._autoplay_video_ids(queue_manager) == ["ap_1", "ap_2"]
+
+    def test_autoplay_marks_follow_entries_under_shuffle(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks)
+        queue_manager.jump_to(0)
+        queue_manager.toggle_shuffle()
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}], autoplay=True)
+        assert self._autoplay_video_ids(queue_manager) == ["ap_1"]
+
+    def test_removed_autoplay_track_is_not_added_back(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks[:1])
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}, {"video_id": "ap_2"}], autoplay=True)
+        queue_manager.remove(1)  # ap_1
+
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}, {"video_id": "ap_3"}], autoplay=True)
+
+        assert [t["video_id"] for t in queue_manager.tracks] == ["vid_01", "ap_2", "ap_3"]
+        assert self._autoplay_video_ids(queue_manager) == ["ap_2", "ap_3"]
+
+    def test_removed_by_entry_id_is_dismissed_too(self, queue_manager):
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}], autoplay=True)
+        (entry_id,) = queue_manager.autoplay_entry_ids
+        assert queue_manager.remove_entry(entry_id)
+
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}], autoplay=True)
+
+        assert queue_manager.is_empty
+
+    def test_dismissal_only_filters_autoplay(self, queue_manager):
+        """The user can still queue a track they removed from autoplay."""
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}], autoplay=True)
+        queue_manager.remove(0)
+
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}])
+
+        assert [t["video_id"] for t in queue_manager.tracks] == ["ap_1"]
+        assert queue_manager.autoplay_entry_ids == frozenset()
+
+    def test_removing_a_user_track_dismisses_nothing(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks[:1])
+        queue_manager.remove(0)
+
+        queue_manager.set_radio_tracks([sample_tracks[0]], autoplay=True)
+
+        assert self._autoplay_video_ids(queue_manager) == ["vid_01"]
+
+    def test_clear_forgets_marks_and_dismissals(self, queue_manager):
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}, {"video_id": "ap_2"}], autoplay=True)
+        queue_manager.remove(0)
+        queue_manager.clear()
+
+        queue_manager.set_radio_tracks([{"video_id": "ap_1"}], autoplay=True)
+
+        assert self._autoplay_video_ids(queue_manager) == ["ap_1"]
+
+
 class TestQueuePositionTracking:
     """Tests for real_index and remaining_tracks properties."""
 

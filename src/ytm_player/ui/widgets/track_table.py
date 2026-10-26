@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from typing import Any
 
+from rich.text import Text
 from textual.events import Click, MouseDown, MouseMove, MouseUp
 from textual.geometry import Size
 from textual.message import Message
@@ -571,10 +572,29 @@ class TrackTable(DataTable):
         cells.append(format_duration(duration) if duration else "--:--")
 
         video_id = track.get("video_id", f"row_{index}")
-        # Pass label=" " on every row so Textual reserves the row-label
+        # Pass a label on every row so Textual reserves the row-label
         # column once any row has a non-None label. _highlight_playing
         # mutates this slot to show ▶ on the playing row.
-        return self.add_row(*cells, key=f"{video_id}_{index}", label=" ")
+        return self.add_row(*cells, key=f"{video_id}_{index}", label=self._idle_label(track))
+
+    @staticmethod
+    def _idle_label(track: dict) -> Text:
+        """Row label for a row that isn't playing: ↻ marks an autoplay pick.
+
+        Callers flag autoplay rows by setting ``_autoplay`` on the track
+        dicts they load (the Queue page does, from QueueManager state).
+        """
+        if not track.get("_autoplay"):
+            return Text(" ")
+        from textual.color import Color
+
+        from ytm_player.ui.theme import get_theme
+
+        try:
+            muted_hex = Color.parse(get_theme().muted_text or "#999999").hex
+        except Exception:
+            muted_hex = "#999999"
+        return Text("↻", style=muted_hex)
 
     # -- Playing state ----------------------------------------------------
 
@@ -695,7 +715,7 @@ class TrackTable(DataTable):
                     self.update_cell(row_key, col_key, value)
             except Exception:
                 logger.debug("Failed to restore row %d cells", old_index, exc_info=True)
-            _set_row_label(row_key, Text(" "))
+            _set_row_label(row_key, self._idle_label(self._tracks[old_index]))
 
         # Mark the new row: bold (no color) on data cells + ▶ label.
         # Why no color: the user's theme can have $primary close to

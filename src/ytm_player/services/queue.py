@@ -68,6 +68,12 @@ class QueueManager:
 
         self.radio_seeds: list[dict] | None = None
 
+        # Entries autoplay appended (by entry id), so the UI can tell them
+        # apart from tracks the user queued. Removing one dismisses its
+        # video_id: later autoplay refills skip it instead of re-adding it.
+        self._autoplay_ids: set[int] = set()
+        self._dismissed_autoplay: set[str] = set()
+
     # -- Properties -------------------------------------------------------
 
     @property
@@ -112,6 +118,12 @@ class QueueManager:
             if self._shuffle:
                 return tuple((self._entry_ids[i], self._tracks[i]) for i in self._shuffle_order)
             return tuple(zip(self._entry_ids, self._tracks))
+
+    @property
+    def autoplay_entry_ids(self) -> frozenset[int]:
+        """Entry ids (see :attr:`entries`) of the tracks autoplay appended."""
+        with self._lock:
+            return frozenset(self._autoplay_ids)
 
     @property
     def is_empty(self) -> bool:
@@ -358,6 +370,12 @@ class QueueManager:
 
         order = self._shuffle_order if self._shuffle else list(range(len(self._tracks)))
         real_idx = order[index]
+        entry_id = self._entry_ids[real_idx]
+        if entry_id in self._autoplay_ids:
+            self._autoplay_ids.discard(entry_id)
+            video_id = self._tracks[real_idx].get("video_id")
+            if video_id:
+                self._dismissed_autoplay.add(video_id)
         current_pos = self._shuffle_position if self._shuffle else self._current_index
         if (not self._removed_current and index == current_pos) or (
             self._removed_current and self._entry_ids[real_idx] == self._removed_next_id
@@ -411,6 +429,8 @@ class QueueManager:
             self._shuffle_order.clear()
             self._shuffle_position = -1
             self.radio_seeds = None
+            self._autoplay_ids.clear()
+            self._dismissed_autoplay.clear()
 
     def move(self, from_idx: int, to_idx: int) -> None:
         """Move a track from one position to another in the visible order."""
@@ -623,18 +643,24 @@ class QueueManager:
                 return self._tracks[real]
             return None
 
-    def set_radio_tracks(self, tracks: list[dict]) -> None:
+    def set_radio_tracks(self, tracks: list[dict], *, autoplay: bool = False) -> None:
         """Append radio/autoplay suggestion tracks to the queue.
 
-        Skips tracks already in the queue (by video_id).
+        Skips tracks already in the queue (by video_id). With *autoplay*,
+        the new entries are recorded in :attr:`autoplay_entry_ids` and
+        tracks the user removed from an earlier autoplay batch are skipped.
         """
         with self._lock:
-            existing_ids = {t.get("video_id") for t in self._tracks}
-            new_tracks = [t for t in tracks if t.get("video_id") not in existing_ids]
+            skip = {t.get("video_id") for t in self._tracks}
+            if autoplay:
+                skip |= self._dismissed_autoplay
+            new_tracks = [t for t in tracks if t.get("video_id") not in skip]
             if new_tracks:
                 logger.debug("Adding %d radio tracks to queue", len(new_tracks))
                 # Share the append/shuffle path (we already hold the lock).
                 self._add_multiple_unlocked(new_tracks)
+                if autoplay:
+                    self._autoplay_ids.update(self._entry_ids[-len(new_tracks) :])
 
     def peek_next(self) -> dict | None:
         """Return the next track WITHOUT advancing the position.
