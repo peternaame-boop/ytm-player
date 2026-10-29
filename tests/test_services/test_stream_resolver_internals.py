@@ -12,12 +12,13 @@ These guard against bugs confirmed in practice during development:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ytm_player.config.settings import Settings
-from ytm_player.services.stream import StreamResolver, _detect_stream_cookies
+from ytm_player.services.stream import StreamInfo, StreamResolver, _detect_stream_cookies
 
 
 @pytest.fixture(autouse=True)
@@ -263,12 +264,13 @@ class TestActiveResolvesCounter:
         assert resolver._active_resolves == 0
 
 
-class TestAvailableAtWait:
+class TestAvailableAtRecorded:
     """yt-dlp marks formats behind a pre-roll ad with ``available_at``;
-    googlevideo answers 403 until then, so the URL must not reach mpv early."""
+    googlevideo answers 403 until then. _try_resolve records it on the
+    StreamInfo for resolve() to wait on, and never sleeps in the worker."""
 
     @staticmethod
-    def _resolve_with(info: dict, now: float = 1000.0) -> list[float]:
+    def _resolve_with(info: dict) -> StreamInfo:
         resolver = StreamResolver()
         fake_ydl = MagicMock()
         fake_ydl.extract_info.return_value = info
@@ -278,19 +280,20 @@ class TestAvailableAtWait:
             return fake_ydl
 
         resolver._get_ydl = fake_get_ydl
-        sleeps: list[float] = []
-        with (
-            patch("ytm_player.services.stream.time.time", return_value=now),
-            patch("ytm_player.services.stream.time.sleep", side_effect=sleeps.append),
-        ):
-            assert resolver._try_resolve("https://example.com", "abc12345678", 0) is not None
-        return sleeps
+        # The clock sits before every available_at below, so a sleep in the
+        # worker would have something to wait for.
+        fake_time = SimpleNamespace(time=lambda: 1000.0, sleep=MagicMock())
+        with patch("ytm_player.services.stream.time", fake_time):
+            result = resolver._try_resolve("https://example.com", "abc12345678", 0)
+        fake_time.sleep.assert_not_called()
+        assert result is not None
+        return result
 
-    def test_waits_until_available_at(self):
+    def test_records_available_at(self):
         info = {"url": "https://example.com/stream", "acodec": "opus", "available_at": 1006}
-        assert self._resolve_with(info) == [6.0]
+        assert self._resolve_with(info).available_at == 1006
 
-    def test_uses_latest_available_at_of_requested_formats(self):
+    def test_uses_available_at_of_the_chosen_format(self):
         info = {
             "requested_formats": [
                 {
@@ -307,11 +310,12 @@ class TestAvailableAtWait:
                 },
             ]
         }
-        assert self._resolve_with(info) == [9.0]
+        result = self._resolve_with(info)
+        assert result.url == "https://example.com/a"
+        assert result.available_at == 1003
 
-    def test_no_wait_when_already_available_or_absent(self):
-        assert self._resolve_with({"url": "https://example.com/s", "available_at": 999}) == []
-        assert self._resolve_with({"url": "https://example.com/s"}) == []
+    def test_absent_available_at_is_zero(self):
+        assert self._resolve_with({"url": "https://example.com/s"}).available_at == 0
 
 
 class TestStreamCookiejarLoading:

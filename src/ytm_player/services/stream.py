@@ -144,6 +144,13 @@ class StreamInfo:
     duration: int  # seconds
     expires_at: float  # unix timestamp
     thumbnail_url: str | None = None
+    # yt-dlp's available_at: googlevideo answers 403 until this unix time
+    # (streams served behind a pre-roll ad). 0 = fetchable now.
+    available_at: float = 0.0
+
+    def wait_seconds(self) -> float:
+        """Seconds until the stream URL can be fetched."""
+        return max(0.0, self.available_at - time.time())
 
 
 class StreamResolver:
@@ -375,31 +382,23 @@ class StreamResolver:
                 logger.error("yt-dlp returned no info for video_id=%s", video_id)
                 return None
 
+            # Formats served behind a pre-roll ad carry yt-dlp's available_at;
+            # googlevideo answers 403 until it passes. It is recorded on the
+            # StreamInfo and resolve() waits for it, not this worker thread.
             stream_url: str = info.get("url", "")
+            available_at = float(info.get("available_at") or 0)
             if not stream_url:
                 # Some formats nest the URL under requested_formats.
                 formats = info.get("requested_formats") or []
                 for fmt in formats:
                     if fmt.get("vcodec") == "none" or fmt.get("acodec") != "none":
                         stream_url = fmt.get("url", "")
+                        available_at = float(fmt.get("available_at") or 0)
                         break
 
             if not stream_url:
                 logger.error("No stream URL found for video_id=%s", video_id)
                 return None
-
-            # Formats served behind a pre-roll ad carry yt-dlp's available_at;
-            # googlevideo answers 403 until it passes. yt-dlp's own downloader
-            # sleeps for it, but mpv fetches the URL directly, so wait here
-            # (worker thread, outside the extract lock).
-            available_at = max(
-                (f.get("available_at") or 0 for f in info.get("requested_formats") or [info]),
-                default=0,
-            )
-            wait = available_at - time.time()
-            if wait > 0:
-                logger.debug("Waiting %.1fs for %s to become available", wait, video_id)
-                time.sleep(wait)
 
             # Determine audio format and bitrate from the info dict.
             acodec = info.get("acodec", "unknown")
@@ -421,6 +420,7 @@ class StreamResolver:
                 duration=duration,
                 expires_at=expires_at,
                 thumbnail_url=thumbnail,
+                available_at=available_at,
             )
 
         except yt_dlp.utils.DownloadError as exc:  # type: ignore[attr-defined]
@@ -490,10 +490,12 @@ class StreamResolver:
         """Resolve a video ID to a StreamInfo, using cache when possible.
 
         This is the synchronous version. Prefer `resolve()` in async code.
+        Like `resolve()`, it returns once the stream URL can be fetched.
         """
         cached = self._get_cached(video_id)
         if cached is not None:
             logger.debug("Cache hit for video_id=%s", video_id)
+            time.sleep(cached.wait_seconds())
             return cached
 
         logger.debug("Cache miss for video_id=%s, resolving via yt-dlp", video_id)
@@ -501,6 +503,7 @@ class StreamResolver:
         info = self._resolve_sync(video_id)
         if info is not None:
             self._put_cache(info, generation)
+            time.sleep(info.wait_seconds())
         return info
 
     def is_expired(self, video_id: str) -> bool:
@@ -512,7 +515,23 @@ class StreamResolver:
             return _is_stale(cached.expires_at)
 
     async def resolve(self, video_id: str) -> StreamInfo | None:
-        """Resolve a video ID to a StreamInfo asynchronously.
+        """Resolve a video ID to a StreamInfo whose URL can be fetched now.
+
+        Streams YouTube serves behind a pre-roll ad answer 403 until their
+        available_at. yt-dlp's own downloader sleeps through that, but mpv
+        opens the URL at once, so wait here: on the event loop, where the
+        wait never holds a worker thread and shutdown can cancel it. A
+        prefetched entry is usually past it already.
+        """
+        info = await self._resolve(video_id)
+        if info is not None and (wait := info.wait_seconds()) > 0:
+            logger.debug("Waiting %.1fs for video_id=%s to become available", wait, video_id)
+            await asyncio.sleep(wait)
+        return info
+
+    async def _resolve(self, video_id: str) -> StreamInfo | None:
+        """Resolve a video ID to a StreamInfo asynchronously, without waiting
+        for its available_at.
 
         Runs the synchronous yt-dlp extraction in a thread to avoid
         blocking the event loop. Deduplicates concurrent requests for
@@ -583,7 +602,7 @@ class StreamResolver:
         if self._current_pending(video_id, self._cache_generation) is not None:
             return  # Already being resolved.
         try:
-            await self.resolve(video_id)
+            await self._resolve(video_id)  # caches without waiting; playback waits in resolve()
         except Exception:
             logger.debug("Prefetch failed for video_id=%s", video_id, exc_info=True)
 

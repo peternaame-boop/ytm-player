@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -536,3 +537,188 @@ class TestResolveAsync:
         assert info is not None
         assert info.video_id == "shieldVid1"
         assert waiter.cancelled()
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    """Freeze stream.py's clock at 1000 and record its sleeps instead of
+    sleeping. Only stream.py's own ``time`` and ``asyncio`` names are
+    replaced, so the event loop, the executor and the test's own awaits keep
+    the real modules."""
+    from ytm_player.services import stream
+
+    clock = SimpleNamespace(now=1000.0, sleeps=[], async_sleeps=[])
+
+    async def fake_async_sleep(delay):
+        clock.async_sleeps.append(delay)
+
+    fake_asyncio = SimpleNamespace(**vars(asyncio))
+    fake_asyncio.sleep = fake_async_sleep
+    monkeypatch.setattr(stream, "asyncio", fake_asyncio)
+    monkeypatch.setattr(
+        stream, "time", SimpleNamespace(time=lambda: clock.now, sleep=clock.sleeps.append)
+    )
+    return clock
+
+
+class TestAvailableAtWait:
+    """Streams behind a pre-roll ad answer 403 until ``available_at``.
+    resolve() waits for it on the event loop, so the wait holds no worker
+    thread and can be cancelled; prefetch() caches without waiting."""
+
+    @staticmethod
+    def _info(video_id: str, available_at: float) -> StreamInfo:
+        return StreamInfo(
+            url=f"https://stream.example.com/{video_id}",
+            video_id=video_id,
+            format="opus",
+            bitrate=128,
+            duration=200,
+            expires_at=time.time() + 18000,
+            available_at=available_at,
+        )
+
+    @staticmethod
+    def _gate_async_sleep(monkeypatch) -> asyncio.Event:
+        """Make stream.py's asyncio.sleep block until cancelled; the returned
+        event is set once the wait has started."""
+        from ytm_player.services import stream
+
+        started = asyncio.Event()
+
+        async def blocking_sleep(delay):
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(stream.asyncio, "sleep", blocking_sleep)
+        return started
+
+    def test_wait_seconds(self, frozen_clock):
+        assert self._info("ws01", 1030).wait_seconds() == 30
+        assert self._info("ws02", 995).wait_seconds() == 0
+        assert _make_info("ws03").wait_seconds() == 0  # available_at defaults to 0
+
+    async def test_resolve_waits_until_available_at(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1006)  # type: ignore[method-assign]
+
+        assert await resolver.resolve("wait01") is not None
+
+        assert frozen_clock.async_sleeps == [6]
+
+    async def test_resolve_does_not_wait_when_available(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1000)  # type: ignore[method-assign]
+
+        assert await resolver.resolve("wait02") is not None
+
+        assert frozen_clock.async_sleeps == []
+
+    async def test_prefetch_caches_without_waiting(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1030)  # type: ignore[method-assign]
+
+        await resolver.prefetch("pre01")
+
+        assert resolver._get_cached("pre01") is not None
+        assert frozen_clock.async_sleeps == []
+
+    async def test_play_after_prefetch_waits_only_the_remainder(self, frozen_clock):
+        resolver = StreamResolver()
+        calls: list[str] = []
+
+        def fake_resolve_sync(video_id: str) -> StreamInfo:
+            calls.append(video_id)
+            return self._info(video_id, 1006)
+
+        resolver._resolve_sync = fake_resolve_sync  # type: ignore[method-assign]
+
+        await resolver.prefetch("pre02")
+        frozen_clock.now = 1004
+        assert await resolver.resolve("pre02") is not None
+
+        assert calls == ["pre02"]
+        assert frozen_clock.async_sleeps == [2]
+
+    async def test_joiner_of_a_pending_resolve_waits_too(self, frozen_clock):
+        resolver = StreamResolver()
+        release = threading.Event()
+        calls: list[str] = []
+
+        def blocking_resolve(video_id: str) -> StreamInfo:
+            calls.append(video_id)
+            release.wait(timeout=5)
+            return self._info(video_id, 1006)
+
+        resolver._resolve_sync = blocking_resolve  # type: ignore[method-assign]
+
+        # Set when the joiner finds the owner's in-flight resolve, so extraction
+        # is released only once the pending-future path is really taken.
+        joined = asyncio.Event()
+        current_pending = resolver._current_pending
+
+        def spy_current_pending(video_id, generation):
+            pending = current_pending(video_id, generation)
+            if pending is not None:
+                joined.set()
+            return pending
+
+        resolver._current_pending = spy_current_pending  # type: ignore[method-assign]
+
+        owner = asyncio.create_task(resolver.resolve("join01"))
+        await asyncio.sleep(0)  # owner registers its pending future
+        joiner = asyncio.create_task(resolver.resolve("join01"))
+        await asyncio.wait_for(joined.wait(), timeout=5)
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(owner, joiner), timeout=5)
+
+        assert all(info is not None for info in results)
+        assert calls == ["join01"]
+        assert frozen_clock.async_sleeps == [6, 6]
+
+    async def test_cancelled_wait_keeps_the_result_cached(self, frozen_clock, monkeypatch):
+        started = self._gate_async_sleep(monkeypatch)
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1030)  # type: ignore[method-assign]
+
+        task = asyncio.create_task(resolver.resolve("cancel01"))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert resolver._get_cached("cancel01") is not None
+
+    async def test_clear_cache_during_the_wait(self, frozen_clock, monkeypatch):
+        """Same contract as a clear mid-resolve: the caller still gets its
+        result, and the cache stays cleared."""
+        from ytm_player.services import stream
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def gated_sleep(delay):
+            started.set()
+            await release.wait()
+
+        monkeypatch.setattr(stream.asyncio, "sleep", gated_sleep)
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1030)  # type: ignore[method-assign]
+
+        task = asyncio.create_task(resolver.resolve("clear01"))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        resolver.clear_cache()
+        release.set()
+
+        assert await asyncio.wait_for(task, timeout=5) is not None
+        assert resolver._get_cached("clear01") is None
+
+    def test_resolve_sync_waits_on_resolve_and_on_cache_hit(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1006)  # type: ignore[method-assign]
+
+        assert resolver.resolve_sync("sync01") is not None
+        frozen_clock.now = 1004
+        assert resolver.resolve_sync("sync01") is not None  # cache hit
+
+        assert frozen_clock.sleeps == [6, 2]
