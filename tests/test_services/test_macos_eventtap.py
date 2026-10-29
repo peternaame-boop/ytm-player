@@ -62,7 +62,11 @@ class TestTapCallback:
         fake_appkit = SimpleNamespace(
             NSEvent=SimpleNamespace(eventWithCGEvent_=lambda _event: ns_event)
         )
-        fake_quartz = SimpleNamespace(NSSystemDefined=14)
+        fake_quartz = SimpleNamespace(
+            NSSystemDefined=14,
+            kCGEventTapDisabledByTimeout=0xFFFFFFFE,
+            kCGEventTapDisabledByUserInput=0xFFFFFFFF,
+        )
 
         with (
             patch("ytm_player.services.macos_eventtap.AppKit", fake_appkit),
@@ -72,6 +76,27 @@ class TestTapCallback:
 
         assert result is None
         await asyncio.wait_for(fired.wait(), timeout=1)
+
+    async def test_reenables_tap_after_timeout_disable(self) -> None:
+        svc = MacOSEventTapService()
+        svc._running = True
+        svc._loop = asyncio.get_running_loop()
+        svc._tap = object()
+
+        enabled_calls = []
+        fake_quartz = SimpleNamespace(
+            NSSystemDefined=14,
+            kCGEventTapDisabledByTimeout=0xFFFFFFFE,
+            kCGEventTapDisabledByUserInput=0xFFFFFFFF,
+            CGEventTapEnable=lambda tap, enabled: enabled_calls.append((tap, enabled)),
+        )
+        source_event = object()
+
+        with patch("ytm_player.services.macos_eventtap.Quartz", fake_quartz):
+            result = svc._tap_callback(None, 0xFFFFFFFE, source_event, None)
+
+        assert result is source_event
+        assert enabled_calls == [(svc._tap, True)]
 
     async def test_passthrough_when_not_mapped(self) -> None:
         svc = MacOSEventTapService()
@@ -85,7 +110,11 @@ class TestTapCallback:
         fake_appkit = SimpleNamespace(
             NSEvent=SimpleNamespace(eventWithCGEvent_=lambda _event: ns_event)
         )
-        fake_quartz = SimpleNamespace(NSSystemDefined=14)
+        fake_quartz = SimpleNamespace(
+            NSSystemDefined=14,
+            kCGEventTapDisabledByTimeout=0xFFFFFFFE,
+            kCGEventTapDisabledByUserInput=0xFFFFFFFF,
+        )
 
         with (
             patch("ytm_player.services.macos_eventtap.AppKit", fake_appkit),
