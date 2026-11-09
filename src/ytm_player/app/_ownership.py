@@ -47,6 +47,21 @@ def request_scope(host: Any, request: int) -> Iterator[None]:
         _owner.reset(token)
 
 
+@contextmanager
+def unowned_scope() -> Iterator[None]:
+    """Run a block outside any request, then restore the caller's ownership.
+
+    A task started inside a request copies its context and keeps that
+    request's token for life. A page mounted from a request must not: its
+    own plays would be dropped as soon as a newer request exists.
+    """
+    token = _owner.set(None)
+    try:
+        yield
+    finally:
+        _owner.reset(token)
+
+
 def adopt_queue(host: Any) -> None:
     """The owning request just replaced the queue; continue under its new lifetime."""
     owner = _owner.get()

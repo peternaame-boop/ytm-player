@@ -86,13 +86,13 @@ class TrackActionsMixin(YTMHostBase):
         """Append *track* to the queue, refresh the queue page, and notify."""
         self.queue.add(track)
         self._refresh_queue_page()
-        self.notify(f"Added to queue: {track.get('title') or 'track'}", timeout=2)
+        self.notify(f"Added to queue: {track.get('title') or 'track'}", timeout=2, markup=False)
 
     def _play_track_next(self, track: dict) -> None:
         """Insert *track* right after the current track, refresh, and notify."""
         self.queue.add_next(track)
         self._refresh_queue_page()
-        self.notify(f"Playing next: {track.get('title') or 'track'}", timeout=2)
+        self.notify(f"Playing next: {track.get('title') or 'track'}", timeout=2, markup=False)
 
     def _add_focused_to_queue(self) -> None:
         """Enqueue the focused (or playing) track — the app-level Add-to-Queue key."""
@@ -289,7 +289,7 @@ class TrackActionsMixin(YTMHostBase):
                     if copy_to_clipboard(link):
                         self.notify("Link copied", timeout=2)
                     else:
-                        self.notify(link, timeout=5)
+                        self.notify(link, timeout=5, markup=False)
             elif action_id == "remove_from_playlist":
                 self.run_worker(self._remove_track_from_playlist(track))
 
@@ -410,12 +410,12 @@ class TrackActionsMixin(YTMHostBase):
     def _append_to_queue(self, tracks: list[dict], label: str) -> None:
         self.queue.add_multiple(tracks)
         self._refresh_queue_page()
-        self.notify(f"Added {label} ({len(tracks)} tracks) to queue", timeout=3)
+        self.notify(f"Added {label} ({len(tracks)} tracks) to queue", timeout=3, markup=False)
 
     def _play_next_multiple(self, tracks: list[dict], label: str) -> None:
         self.queue.add_next_multiple(tracks)
         self._refresh_queue_page()
-        self.notify(f"Playing {label} next ({len(tracks)} tracks)", timeout=3)
+        self.notify(f"Playing {label} next ({len(tracks)} tracks)", timeout=3, markup=False)
 
     def _refresh_queue_page(self) -> None:
         """Refresh the queue page if it's currently displayed."""
@@ -510,10 +510,14 @@ class TrackActionsMixin(YTMHostBase):
         """
         artists = track.get("artists", [])
         if not artists or not isinstance(artists, list):
+            # No popup will open, so nothing will clear the table's click
+            # suppression later: clear it now or the next click is eaten.
+            self._clear_popup_refocus_suppression()
             self.notify("No artist info available.", severity="warning", timeout=2)
             return
         valid = [a for a in artists if a.get("id") or a.get("browseId")]
         if not valid:
+            self._clear_popup_refocus_suppression()
             self.notify("No artist info available.", severity="warning", timeout=2)
             return
         if len(valid) == 1:
@@ -559,7 +563,7 @@ class TrackActionsMixin(YTMHostBase):
                 if copy_to_clipboard(link):
                     self.notify("Link copied", timeout=2)
                 else:
-                    self.notify(link, timeout=5)
+                    self.notify(link, timeout=5, markup=False)
             else:
                 self.run_worker(self._dispatch_entity_action(action_id, item, "artist"))
 
@@ -578,6 +582,7 @@ class TrackActionsMixin(YTMHostBase):
             track.get("album_id") or (album.get("id") if isinstance(album, dict) else None) or ""
         )
         if not album_id:
+            self._clear_popup_refocus_suppression()
             self.notify("No album info available.", severity="warning", timeout=2)
             return
         album_name = album if isinstance(album, str) else album.get("name", "Unknown Album")
@@ -597,7 +602,7 @@ class TrackActionsMixin(YTMHostBase):
                 if copy_to_clipboard(link):
                     self.notify("Link copied", timeout=2)
                 else:
-                    self.notify(link, timeout=5)
+                    self.notify(link, timeout=5, markup=False)
             else:
                 self.run_worker(self._dispatch_entity_action(action_id, item, "album"))
 
@@ -635,7 +640,7 @@ class TrackActionsMixin(YTMHostBase):
                     await self.play_track(first)
                 if not owns_request(self):
                     return
-                self.notify(f"Playing: Radio from {artist_name}", timeout=4)
+                self.notify(f"Playing: Radio from {artist_name}", timeout=4, markup=False)
             else:
                 self.notify("No radio suggestions available.", severity="warning", timeout=3)
         else:
@@ -667,10 +672,12 @@ class TrackActionsMixin(YTMHostBase):
             self.notify("No songs found for this artist.", severity="warning", timeout=3)
             return
         artist_name = data.get("name", "Unknown Artist")
-        await self._replace_queue_and_play(top_tracks, shuffle=None)
+        await self._replace_queue_and_play(top_tracks, shuffle=None, autoplay=False)
         if not owns_request(self):
             return
-        self.notify(f"Playing top songs from {artist_name}", timeout=4)
+        # The rest of the songs belong to the queue just adopted, not to this
+        # request. Schedule the fetch before the first stream is awaited: a
+        # Next during that wait supersedes the request but must not cut the queue.
         songs_browse_id = songs_section.get("browseId") if isinstance(songs_section, dict) else None
         if songs_browse_id:
             self.run_worker(
@@ -679,6 +686,11 @@ class TrackActionsMixin(YTMHostBase):
                 group="fetch-artist-songs",
                 exclusive=True,
             )
+        if self.queue.current_track is not None:
+            await self.play_track(self.queue.current_track)
+        if not owns_request(self):
+            return
+        self.notify(f"Playing top songs from {artist_name}", timeout=4, markup=False)
 
     @playback_request
     async def _fetch_remaining_artist_songs(
@@ -745,7 +757,7 @@ class TrackActionsMixin(YTMHostBase):
             return
         result = await self.ytmusic.add_to_library(playlist_id)
         if result == "success":
-            self.notify(f"Added {album_name} to library", timeout=2)
+            self.notify(f"Added {album_name} to library", timeout=2, markup=False)
         else:
             self.notify(
                 f"Couldn't add — {mutation_failure_suffix(result)}", severity="error", timeout=3
@@ -765,7 +777,7 @@ class TrackActionsMixin(YTMHostBase):
         if not owns_request(self):
             return
         action = "Shuffling" if shuffle else "Playing"
-        self.notify(f"{action}: {album_name}", timeout=4)
+        self.notify(f"{action}: {album_name}", timeout=4, markup=False)
 
     async def _add_album_to_queue(self, album_id: str, album_name: str) -> None:
         """Fetch album tracks and add them to the queue."""
@@ -936,18 +948,29 @@ class TrackActionsMixin(YTMHostBase):
                 self.notify("Playlist is empty", severity="warning")
                 return
             await self._replace_queue_and_play(
-                tracks, entity_id=playlist_id, start_index=None, shuffle=shuffle
+                tracks,
+                entity_id=playlist_id,
+                start_index=None,
+                shuffle=shuffle,
+                autoplay=False,
             )
             if not owns_request(self):
                 return
-            suffix = " (shuffled)" if self.queue.shuffle_enabled else ""
-            self.notify(f"Playing: {name}{suffix}", timeout=4)
+            # The tail belongs to the queue just adopted, not to this request.
+            # Schedule it before the first stream is awaited: a Next during
+            # that wait supersedes the request but must not cut the queue.
             total_count = data.get("trackCount") or len(raw_tracks)
             if total_count > len(raw_tracks):
                 self.run_worker(
                     self._fetch_remaining_for_queue(playlist_id, len(raw_tracks), order=order),
                     name="fetch-remaining-playlist",
                 )
+            if self.queue.current_track is not None:
+                await self.play_track(self.queue.current_track)
+            if not owns_request(self):
+                return
+            suffix = " (shuffled)" if self.queue.shuffle_enabled else ""
+            self.notify(f"Playing: {name}{suffix}", timeout=4, markup=False)
         except Exception:
             logger.exception("Failed to load playlist %s", playlist_id)
             if owns_request(self):
@@ -989,7 +1012,7 @@ class TrackActionsMixin(YTMHostBase):
             return
 
         playlist_name = item.get("title", "playlist")
-        self.notify(f"Starting radio from {playlist_name}...", timeout=3)
+        self.notify(f"Starting radio from {playlist_name}...", timeout=3, markup=False)
         try:
             radio_tracks = normalize_tracks(await self.ytmusic.get_playlist_radio(playlist_id))
         except Exception:
@@ -1014,7 +1037,7 @@ class TrackActionsMixin(YTMHostBase):
             if first:
                 await self.play_track(first)
                 if owns_request(self):
-                    self.notify(f"Playing: Radio from {playlist_name}", timeout=4)
+                    self.notify(f"Playing: Radio from {playlist_name}", timeout=4, markup=False)
         else:
             self.notify("No radio tracks found", severity="warning", timeout=3)
 

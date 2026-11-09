@@ -509,7 +509,7 @@ class YTMPlayerApp(
             )
             return
 
-        self.notify(f"Saved {current_theme} as default theme", timeout=3)
+        self.notify(f"Saved {current_theme} as default theme", timeout=3, markup=False)
 
     # ── Crash diagnostics ────────────────────────────────────────────
 
@@ -552,6 +552,7 @@ class YTMPlayerApp(
                 f"Background error{hint} — see ~/.config/ytm-player/crashes/",
                 severity="error",
                 timeout=5,
+                markup=False,
             )
         except Exception:
             pass
@@ -699,6 +700,7 @@ class YTMPlayerApp(
                 f"Could not start player services: {exc}",
                 severity="error",
                 timeout=10,
+                markup=False,
             )
             self.set_timer(2.0, self.exit)
             return
@@ -717,6 +719,7 @@ class YTMPlayerApp(
                 "The database was not deleted or replaced. See ytm.log.",
                 severity="warning",
                 timeout=10,
+                markup=False,
             )
 
         try:
@@ -728,6 +731,7 @@ class YTMPlayerApp(
                 f"Could not start player services: {exc}",
                 severity="error",
                 timeout=10,
+                markup=False,
             )
             self.set_timer(2.0, self.exit)
             return
@@ -976,6 +980,7 @@ class YTMPlayerApp(
                     f"ytm-player {latest} is available (you have {__version__}). "
                     f"Run: pip install -U ytm-player",
                     timeout=8,
+                    markup=False,
                 )
 
         self.run_worker(_run(), group="update-check", exclusive=True)

@@ -419,7 +419,7 @@ class SidebarMixin(YTMHostBase):
                 name, description, privacy=privacy
             )
             if status == "success" and playlist_id:
-                self.notify(f"Created '{name}'", timeout=2)
+                self.notify(f"Created '{name}'", timeout=2, markup=False)
                 ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
                 panel = ps.query_one("#ps-playlists", LibraryPanel)
                 panel.prepend_item({"playlistId": playlist_id, "title": name, "count": 0})
@@ -453,7 +453,7 @@ class SidebarMixin(YTMHostBase):
                 suffix = mutation_failure_suffix(result)
                 self.notify(f"Failed to edit playlist - {suffix}", severity="error", timeout=4)
                 return
-            self.notify(f"Updated '{name}'", timeout=2)
+            self.notify(f"Updated '{name}'", timeout=2, markup=False)
             await self._apply_playlist_edit_to_ui(
                 item, playlist_id, raw_id, name, description, privacy
             )
@@ -518,7 +518,7 @@ class SidebarMixin(YTMHostBase):
             if result != "success":
                 result = await self.ytmusic.remove_album_from_library(raw_id)
             if result == "success":
-                self.notify(f"Removed '{title}'", timeout=2)
+                self.notify(f"Removed '{title}'", timeout=2, markup=False)
                 ps = self.query_one("#playlist-sidebar", PlaylistSidebar)
                 ps.query_one("#ps-playlists", LibraryPanel).remove_item(raw_id)
                 dead_ids = {playlist_id, raw_id, f"VL{raw_id}"}
