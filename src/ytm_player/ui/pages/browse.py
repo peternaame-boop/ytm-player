@@ -695,12 +695,13 @@ class ChartsSection(Widget):
         self._dailies.clear()
 
     def compose(self) -> ComposeResult:
-        yield Static("Loading charts...", id="charts-loading", classes="loading")
+        yield Static("Loading charts...", id="charts-loading", classes="loading", markup=False)
         with Vertical(id="charts-content"):
             yield Static("Global Charts", classes="section-title")
             yield Static(
                 f"Country: {self._country}    (press 'c' to change)",
                 id="charts-country",
+                markup=False,
             )
             # Two stacked pill rows:
             #   #charts-event-pills — global event playlists (Coachella et al);

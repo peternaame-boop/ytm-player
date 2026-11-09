@@ -25,6 +25,7 @@ from ytm_player.config.settings import Settings
 from ytm_player.services.ytmusic import mutation_failure_suffix
 from ytm_player.ui.popups.actions import ActionsPopup, _ActionItem
 from ytm_player.ui.popups.confirm_popup import ConfirmPopup
+from ytm_player.ui.popups.country_picker import CountryPickerModal
 from ytm_player.ui.popups.input_popup import InputPopup
 from ytm_player.ui.popups.playlist_picker import PlaylistPicker
 
@@ -166,6 +167,17 @@ async def test_input_popup_title_is_literal() -> None:
         await pilot.pause()
 
         assert _literal(_shown(popup.query_one("#input-title", Static))) == title
+
+
+@pytest.mark.parametrize("region", ["[/x]", "[Live]"])
+async def test_country_picker_status_shows_the_configured_region_as_typed(region: str) -> None:
+    app = _Host()
+    async with app.run_test() as pilot:
+        popup = CountryPickerModal(current_code=region)
+        await app.push_screen(popup)
+        await pilot.pause()
+
+        assert _literal(_shown(popup.query_one("#picker-status", Static))) == f"Current: {region}"
 
 
 # ── Playlist picker ──────────────────────────────────────────────────

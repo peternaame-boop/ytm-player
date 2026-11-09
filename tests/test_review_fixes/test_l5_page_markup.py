@@ -391,6 +391,44 @@ async def test_chart_pills_show_as_typed() -> None:
         assert _texts([section.query_one("#charts-pill-0", Static)]) == ["Top [Live] [/x]"]
 
 
+@pytest.mark.parametrize("region", ["[/x]", "[Live]"])
+async def test_chart_country_line_and_errors_show_the_region_as_typed(region: str) -> None:
+    # ``[ui] region`` is the user's own config value and is not validated.
+    settings = Settings()
+    settings.ui.region = region
+    with patch("ytm_player.config.settings._settings", settings):
+        section = ChartsSection()
+        app = _Host(section)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+
+            def country() -> str:
+                return _texts([section.query_one("#charts-country", Static)])[0]
+
+            def message() -> str:
+                return _texts([section.query_one("#charts-loading", Static)])[0]
+
+            assert country() == f"Country: {region}    (press 'c' to change)"
+
+            app.ytmusic.get_charts = AsyncMock(return_value=None)
+            await section.load_data()
+            await pilot.pause()
+            assert message() == f"Failed to load charts for {region} — try again later."
+
+            app.ytmusic.get_charts = AsyncMock(return_value={"daily": []})
+            await section.load_data()
+            await pilot.pause()
+            assert message().startswith(f"No chart data available for {region}. ")
+
+            app.ytmusic.get_charts = AsyncMock(
+                return_value={"daily": [{"title": "Top 100", "playlistId": "PLc"}]}
+            )
+            app.ytmusic.get_chart_shelf_tracks = AsyncMock(return_value=[_track(0)])
+            await section.load_data()
+            await pilot.pause()
+            assert country() == f"Country: {region}    (press 'c' to change)"
+
+
 # ── Help ─────────────────────────────────────────────────────────────
 
 
