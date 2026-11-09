@@ -14,7 +14,7 @@
 | `>` / `<` | Seek forward / back by `[playback] seek_step` seconds |
 | `^` | Seek to the start of the track |
 | `j` / `k` | Move down/up (also `down` / `up`; `Ctrl+n` also moves down) |
-| `Ctrl+f` / `Ctrl+b` | Page down / up (also `page_down` / `page_up`) |
+| `Ctrl+f` / `Ctrl+b` | Scroll down / up one line, or 10 lines in the lyrics sidebar (also `page_down` / `page_up`) |
 | `g g` / `G` | Go to the top / bottom of the list (also `home` / `end`) |
 | `enter` | Select / play |
 | `g l` | Go to Library |

@@ -13,6 +13,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
+from ytm_player.config.settings import Settings
 from ytm_player.ui.selection_info_bar import SelectionInfoBar
 from ytm_player.ui.widgets.track_table import TrackTable
 from ytm_player.utils.bidi import FSI, PDI
@@ -239,7 +240,9 @@ async def test_mark_glyph_still_renders_beside_literal_cells():
         assert "✓" not in _line_with(app, "Other")
 
 
-async def test_rtl_cells_keep_their_bidi_isolation():
+async def test_rtl_cells_keep_their_bidi_isolation(monkeypatch):
+    # Default settings, not the developer's config: bidi_mode changes the cell text.
+    monkeypatch.setattr("ytm_player.config.settings._settings", Settings())
     title = "שלום [live]"
     app = _Host()
     async with app.run_test(size=(140, 12)) as pilot:

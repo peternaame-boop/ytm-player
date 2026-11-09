@@ -96,7 +96,7 @@ Interactive flow — see [docs/spotify-import.md](spotify-import.md).
 
 ```bash
 ytm doctor                   # 9-section diagnostic report (version/platform/mpv, paths, process status, MPRIS/media keys, recent errors, mpv warnings, faulthandler trace, last crash, active hooks; auth headers/tokens and URLs redacted)
-ytm config                   # Open config.toml in $EDITOR (no $EDITOR: the config dir via xdg-open, or config.toml in the default app on Windows)
+ytm config                   # Open config.toml in $EDITOR (no $EDITOR: the config dir via xdg-open on Linux, config.toml in the default app on Windows; on macOS set $EDITOR)
 ytm --version                # Print the version
 ytm --debug                  # Launch with verbose logging
 ```

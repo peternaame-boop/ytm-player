@@ -11,7 +11,7 @@ ytm-player reads configuration from TOML files in `~/.config/ytm-player/` (respe
 | `account.json` | Which account `auth.json` belongs to (written by `ytm setup`; required for automatic session renewal) |
 | `stream_cookies.txt` | Session cookies for streaming (written by `ytm setup`; used only with `use_session_cookies`) |
 
-Open `config.toml` in your `$EDITOR` (without `$EDITOR`, `xdg-open` opens the config directory; on Windows the default app opens `config.toml`):
+Open `config.toml` in your `$EDITOR` (without `$EDITOR`, `xdg-open` opens the config directory on Linux and the default app opens `config.toml` on Windows; on macOS set `$EDITOR`):
 
 ```bash
 ytm config
@@ -126,7 +126,7 @@ and still verifies the recorded account. Restart a running TUI after changing th
 
 ```toml
 [search]
-default_mode = "music"       # "music" (songs, albums, artists, playlists) or "all" (all result types)
+default_mode = "music"       # "music" (songs, albums, artists, playlists) or "all" (unfiltered search; also includes videos)
 max_history = 500            # currently has no effect; search history is not pruned
 predictive = true            # show search suggestions as you type
 ```
