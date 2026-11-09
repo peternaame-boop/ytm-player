@@ -173,12 +173,7 @@ class QueuePage(TrackFilterHost, Widget):
         """
         queue = self.app.queue  # type: ignore[attr-defined]
         entries = queue.entries
-        autoplay_ids = queue.autoplay_entry_ids
-        # Copies flagged for the table's ↻ label — never the queue's own dicts.
-        tracks = [
-            {**track, "_autoplay": True} if entry_id in autoplay_ids else track
-            for entry_id, track in entries
-        ]
+        tracks = [track for _, track in entries]
         current_track = queue.current_track
 
         # Update the "Now Playing" header.
@@ -194,6 +189,7 @@ class QueuePage(TrackFilterHost, Widget):
             header.display = False
 
         table = self.query_one("#queue-table", TrackTable)
+        table.autoplay_keys = queue.autoplay_entry_ids
 
         if not tracks:
             table.load_tracks([])

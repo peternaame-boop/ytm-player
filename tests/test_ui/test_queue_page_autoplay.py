@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from textual.app import App, ComposeResult
 from textual.widgets import Static
 
@@ -102,14 +103,34 @@ async def test_playing_autoplay_row_gets_its_label_back_when_playback_moves_on()
         assert _labels(table)[2:] == ["↻", "▶"]
 
 
-async def test_queue_dicts_are_not_flagged():
-    """The ↻ flag lives on the table's copies, never on the queue's tracks."""
+@pytest.mark.parametrize(
+    ("play_next", "expected"),
+    [(True, ["▶", " ", " ", "↻", "↻"]), (False, ["▶", " ", "↻", "↻", " "])],
+    ids=["play-next", "add-to-queue"],
+)
+async def test_queueing_an_autoplay_row_again_adds_a_plain_entry(play_next, expected):
+    """Play Next / Add to Queue on a ↻ row queue the table's copy of the track
+    (as the actions menu does); the new entry is the user's, so it has no ↻."""
     queue = _make_queue()
     app = _QueueHost(queue)
     async with app.run_test() as pilot:
+        page = app.query_one(QueuePage)
+        table = app.query_one("#queue-table", TrackTable)
+        table.move_cursor(row=2)  # a1
         await pilot.pause()
 
-        assert not any("_autoplay" in track for track in queue.tracks)
+        track = table.selected_track
+        assert track is not None
+        if play_next:
+            queue.add_next(track)
+        else:
+            queue.add(track)
+        page._refresh_queue()
+        await pilot.pause()
+
+        assert _labels(table) == expected
+        assert "↻ 2 added by autoplay" in _footer(app)
+        assert not any("_autoplay" in t for t in queue.tracks)
 
 
 async def test_deleting_an_autoplay_row_vetoes_it():

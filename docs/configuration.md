@@ -38,7 +38,7 @@ check_for_updates = true     # check PyPI once per 24h, surface a one-time toast
 audio_quality = "high"       # high, medium, low
 prefer_audio = true          # prefer audio-only streams over video (audio uses less bandwidth)
 default_volume = 80          # 0-100
-autoplay = true              # keep playing related songs; queued ahead, marked ↻ on the Queue page (deleted ones are not re-added)
+autoplay = true              # queue related songs ahead; marked ↻ on the Queue page
 gapless = true               # preload the next track for gapless transitions
 seek_step = 5                # seconds per +/- seek
 api_timeout = 15             # seconds for ytmusicapi calls before failover
@@ -46,6 +46,8 @@ resume_on_launch = true      # restore last-playing track + position on app star
 history_min_listen_seconds = 5  # seconds before a track counts as a play instead of a skip
 sync_history_to_ytmusic = true  # report TUI plays back to your YT Music account history
 ```
+
+> `autoplay` picks are marked ↻ on the Queue page. Removing one prevents autoplay from adding it again until the queue is cleared or the app exits. Restored tracks have no autoplay marker.
 
 > `resume_on_launch` (added v1.7.0) stages the last-playing track + position into the playback bar on startup. Press space to continue from where you were. Set to `false` to start fresh every time.
 
