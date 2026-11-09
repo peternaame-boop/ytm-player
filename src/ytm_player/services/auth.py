@@ -68,8 +68,14 @@ _yt_dlp_patched = False
 def _zen_profile_roots() -> list[Path]:
     """Return candidate Zen profile roots for the current platform."""
     if sys.platform == "win32":
+        roots: list[Path] = []
         appdata = os.environ.get("APPDATA")
-        return [Path(appdata) / "zen"] if appdata else []
+        if appdata:
+            roots.append(Path(appdata) / "zen")
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            roots.append(Path(local_appdata) / "zen")
+        return roots
 
     home = Path.home()
     if sys.platform == "darwin":
@@ -77,22 +83,66 @@ def _zen_profile_roots() -> list[Path]:
 
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
     xdg_root = Path(xdg_config_home) if xdg_config_home else home / ".config"
-    return [
-        home / ".zen",
-        xdg_root / "zen",
-        home / ".var" / "app" / "app.zen_browser.zen" / ".zen",
-        home / ".var" / "app" / "app.zen_browser.zen" / "zen",
-    ]
+    candidates = [home / ".zen", xdg_root / "zen"]
+    flatpak_base = home / ".var" / "app" / "app.zen_browser.zen"
+    candidates.extend(
+        [
+            flatpak_base / ".zen",
+            flatpak_base / "zen",
+            flatpak_base / "config" / "zen",
+        ]
+    )
+    # De-duplicate while preserving order (XDG_CONFIG_HOME may equal ~/.config).
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
 
 
 def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
-    """Extract cookies from a supported browser, including Zen profiles."""
+    """Extract cookies from a supported browser, including Zen profiles.
+
+    Zen keeps Firefox-format profiles in its own directories, which yt-dlp
+    does not search. Each candidate root that exists is tried through the
+    Firefox extractor, and the first one holding a signed-in YouTube session
+    wins: a stale directory (e.g. a leftover ``~/.zen`` after Zen migrated
+    to ``~/.config/zen``) must not shadow the real profile. Jars are never
+    merged, so one profile's cookies don't mix with another's.
+    """
     from yt_dlp.cookies import extract_cookies_from_browser
 
     if browser == "zen":
+        first_jar = None
+        last_error: Exception | None = None
         for root in _zen_profile_roots():
-            if root.exists():
-                return extract_cookies_from_browser("firefox", profile=str(root))
+            if not root.is_dir():
+                continue
+            try:
+                jar = extract_cookies_from_browser("firefox", profile=str(root))
+            except Exception as exc:  # noqa: BLE001 — one bad root must not hide the rest
+                logger.debug("Zen profile root %s not usable: %s", root, exc)
+                last_error = exc
+                continue
+            if first_jar is None:
+                first_jar = jar
+            # Signed in: ytmusicapi signs requests with __Secure-3PAPISID.
+            if any(
+                c.domain == ".youtube.com"
+                and c.name == "__Secure-3PAPISID"
+                and bool(c.value)
+                and not c.is_expired()
+                for c in jar
+            ):
+                return jar
+        # No signed-in profile: the first readable one, so callers report no account.
+        if first_jar is not None:
+            return first_jar
+        if last_error is not None:
+            raise last_error
         raise FileNotFoundError("no Zen profile directory found")
 
     return extract_cookies_from_browser(browser)
@@ -1119,7 +1169,12 @@ class AuthManager:
         session as expired and the user runs ``ytm setup`` once. The commit
         itself refuses when the files no longer match *owner*.
         """
-        cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
+        # The multi-KB ST-* tracking cookies can push the header past the
+        # server's size limit: sign-in probes come back empty and home-feed
+        # continuations get 413. Requests never need them; the stream jar
+        # keeps the full set.
+        auth_cookies = [c for c in cookies if not c.name.startswith("ST-")]
+        cookie_str = "; ".join(f"{c.name}={c.value}" for c in auth_cookies)
 
         # Verify we have the critical SAPISID cookie.
         try:
