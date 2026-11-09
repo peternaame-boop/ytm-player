@@ -103,6 +103,8 @@ if TYPE_CHECKING:
         _page_state_cache: dict[str, dict]
         _active_library_playlist_id: str | None
         _context_seq: int
+        _nav_idle: asyncio.Event
+        _nav_pending: tuple[str, dict[str, Any]] | None
 
         # ── Playback state tracking ────────────────────────────────────
         _track_start_position: float
@@ -114,6 +116,7 @@ if TYPE_CHECKING:
         _play_request: int
         _active_stop_generation: int
         _queue_stop_generation: int
+        _refill_owner: tuple[int, int] | None
         _handled_end_attempt: int
         _recovery_generation: int | None
         _handled_error_attempt: int

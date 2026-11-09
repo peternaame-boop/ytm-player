@@ -257,6 +257,11 @@ class YTMPlayerApp(
 
         # Monotonic counter making each context page's widget id unique.
         self._context_seq: int = 0
+        # Page-swap guard (#145): cleared while navigate_to swaps pages; the
+        # latest request that arrives meanwhile waits in _nav_pending.
+        self._nav_idle = asyncio.Event()
+        self._nav_idle.set()
+        self._nav_pending: tuple[str, dict[str, Any]] | None = None
 
         # Track position tracking for history logging.
         self._track_start_position: float = 0.0
@@ -276,6 +281,8 @@ class YTMPlayerApp(
         self._play_request: int = 0
         self._active_stop_generation: int = 0
         self._queue_stop_generation: int = 0
+        # (queue generation, stop generation) the running refill was started for.
+        self._refill_owner: tuple[int, int] | None = None
         self._handled_end_attempt: int = -1
         # Generation of the one retry a failed play attempt gets, and the
         # highest attempt whose ERROR was handled (see _on_player_error).
