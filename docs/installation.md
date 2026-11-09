@@ -74,13 +74,13 @@ nix run github:peternaame-boop/ytm-player
   outputs = { nixpkgs, ytm-player, ... }: {
     nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       modules = [
-        {
+        ({ pkgs, ... }: {
           nixpkgs.overlays = [ ytm-player.overlays.default ];
-          environment.systemPackages = with pkgs; [
-            ytm-player          # core (MPRIS + album art included)
-            # ytm-player-full   # all features (Discord, Last.fm, Spotify import)
+          environment.systemPackages = [
+            pkgs.ytm-player     # core (MPRIS + album art included)
+            # ytm-player.packages.${pkgs.stdenv.hostPlatform.system}.ytm-player-full   # all features (Discord, Last.fm, Spotify import)
           ];
-        }
+        })
       ];
     };
   };
@@ -149,7 +149,10 @@ If you installed via AUR, install optional dependencies with pacman/yay — **no
 yay -S python-pylast                       # Last.fm scrobbling
 yay -S python-pypresence                   # Discord Rich Presence
 yay -S python-spotipy python-thefuzz       # Spotify playlist import
+yay -S python-anyascii                     # Lyrics transliteration
 ```
+
+Spotify import without saved Spotify API credentials also needs the `spotifyscraper` Python package.
 
 (`python-dbus-fast` is a hard dependency of the AUR package, so MPRIS / media
 keys are pulled in automatically — no separate install needed.)
@@ -171,12 +174,12 @@ On Linux and macOS, `mpv` packages include the shared library that ytm-player ne
 
 If you installed mpv a different way, place `libmpv-2.dll` next to `mpv.exe` or anywhere on `%PATH%`.
 
-ytm-player automatically searches common install locations (scoop, chocolatey, Program Files) for the DLL.
+ytm-player automatically searches common install locations (scoop's `mpv` and `mpv-git` apps, `Program Files\mpv`, `Program Files (x86)\mpv`) for the DLL.
 
 ## Authenticate
 
 ```bash
-ytm setup                    # Auto-detect browser cookies
+ytm setup                    # Browser cookies: [yt_dlp] cookies_file first if set, then cookie_browser if set, else auto-detect
 ytm setup --browser firefox  # Target a specific browser
 ytm setup --manual           # Skip detection, paste headers directly
 ```
@@ -185,6 +188,6 @@ Windows: replace `ytm` with `py -m ytm_player`.
 
 The setup wizard has three modes — see the inline help for details (`ytm setup --help`).
 
-Credentials are stored in `~/.config/ytm-player/auth.json` with `0o600` permissions.
+Credentials are stored as `auth.json` in the config directory (`~/.config/ytm-player/`, respecting `$XDG_CONFIG_HOME`; `%APPDATA%\ytm-player\` on Windows), with `0o600` permissions on Linux/macOS.
 
 > ⚠️ The `[yt_dlp].remote_components` setting allows fetching external JS components (npm/GitHub). Enable it only if you trust the source and network path.

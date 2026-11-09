@@ -1,6 +1,6 @@
 # Configuration
 
-ytm-player reads configuration from TOML files in `~/.config/ytm-player/` (respects `$XDG_CONFIG_HOME`):
+ytm-player reads configuration from TOML files in `~/.config/ytm-player/` (respects `$XDG_CONFIG_HOME`; `%APPDATA%\ytm-player\` on Windows):
 
 | File | Purpose |
 |------|---------|
@@ -11,7 +11,7 @@ ytm-player reads configuration from TOML files in `~/.config/ytm-player/` (respe
 | `account.json` | Which account `auth.json` belongs to (written by `ytm setup`; required for automatic session renewal) |
 | `stream_cookies.txt` | Session cookies for streaming (written by `ytm setup`; used only with `use_session_cookies`) |
 
-Open the config directory in your editor:
+Open `config.toml` in your `$EDITOR` (without `$EDITOR`, `xdg-open` opens the config directory; on Windows the default app opens `config.toml`):
 
 ```bash
 ytm config
@@ -25,8 +25,8 @@ Every section is optional — anything you don't set falls back to defaults.
 
 ```toml
 [general]
-startup_page = "library"     # library, search, browse
-playback_bar_position = "bottom"  # "bottom" or "top"
+startup_page = "library"     # library, search, browse, queue, liked_songs, recently_played, help
+playback_bar_position = "bottom"  # "bottom" or "top" (currently has no effect; the bar is always at the bottom)
 brand_account_id = ""        # YouTube Brand Account ID (21-digit; find at myaccount.google.com/brandaccounts)
 check_for_updates = true     # check PyPI once per 24h, surface a one-time toast on new version
 ```
@@ -36,11 +36,11 @@ check_for_updates = true     # check PyPI once per 24h, surface a one-time toast
 ```toml
 [playback]
 audio_quality = "high"       # high, medium, low
-prefer_audio = true          # prefer audio-only streams over video (audio uses less bandwidth)
+prefer_audio = true          # currently has no effect; audio-only streams are always preferred
 default_volume = 80          # 0-100
 autoplay = true              # queue related songs ahead; marked ↻ on the Queue page
 gapless = true               # preload the next track for gapless transitions
-seek_step = 5                # seconds per +/- seek
+seek_step = 5                # seconds per >/< seek
 api_timeout = 15             # seconds for ytmusicapi calls before failover
 resume_on_launch = true      # restore last-playing track + position on app start; press space to continue
 history_min_listen_seconds = 5  # seconds before a track counts as a play instead of a skip
@@ -69,9 +69,9 @@ If one source can't be loaded, All shows the other and says so in the footer. Re
 
 ```toml
 [cache]
-enabled = true
+enabled = true               # currently has no effect; the cache is always on
 max_size_mb = 1024           # 1GB default LRU audio cache
-prefetch_next = true         # resolve next track's stream URL in background for instant skip
+prefetch_next = true         # currently has no effect; the next track's stream URL is always prefetched
 location = ""                # blank = default cache dir; set a path to override
 ```
 
@@ -126,8 +126,8 @@ and still verifies the recorded account. Restart a running TUI after changing th
 
 ```toml
 [search]
-default_mode = "music"       # "music" (songs only) or "all" (all result types)
-max_history = 500            # number of past search queries to remember
+default_mode = "music"       # "music" (songs, albums, artists, playlists) or "all" (all result types)
+max_history = 500            # currently has no effect; search history is not pruned
 predictive = true            # show search suggestions as you type
 ```
 
@@ -135,7 +135,7 @@ predictive = true            # show search suggestions as you type
 
 ```toml
 [ui]
-theme = "ytm-dark"           # startup default Textual theme; runtime changes are saved in session.json
+theme = "ytm-dark"           # startup default Textual theme; a theme picked at runtime lasts for that session only
 album_art = true             # show colored half-block album art in playback bar
 progress_style = "block"     # block or line
 sidebar_width = 30
@@ -153,11 +153,11 @@ sidebar_overflow = "truncate"  # "truncate" (1-row + ellipsis) or "wrap" (multi-
 show_queue_source = true     # show "Generated from: …" header on radio/discovery queues
 ```
 
-`theme` is the startup default. Changing theme from Textual's command palette (`Ctrl+P` → `Theme`) updates the current session and is saved in `session.json`, not `config.toml`. To make the active theme the new default, run `Ctrl+P` → `Set Current Theme as Default`.
+`theme` is the startup default. Changing theme from Textual's command palette (`Ctrl+P` → `Theme`) updates the current session only and is not saved. To make the active theme the new default, run `Ctrl+P` → `Theme: Set Current as Default`, which writes it to `[ui] theme` in `config.toml`.
 
 Per-playlist Shuffle lock state (set via the `Shuffle lock` toggle in the
 Library page playlist header) is persisted separately to
-`~/.config/ytm-player/shuffle_prefs.json`. There's nothing to configure
+`shuffle_prefs.json` in the config directory. There's nothing to configure
 in `config.toml` for it.
 
 ### `[notifications]`

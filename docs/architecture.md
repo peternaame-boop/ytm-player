@@ -16,10 +16,12 @@ src/ytm_player/
 │   ├── _ipc.py         #   IPC command handling for CLI
 │   ├── _track_actions.py  # Track selection, actions popup, radio
 │   ├── _session.py     #   Session save/restore (queue, volume, last-playing track)
+│   ├── _commands.py    #   Command palette provider (Theme: Set Current as Default)
+│   ├── _ownership.py   #   Ownership of playback requests and queue continuations
 │   └── _mpris.py       #   MPRIS/media key callbacks
 ├── cli.py              # Click CLI entry point
-├── ipc.py              # Unix socket IPC for CLI ↔ TUI
-├── config/             # Settings, keymap, theme (TOML)
+├── ipc.py              # IPC for CLI ↔ TUI (Unix socket; TCP localhost on Windows)
+├── config/             # Settings, keymap, paths (TOML)
 ├── services/           # Backend services
 │   ├── auth.py         #   Browser cookie auth (multi-account aware)
 │   ├── ytmusic.py      #   YouTube Music API wrapper
@@ -32,15 +34,22 @@ src/ytm_player/
 │   ├── mpris.py        #   D-Bus MPRIS media controls (Linux)
 │   ├── macos_media.py  #   macOS Now Playing integration
 │   ├── macos_eventtap.py  # macOS hardware media key interception
-│   ├── mediakeys.py    #   Cross-platform media key service
+│   ├── macos_app.py    #   Keeps the process out of the macOS Dock
+│   ├── mediakeys.py    #   Windows media keys (pynput)
+│   ├── _dispatch.py    #   Bridges media-key callbacks from OS threads to the event loop
 │   ├── download.py     #   Offline audio downloads
 │   ├── discord_rpc.py  #   Discord Rich Presence
 │   ├── lastfm.py       #   Last.fm scrobbling
 │   ├── yt_dlp_options.py  # yt-dlp config/cookie handling
+│   ├── regions.py      #   Chart region list
+│   ├── shuffle_prefs.py  # Per-playlist Shuffle lock storage
+│   ├── update_check.py #   PyPI new-version check
 │   └── spotify_import.py  # Spotify playlist import
 ├── ui/
 │   ├── header_bar.py   # Top bar with sidebar toggle buttons
 │   ├── playback_bar.py # Persistent bottom bar (track info, progress, controls, heart)
+│   ├── selection_info_bar.py  # Full name of the focused item, above the playback bar
+│   ├── track_filter.py # Shared filter wiring for track-list pages
 │   ├── theme.py        # Textual theme integration + app-specific color overrides
 │   ├── sidebars/       # Persistent playlist sidebar (left) and lyrics sidebar (right)
 │   ├── pages/          # Library, Search, Browse, Context, Queue, Liked Songs, Recently Played, Help
@@ -48,7 +57,7 @@ src/ytm_player/
 │                       #   (right-click context menu, filter, sort, play indicator)
 │   ├── popups/         # Actions menu, playlist picker, Spotify import, country picker (charts region — 68 entries with Global default)
 │   └── widgets/        # TrackTable, PlaybackProgress, AlbumArt
-└── utils/              # Terminal detection, formatting, BiDi text, transliteration
+└── utils/              # Terminal detection, formatting, BiDi text, transliteration, diagnostics (doctor), logging, 3.10 compat
 ```
 
 ## Stack
@@ -70,9 +79,9 @@ src/ytm_player/
 
 - **Mixin architecture** — `YTMPlayerApp` is composed from 8 mixins (Playback, Session, Keys, Navigation, Sidebar, TrackActions, MPRIS, IPC). Each mixin extends `YTMHostBase` (in `app/_base.py`), a `TYPE_CHECKING`-only stub class that mirrors the runtime instance attribute surface so Pyright doesn't emit `Cannot access attribute X for class FooMixin` noise. At runtime `YTMHostBase = object` — zero behaviour change.
 - **Event-driven playback** — `Player` emits `PlayerEvent` enums (`TRACK_END`, `TRACK_CHANGE`, etc.) dispatched to the Textual event loop via `call_soon_threadsafe`. The app registers callbacks to update the UI.
-- **Thread safety** — `Player` and `QueueManager` are singletons with `threading.Lock`. Player events bridge from mpv's callback thread to asyncio.
+- **Thread safety** — `Player` is a process-wide singleton; `QueueManager` is a per-app instance. Both guard their state with `threading.Lock`. Player events bridge from mpv's callback thread to asyncio.
 - **Track format** — All services use a standardized track dict (`video_id`, `title`, `artist`, `artists`, `album`, `album_id`, `duration`, `thumbnail_url`, `is_video`). The `normalize_tracks()` helper in `utils/formatting.py` converts inconsistent ytmusicapi response shapes into this format.
-- **Session persistence** — Volume, queue, shuffle/repeat, theme, and the last-playing track + position are saved on every exit to `session.json`. When `[playback] resume_on_launch` is true (default), the last-playing track + position are staged into the playback bar at launch and consumed the first time the user presses play. Per-playlist Shuffle lock state is stored separately in `shuffle_prefs.json`.
+- **Session persistence** — Volume, queue, shuffle/repeat, and the last-playing track + position are saved on every exit to `session.json`. When `[playback] resume_on_launch` is true (default), the last-playing track + position are staged into the playback bar at launch and consumed the first time the user presses play. Per-playlist Shuffle lock state is stored separately in `shuffle_prefs.json`.
 - **Playback bar keybindings** — Standard transport keys plus `l` to toggle the like state of the currently playing track.
 - **Prefetching** — Next track's stream URL is resolved in the background for instant skip.
 - **Page navigation** — `app/_navigation.py` manages a nav stack (max 20). Each page implements `handle_action(action, count)` for vim-style keybinding dispatch and `get_nav_state()` for state preservation across navigation.

@@ -31,25 +31,25 @@ pytest --cov=ytm_player --cov-report=term-missing
 pytest tests/test_services/test_queue.py
 
 # Single test
-pytest tests/test_services/test_queue.py::test_add_track -v
+pytest tests/test_services/test_queue.py::TestOperations::test_add_at_position -v
 ```
 
 System dependency: `mpv` must be installed (`sudo pacman -S mpv` on Arch).
 
 ## Architecture
 
-**Entry point:** `ytm` CLI command → `src/ytm_player/cli.py` (Click). Running `ytm` with no args launches the Textual TUI app (`app/` package — split into mixins, all extending `YTMHostBase` from `app/_base.py` which declares the shared attribute surface as a `TYPE_CHECKING`-only stub for clean Pyright type-checking). Subcommands (`ytm search`, `ytm play`, etc.) communicate with a running TUI instance via Unix socket IPC (`ipc.py`).
+**Entry point:** `ytm` CLI command → `src/ytm_player/cli.py` (Click). Running `ytm` with no args launches the Textual TUI app (`app/` package — split into mixins, all extending `YTMHostBase` from `app/_base.py` which declares the shared attribute surface as a `TYPE_CHECKING`-only stub for clean Pyright type-checking). Playback subcommands (`ytm play`, `ytm next`, `ytm queue`, etc.) communicate with a running TUI instance via IPC (`ipc.py`: Unix socket, TCP localhost on Windows); `ytm search`, `stats`, `history` and `cache` run standalone.
 
 **Three-layer structure:**
 
-- **`services/`** — Backend singletons: `Player` (mpv wrapper), `QueueManager` (shuffle/repeat), `StreamResolver` (yt-dlp), `YTMusicService` (ytmusicapi), `CacheManager` (LRU audio cache), `HistoryManager` (SQLite via aiosqlite), `AuthManager` (browser cookie extraction), `lrclib` (LRCLIB.net lyrics fallback — `get_synced_lyrics` runs a title sanitizer that strips `(feat. X)`, `(Remix)`, `(Remastered)`, `(Deluxe)`, `(Live)`, `(Acoustic)`, `(Official Music Video)`, etc., before lookup to improve match rate), `DownloadService` (offline downloads), `SpotifyImport`. Platform-specific: `MPRISService` (Linux D-Bus), `MacOSMediaService` + `MacOSEventTapService` (macOS), `MediaKeysService` (Windows pynput). Optional: `DiscordRPC`, `LastFMService`.
+- **`services/`** — Backend services: `Player` (mpv wrapper), `QueueManager` (shuffle/repeat), `StreamResolver` (yt-dlp), `YTMusicService` (ytmusicapi), `CacheManager` (LRU audio cache), `HistoryManager` (SQLite via aiosqlite), `AuthManager` (browser cookie extraction), `lrclib` (LRCLIB.net lyrics fallback — `get_synced_lyrics` runs a title sanitizer that strips `(feat. X)`, `(Remix)`, `(Remastered)`, `(Deluxe)`, `(Live)`, `(Acoustic)`, `(Official Music Video)`, etc., before lookup to improve match rate), `DownloadService` (offline downloads), `spotify_import` (Spotify playlist extraction and matching module). Platform-specific: `MPRISService` (Linux D-Bus), `MacOSMediaService` + `MacOSEventTapService` (macOS), `MediaKeysService` (Windows pynput). Optional: `DiscordRPC`, `LastFMService`.
 - **`ui/`** — Textual widgets: `pages/` (library, search, browse, context, queue, etc.), `sidebars/` (playlist list, synced lyrics), `popups/` (modals), `widgets/` (track table, progress bar, album art). Styling via `theme.py` with CSS variables.
 - **`config/`** — `Settings` dataclass loaded from `~/.config/ytm-player/config.toml`. `KeyMap` system supports multi-key vim sequences and count prefixes. All paths centralized in `paths.py`.
 
 **Key patterns:**
 
 - **Event-driven playback:** `Player` emits `PlayerEvent` enums (`TRACK_END`, `TRACK_CHANGE`, etc.) dispatched to the Textual event loop via `call_soon_threadsafe`. The app registers callbacks to update UI.
-- **Thread safety:** `Player` and `QueueManager` are singletons with `threading.Lock`. Player events bridge from mpv's callback thread to asyncio.
+- **Thread safety:** `Player` is a process-wide singleton; `QueueManager` is a per-app instance. Both guard their state with `threading.Lock`. Player events bridge from mpv's callback thread to asyncio.
 - **Track format:** All services use a standardized track dict with keys: `video_id`, `title`, `artist`, `artists` (list of dicts with `name`/`id`), `album`, `album_id`, `duration` (seconds, int or None), `thumbnail_url`, `is_video`. The `normalize_tracks()` function in `utils/formatting.py` converts inconsistent ytmusicapi response shapes into this format — always use it when ingesting API data. `extract_duration()` reads `duration_seconds` → `duration` → `length` in priority order; the `length` fallback exists because `get_watch_playlist` returns durations as `"M:SS"` strings under that key. Always go through `extract_duration()` rather than `track.get("duration_seconds", 0)` — that pattern silently returns 0 for normalized tracks.
 - **Session persistence:** Volume, queue contents, shuffle/repeat state saved to `session.json` and restored on startup. When `[playback] resume_on_launch` is true (default), the last-played track + position are staged into `_pending_resume_video_id` / `_pending_resume_position` on the app and consumed the first time the user presses play, instead of auto-playing on launch.
 - **Playback bar keybindings:** Standard transport keys plus `l` to toggle the like state of the currently playing track.
@@ -88,7 +88,7 @@ ruff check src/ tests/
 - Coverage floor: 47%
 - Heavy mocking of mpv, ytmusicapi, yt-dlp, D-Bus — tests never hit real APIs or require mpv installed
 - Test fixtures in `tests/conftest.py`: `sample_track`/`sample_tracks` use `_make_track()` helper to create standardized track dicts; `queue_manager` provides a fresh `QueueManager` instance
-- CI runs on GitHub Actions (Ubuntu + macOS + Windows, Python 3.10 and 3.15): ruff lint + format check, then pytest with coverage
+- CI runs on GitHub Actions (Ubuntu + macOS + Windows, Python 3.10 and 3.15): ruff lint + format check, pyright, and pytest with coverage, as parallel jobs
 
 ## Logging
 
@@ -109,19 +109,20 @@ Conventions:
 
 ## Error handling architecture
 
-The codebase uses ~263 `except Exception:` blocks as a deliberate graceful-degrade pattern. Service-layer methods return safe defaults (empty list, `False`, `None`) on any failure rather than raising; UI-layer handlers wrap service calls in their own broad catch knowing services don't raise. Every broad-except site has been audited and categorized in `docs/broad-except-audit.md` as KEEP (intentional graceful-degrade — 176 sites), NARROW (hides real bugs, should specify expected types — 87 sites), or PROMOTE (should let propagate — 0 sites).
+The codebase uses ~336 broad `except Exception` blocks as a deliberate graceful-degrade pattern. Service-layer methods return safe defaults (empty list, `False`, `None`) on any failure rather than raising; UI-layer handlers wrap service calls in their own broad catch knowing services don't raise. The original whole-app audit is no longer in the tree; `docs/broad-except-audit.md` records only sites added since, each as KEEP (intentional graceful-degrade), NARROW (hides real bugs, should specify expected types), or PROMOTE (should let propagate).
 
 **Before adding a broad `except Exception:` block:** check the audit doc to confirm the pattern is correct here, or document the new site with its category in the audit. Service-layer methods that can return safe defaults SHOULD do so; methods that change state SHOULD let unexpected exceptions propagate.
 
-**The cascade contract:** if you narrow an exception in a service-layer method, every UI/app handler that wraps a call to that method may need updating in lockstep — the cascade map in the audit doc lists the dependents. The Phase 4 plan (also in the audit doc) sequences narrowings before cascade updates so regressions don't slip through.
+**The cascade contract:** if you narrow an exception in a service-layer method, every UI/app handler that wraps a call to that method may need updating in lockstep.
 
 ## CI Workflows
 
-Three GitHub Actions workflows live in `.github/workflows/`:
+Four GitHub Actions workflows live in `.github/workflows/`:
 
-- `ci.yml` — runs ruff lint + format check, then pytest on the matrix `[3.10, 3.15]` × `[ubuntu, macos, windows]` (6 jobs total).
-- `check-python-versions.yml` — runs monthly (1st of each month, 09:00 UTC) and opens a maintenance issue when CPython releases a new stable major.minor version newer than our matrix ceiling. Idempotent — won't reopen if an issue is already open. Uses pyyaml to parse the matrix robustly.
+- `ci.yml` — runs a lint job (ruff check + format check, Python 3.15), a typecheck job (pyright, Python 3.10) and pytest on the matrix `[3.10, 3.15]` × `[ubuntu, macos, windows]`, all in parallel (8 jobs total).
+- `check-python-versions.yml` — runs monthly (1st of each month, 09:00 UTC) and opens a maintenance issue when the latest stable major.minor reported by endoflife.date differs from the matrix ceiling. Idempotent — won't reopen if an issue is already open. Uses pyyaml to parse the matrix robustly.
 - `publish.yml` — tag-triggered (`v*`) and `workflow_dispatch`. Builds wheel + sdist, smoke-tests the wheel against `ytm --version` in a fresh venv, uploads to PyPI via OIDC trusted publishing (no API tokens), then creates a GitHub Release with the matching CHANGELOG section attached. Manual dispatch can target TestPyPI for dry-runs.
+- `aur-publish.yml`: runs after a successful tag-push `Publish` run (or on manual dispatch) and pushes `aur/PKGBUILD` with the real `pkgver` plus a regenerated `.SRCINFO` to AUR.
 
 ## Dependabot
 
@@ -129,7 +130,7 @@ Three GitHub Actions workflows live in `.github/workflows/`:
 
 ## Releases
 
-The flow is **tag-driven**. Pushing a `vX.Y.Z` tag triggers `publish.yml`, which handles PyPI + the GitHub Release end-to-end; `aur-publish.yml` then pushes to AUR automatically, deriving `pkgver` from `__version__` (never hand-bump `pkgver=` in `aur/PKGBUILD` — CI overwrites it).
+The flow is **tag-driven**. Pushing a `vX.Y.Z` tag triggers `publish.yml`, which handles PyPI + the GitHub Release end-to-end; `aur-publish.yml` then pushes to AUR automatically, taking `pkgver` from the release tag, which `publish.yml` has checked against `__version__` (never hand-bump `pkgver=` in `aur/PKGBUILD` — CI overwrites it).
 
 ### One-time setup (already done)
 
@@ -158,7 +159,7 @@ Trigger `Publish` manually from the Actions tab → `Run workflow` → target `t
 
 ### AUR (automated)
 
-`aur-publish.yml` runs after `Publish` succeeds: it checks out the release commit, derives the version from `__version__`, rewrites `pkgver=` in the copied `aur/PKGBUILD` (the committed value is only a placeholder), regenerates `.SRCINFO`, and pushes to AUR. No manual version step.
+`aur-publish.yml` runs after a tag-push `Publish` succeeds: it checks out the default branch (never the triggering commit), takes the version from the release tag, rewrites `pkgver=` in the copied `aur/PKGBUILD` (the committed value is only a placeholder), regenerates `.SRCINFO`, and pushes to AUR. A manual dispatch reads `__version__` from the branch or tag it is run on instead. No manual version step.
 
 Still manual: if dependencies changed, update `depends`/`optdepends`/`makedepends` in `aur/PKGBUILD` before tagging. Manual push fallback (if the workflow fails) is documented in `RELEASING.md`.
 

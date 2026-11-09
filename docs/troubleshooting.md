@@ -7,7 +7,7 @@ Every track fails and `~/.config/ytm-player/logs/ytm.log` shows
 
 YouTube stopped serving streams to yt-dlp's former default client on
 2026-08-17. yt-dlp 2026.08.19 fixed this, and ytm-player now requires it.
-If you still see 403s, the yt-dlp ytm-player actually uses is stale. For
+If you still see 403s, the yt-dlp ytm-player actually uses may be stale. For
 pipx/uv/pip installs that is the copy inside ytm-player's own environment —
 updating a system-wide `yt-dlp` does not touch it. Upgrade ytm-player itself,
 which pulls the required yt-dlp:
@@ -48,7 +48,7 @@ For Windows-specific libmpv setup, see [docs/installation.md#windows-setup](inst
 ## Authentication fails
 
 - Make sure you're signed in to YouTube Music (free or Premium) in your browser.
-- Try a different browser: `ytm setup` auto-detects Chrome, Firefox, Zen, Brave, Edge, Chromium, Vivaldi, Opera, Helium.
+- Try a different browser: `ytm setup` auto-detects Chrome, Firefox, Zen, Brave, Edge, Chromium, Vivaldi, Opera, Helium, unless `[yt_dlp] cookie_browser` pins one (a `[yt_dlp] cookies_file` is tried first).
 - If auto-detection fails, use the manual paste method: `ytm setup --manual`.
 - **Linux: `ytm setup` says "No .youtube.com cookies found in <browser>"** — on desktops yt-dlp doesn't recognise (Hyprland/omarchy, Sway/i3, …) it can guess the wrong Chromium cookie keyring, so a libsecret-backed profile decrypts to nothing. ytm-player retries the known keyrings automatically, but the `secretstorage` package must be importable in ytm-player's environment (a Linux dependency since this release). Re-run `ytm setup --browser brave` after installing it.
 - Re-run `ytm setup` to re-authenticate.
@@ -100,7 +100,7 @@ Linux. If it isn't working, check these in order:
 
 ```bash
 ytm cache status   # Check cache size
-ytm cache clear    # Wipe all cached audio
+ytm cache clear    # Wipe all cached audio (quit the TUI first)
 ```
 
 Or reduce the limit in `config.toml`:
@@ -117,7 +117,7 @@ ytm-player writes a rotating log file to:
 - Linux/macOS: `~/.config/ytm-player/logs/ytm.log`
 - Windows: `%APPDATA%\ytm-player\logs\ytm.log`
 
-Crash tracebacks for any unhandled exception (main thread or background thread) are saved to the `crashes/` directory next to the log file. The same directory holds `faulthandler.log` (created on every TUI startup) which captures Python tracebacks for fatal signals (SIGSEGV / SIGBUS / SIGFPE / SIGILL / SIGABRT) — important for catching libmpv C-side crashes that bypass the normal exception machinery.
+Crash tracebacks for any unhandled exception (main thread or background thread) are saved to the `crashes/` directory next to the `logs/` directory (`~/.config/ytm-player/crashes/`; `%APPDATA%\ytm-player\crashes\` on Windows). The same directory holds `faulthandler.log` (created on every TUI startup) which captures Python tracebacks for fatal signals (SIGSEGV / SIGBUS / SIGFPE / SIGILL / SIGABRT) — important for catching libmpv C-side crashes that bypass the normal exception machinery.
 
 For verbose logs, launch with `--debug`:
 
@@ -131,4 +131,4 @@ When reporting a bug, please run:
 ytm doctor
 ```
 
-and paste the output into your GitHub issue. It includes eight sections: version + platform info, config/log/crash paths, running-process status, recent ERROR/WARNING log lines, recent mpv warnings, the most recent faulthandler trace, the most recent crash file, and the active-hooks summary. Auth-sensitive substrings (Authorization / Cookie / Bearer / token / SAPISID) are scrubbed automatically before output.
+and paste the output into your GitHub issue. It includes nine sections: version + platform info, config/log/crash paths, running-process status, MPRIS / media-keys status, recent ERROR/WARNING log lines, recent mpv warnings, the most recent faulthandler trace, the most recent crash file, and the active-hooks summary. Auth-sensitive substrings (Authorization / Cookie / Bearer / token / SAPISID) are scrubbed automatically before output.

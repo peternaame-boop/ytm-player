@@ -10,7 +10,7 @@ Windows: replace `ytm` with `py -m ytm_player` in any of the commands below.
 ## Setup
 
 ```bash
-ytm setup                    # Auto-detect browser cookies
+ytm setup                    # Browser cookies: [yt_dlp] cookies_file first if set, then cookie_browser if set, else auto-detect
 ytm setup --browser firefox  # Target a specific browser (chrome, firefox, zen, brave, edge, chromium, vivaldi, opera, helium)
 ytm setup --slots 15         # Probe more account slots (default 10) in multi-account sessions
 ytm setup --manual           # Skip detection, paste raw request headers
@@ -21,25 +21,33 @@ ytm setup --manual           # Skip detection, paste raw request headers
 ```bash
 ytm search "daft punk"
 ytm search "bohemian rhapsody" --filter songs --json
+ytm search "daft punk" --limit 5  # -l; default 20
 ```
 
-Available filters: `songs`, `videos`, `albums`, `artists`, `playlists`, `community_playlists`, `featured_playlists`.
+Results print as JSON; `--json` makes it compact (one line).
+
+Available filters (`--filter` / `-f`): `songs`, `videos`, `albums`, `artists`, `playlists`.
 
 ## Stats and history
 
 ```bash
-ytm stats                    # Listening stats summary
-ytm stats --json             # Machine-readable
-ytm history                  # Recent play history
-ytm history search           # Recent search history
+ytm stats                    # Listening stats (JSON)
+ytm stats --json             # Same, as compact one-line JSON
+ytm history                  # Recent play history (JSON)
+ytm history --limit 20       # -l; default 50 (--json for compact output)
+ytm history search           # Recent search history (JSON)
+ytm history search --limit 20  # -l; default 50 (--json for compact output)
 ```
 
 ## Cache management
 
 ```bash
 ytm cache status             # Cache size + entry count
-ytm cache clear              # Wipe all cached audio
+ytm cache status --json      # Same, as compact JSON
+ytm cache clear              # Wipe all cached audio (asks first; --yes skips the prompt)
 ```
+
+`ytm cache status` reports the `[cache] location` directory when it is set. `ytm cache clear` deletes every file the cache index lists, wherever it is, and empties the index; other files in a custom `[cache] location` are left alone. It refuses to run while the TUI is running; quit `ytm` first.
 
 ## Playback control (IPC, requires TUI running)
 
@@ -49,7 +57,7 @@ ytm pause                    # Pause playback
 ytm next                     # Skip to next track
 ytm prev                     # Previous track
 ytm seek +10                 # Seek forward 10 seconds
-ytm seek -5                  # Seek backward 5 seconds
+ytm seek -- -5               # Seek backward 5 seconds (`--` stops -5 being read as an option)
 ytm seek 1:30                # Seek to 1:30 (m:ss or h:mm:ss)
 ytm play-index 4             # Play the fifth track in the current queue
 ```
@@ -87,7 +95,8 @@ Interactive flow — see [docs/spotify-import.md](spotify-import.md).
 ## Diagnostics
 
 ```bash
-ytm doctor                   # 8-section diagnostic report (version, paths, config, deps, logs, crashes, env, settings — secrets redacted)
-ytm config                   # Open config dir in your editor
+ytm doctor                   # 9-section diagnostic report (version/platform/mpv, paths, process status, MPRIS/media keys, recent errors, mpv warnings, faulthandler trace, last crash, active hooks; auth headers/tokens and URLs redacted)
+ytm config                   # Open config.toml in $EDITOR (no $EDITOR: the config dir via xdg-open, or config.toml in the default app on Windows)
+ytm --version                # Print the version
 ytm --debug                  # Launch with verbose logging
 ```

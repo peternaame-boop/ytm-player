@@ -5,8 +5,8 @@ The release flow is **tag-driven**. Pushing a `vX.Y.Z` tag triggers PyPI publish
 ## Quick checklist
 
 1. **Bump version** — `src/ytm_player/__init__.py` → `__version__ = "X.Y.Z"` (this is the
-   single source of truth: the tag guard checks it and the AUR workflow derives `pkgver`
-   from it — do NOT hand-edit `pkgver=` in `aur/PKGBUILD`, CI overwrites it)
+   single source of truth: the tag guard checks the tag against it and the AUR workflow takes
+   `pkgver` from that tag — do NOT hand-edit `pkgver=` in `aur/PKGBUILD`, CI overwrites it)
 2. **Fold CHANGELOG** — collapse all `### Unreleased` blocks into one `### vX.Y.Z (YYYY-MM-DD)` entry
 3. **Lint + test**:
    ```bash
@@ -37,7 +37,7 @@ No API tokens — auth is via OIDC trusted-publisher entries at PyPI and TestPyP
 
 ### `Publish AUR` workflow (`.github/workflows/aur-publish.yml`)
 
-Triggered after `Publish` succeeds. Checks out the exact commit the `Publish` run built (the one the tag guard verified), reads the version from `__version__` in `src/ytm_player/__init__.py`, clones `ssh://aur@aur.archlinux.org/ytm-player-git.git` via SSH key, copies `PKGBUILD`, rewrites its `pkgver=` line to the real version (the committed `pkgver=` is only a placeholder), regenerates `.SRCINFO` via `scripts/regenerate_srcinfo.py` (pure Python — no Arch dependency on Ubuntu CI runners), commits and pushes.
+Triggered after `Publish` succeeds on a tag push. Checks out the default branch (never the triggering commit), takes the version from the release tag (a manual dispatch reads `__version__` in `src/ytm_player/__init__.py` from the branch or tag it is run on instead), clones `ssh://aur@aur.archlinux.org/ytm-player-git.git` via SSH key, copies `PKGBUILD`, rewrites its `pkgver=` line to the real version (the committed `pkgver=` is only a placeholder), regenerates `.SRCINFO` via `scripts/regenerate_srcinfo.py` (pure Python — no Arch dependency on Ubuntu CI runners), commits and pushes.
 
 The `regenerate_srcinfo.py` script handles shell variable expansion (`${url}`, `$pkgname`) so PKGBUILD constructs like `source=("git+${url}.git")` resolve correctly in the emitted `.SRCINFO`.
 
@@ -113,7 +113,7 @@ The AUR workflow does NOT trigger on TestPyPI dry-runs — it gates on the Publi
 | PyPI | Us | Automated via `publish.yml` on tag push |
 | AUR (`ytm-player-git`) | Us | Automated via `aur-publish.yml` after PyPI succeeds |
 | GitHub Release | Us | Automated via `publish.yml` on tag push |
-| NixOS (`flake.nix`) | Us | Manual — bump in repo on release |
+| NixOS (`flake.nix`) | Us | No separate bump: the flake reads `__version__`; users run `nix flake update` |
 | Gentoo (GURU overlay) | @dsafxP (community) | Out of our hands — community maintainer updates the ebuild on their schedule |
 
 ## After the release

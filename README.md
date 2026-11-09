@@ -38,7 +38,7 @@
 - **CLI + IPC** — control a running TUI from another terminal (`ytm play`, `ytm pause`, etc.)
 - **Free-tier support** — works without YouTube Music Premium
 - **Session resume** — last-playing track + queue restored on launch
-- **Local cache** — LRU audio cache for offline-like replay of previously heard tracks
+- **Local cache** — tracks you download for offline play are kept in a size-capped LRU cache and play from disk
 - **Discord + Last.fm** — Rich Presence and scrobbling
 
 ## Requirements
@@ -62,7 +62,7 @@ For NixOS, Gentoo, Windows-specific mpv DLL setup, source builds, and optional e
 ## Quickstart
 
 ```bash
-ytm setup    # one-time auth (auto-detects browser cookies)
+ytm setup    # one-time auth (tries configured cookie sources, otherwise auto-detects)
 ytm          # launch the TUI
 ```
 

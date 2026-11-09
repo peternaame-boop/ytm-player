@@ -15,8 +15,8 @@ Import your Spotify playlists into YouTube Music — from the TUI or CLI.
 
 | Mode | Use case | How |
 |------|----------|-----|
-| **Single** (≤100 tracks) | Most playlists | Paste one Spotify URL |
-| **Multi** (100+ tracks) | Large playlists split across parts | Enter a name + number of parts, paste a URL for each |
+| **Single** | One playlist, any size | Paste one Spotify URL |
+| **Multi** | Several Spotify playlists (parts) combined into one | Enter a name + number of parts, paste a URL for each |
 
 ## From the TUI
 
@@ -34,5 +34,5 @@ Interactive flow: fetches tracks, shows match results, lets you resolve ambiguou
 
 The importer tries two approaches in order:
 
-1. **Spotify Web API** (full pagination, handles any playlist size) — requires a free [Spotify Developer](https://developer.spotify.com/) app. On first use, you'll be prompted for your `client_id` and `client_secret`, which are stored in `~/.config/ytm-player/spotify.json`.
+1. **Spotify Web API** (full pagination, handles any playlist size) — requires a free [Spotify Developer](https://developer.spotify.com/) app. It is used when your `client_id` and `client_secret` are saved in `spotify.json` (JSON with those two keys) in the config directory; `ytm import` never asks for them.
 2. **Scraper fallback** (no credentials needed, also handles any playlist size) — used automatically if API credentials aren't configured.
