@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -369,6 +369,12 @@ class SearchPage(Widget):
     search_mode: reactive[str] = reactive("music")
     is_loading: reactive[bool] = reactive(False)
 
+    # A search supersedes the previous search; a suggestions or recent-searches
+    # fetch supersedes the previous one of those (they fill the same overlay).
+    # Separate groups: typing while a search runs must not cancel the search.
+    SEARCH_GROUP: ClassVar[str] = "search"
+    SUGGEST_GROUP: ClassVar[str] = "search-suggest"
+
     # Filters to pass to ytmusicapi for music-only mode.
     _MUSIC_FILTERS: dict[str, str] = {
         "songs": "songs",
@@ -565,7 +571,7 @@ class SearchPage(Widget):
             self._debounce_timer = None
         self._hide_suggestions()
         self._last_query = query
-        self.run_worker(self._execute_search(query), name="search", exclusive=True)
+        self._start_search(query)
 
     def on_key(self, event: object) -> None:
         """Handle Escape on the search input: hide suggestions + defocus."""
@@ -618,6 +624,7 @@ class SearchPage(Widget):
         self.run_worker(
             self._load_suggestions(query),
             name="suggestions",
+            group=self.SUGGEST_GROUP,
             exclusive=True,
         )
 
@@ -645,7 +652,9 @@ class SearchPage(Widget):
 
     def _show_recent_searches(self) -> None:
         """Display recent search history when input is empty."""
-        self.run_worker(self._load_recent_searches(), name="recent", exclusive=True)
+        self.run_worker(
+            self._load_recent_searches(), name="recent", group=self.SUGGEST_GROUP, exclusive=True
+        )
 
     async def _load_recent_searches(self) -> None:
         """Load and display recent searches from history."""
@@ -690,11 +699,22 @@ class SearchPage(Widget):
                     self._restoring = False
                 self._hide_suggestions()
                 self._last_query = query
-                self.run_worker(self._execute_search(query), name="search", exclusive=True)
+                self._start_search(query)
 
     # ------------------------------------------------------------------
     # Search execution
     # ------------------------------------------------------------------
+
+    def _start_search(self, query: str) -> None:
+        """Run the search as this page's worker.
+
+        A suggestions fetch still in flight is cancelled: landing after a
+        fast search, it would cover the results with the overlay.
+        """
+        self.workers.cancel_group(self, self.SUGGEST_GROUP)
+        self.run_worker(
+            self._execute_search(query), name="search", group=self.SEARCH_GROUP, exclusive=True
+        )
 
     async def _execute_search(self, query: str) -> None:
         """Run the search and populate all result panels."""
@@ -877,11 +897,7 @@ class SearchPage(Widget):
 
         # Re-run the last search with the new mode if we have a query.
         if self._last_query:
-            self.run_worker(
-                self._execute_search(self._last_query),
-                name="search",
-                exclusive=True,
-            )
+            self._start_search(self._last_query)
 
     # ------------------------------------------------------------------
     # Track and item selection handlers
@@ -947,17 +963,7 @@ class SearchPage(Widget):
                 return
 
             if action_id in ("play_all", "shuffle_play"):
-
-                async def _play_and_navigate() -> None:
-                    prev = host.queue.current_track
-                    await host._dispatch_entity_action(action_id, item, item_type)
-                    if (
-                        host.queue.current_track is not None
-                        and host.queue.current_track is not prev
-                    ):
-                        await host.navigate_to("queue")
-
-                host.run_worker(_play_and_navigate())
+                host.run_worker(host._play_entity_and_navigate(action_id, item, item_type))
                 return
 
             if action_id == "toggle_subscribe":
@@ -1003,6 +1009,9 @@ class SearchPage(Widget):
                 | Action.GO_TOP
                 | Action.GO_BOTTOM
                 | Action.SELECT
+                | Action.MARK_TOGGLE
+                | Action.MARK_RANGE
+                | Action.MARK_CLEAR
             ):
                 # Delegate to whichever focusable child has focus.
                 focused = self.app.focused

@@ -101,24 +101,33 @@ if TYPE_CHECKING:
         _page_state_cache: dict[str, dict]
         _active_library_playlist_id: str | None
         _context_seq: int
+        _nav_idle: asyncio.Event
+        _nav_pending: tuple[str, dict[str, Any]] | None
 
         # ── Playback state tracking ────────────────────────────────────
         _track_start_position: float
         _consecutive_failures: int
-        _advancing: bool
         _last_play_video_id: str
         _last_play_time: float
         _play_generation: int
+        _play_request: int
+        _active_stop_generation: int
+        _queue_stop_generation: int
+        _handled_end_attempt: int
         _recovery_generation: int | None
         _handled_error_attempt: int
         _ytm_reported_generation: int
         _local_history_claim: _LocalHistoryClaim | None
         _ytm_history: list[dict] | None
+        _ytm_history_pending: list[tuple[int, dict]]
+        _ytm_history_pending_seq: int
         _play_lock: asyncio.Lock
 
         # ── Pending resume from prior session ──────────────────────────
         _pending_resume_video_id: str | None
         _pending_resume_position: float
+        _loaded_resume: dict | None
+        _session_restored: bool
 
         # ── Lifecycle / IPC ────────────────────────────────────────────
         _poll_timer: Any
@@ -181,15 +190,20 @@ if TYPE_CHECKING:
         async def _open_track_actions(self) -> None: ...
         def _add_focused_to_queue(self) -> None: ...
         def _play_focused_next(self) -> None: ...
-        def _open_actions_for_track(self, track: dict) -> None: ...
+        def _open_actions_for_track(
+            self, track: dict, *, queue_entry_id: int | None = None, from_queue: bool = False
+        ) -> None: ...
         def _refresh_queue_page(self) -> None: ...
         def _sync_shuffle_bar(self) -> None: ...
+        async def _play_entity_and_navigate(
+            self, action_id: str, item: dict, item_type: str, *, sidebar: bool = False
+        ) -> None: ...
         async def _replace_queue_and_play(
             self,
             tracks: list[dict],
             *,
             entity_id: str | None = None,
-            start_index: int = 0,
+            start_index: int | None = 0,
             shuffle: bool | None = None,
             autoplay: bool = True,
         ) -> None: ...

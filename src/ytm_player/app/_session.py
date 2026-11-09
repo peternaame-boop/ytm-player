@@ -18,16 +18,24 @@ _SESSION_SCHEMA_VERSION = 1
 class SessionMixin(YTMHostBase):
     """Persist and restore session state (volume, shuffle, repeat, queue, etc.)."""
 
-    async def _restore_session_state(self) -> None:
-        """Restore volume, shuffle, and repeat from the last session."""
+    def _load_session_state(self) -> dict:
+        """Read session.json.
+
+        Returns ``{}`` when the file is missing, unreadable, not valid JSON,
+        not a JSON object, or written by another schema version.
+        """
         from ytm_player.config.paths import SESSION_STATE_FILE
 
-        state: dict = {}
+        state: object = {}
         try:
             if SESSION_STATE_FILE.exists():
                 state = json.loads(SESSION_STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             logger.debug("Could not read session state", exc_info=True)
+
+        if not isinstance(state, dict):
+            logger.warning("Discarding session state — not a JSON object")
+            return {}
 
         # Schema version check: discard state from incompatible older/future formats.
         file_version = state.get("schema_version")
@@ -39,7 +47,27 @@ class SessionMixin(YTMHostBase):
                     file_version,
                     _SESSION_SCHEMA_VERSION,
                 )
-            state = {}
+            return {}
+        return state
+
+    async def _restore_session_state(self) -> None:
+        """Restore volume, shuffle, repeat, queue and resume point from the last session.
+
+        ``_session_restored`` is set only when this runs to completion;
+        ``_save_session_state`` writes nothing before that, so a start that
+        fails part-way can't overwrite the previous session.
+        """
+        state = self._load_session_state()
+
+        # The resume point read from disk stays valid until a track's load
+        # is accepted this session (play_track clears it). Until then
+        # _save_session_state writes it back unchanged — whether or not
+        # resume-on-launch stages it for a seek below.
+        loaded_resume = state.get("resume")
+        if isinstance(loaded_resume, dict) and loaded_resume.get("video_id"):
+            self._loaded_resume = dict(loaded_resume)
+        else:
+            self._loaded_resume = None
 
         volume = state.get("volume", self.settings.playback.default_volume)
         if not isinstance(volume, (int, float)) or isinstance(volume, bool):
@@ -114,6 +142,7 @@ class SessionMixin(YTMHostBase):
         # video_id seeks to the saved position via _pending_resume_position
         # (handled in app/_playback.py).
         if not self.settings.playback.resume_on_launch:
+            self._session_restored = True
             return
 
         resume = state.get("resume")
@@ -155,9 +184,18 @@ class SessionMixin(YTMHostBase):
                                 exc_info=True,
                             )
 
+        self._session_restored = True
+
     def _save_session_state(self) -> None:
-        """Persist volume, shuffle, and repeat to disk."""
+        """Persist volume, shuffle, repeat, queue and resume point to disk."""
         from ytm_player.config.paths import SESSION_STATE_FILE
+
+        if not self._session_restored:
+            # Nothing in memory is authoritative yet (startup failed before
+            # the restore, or the restore itself raised): the file on disk
+            # is the user's real state — leave it alone.
+            logger.warning("Session was never restored this run — not overwriting session.json")
+            return
 
         volume = 80
         if self.player:
@@ -169,12 +207,13 @@ class SessionMixin(YTMHostBase):
         queue_tracks = list(self.queue.tracks)
         queue_index = self.queue.current_index
 
-        # Always save current track + position on exit. Whether to RESTORE
-        # on next launch is gated by settings.playback.resume_on_launch in
-        # _restore_session_state.
-        # Guard: only save resume if position > 1.0s, so a startup-crash
-        # (or any premature exit) doesn't overwrite a valid prior resume
-        # with "position 0".
+        # Resume point. The live track wins, but only past 1.0 s so a
+        # premature exit can't record "position 0". Otherwise the value
+        # read from disk at restore is written back: play_track clears it
+        # the moment a track's load is accepted, so a session that played
+        # nothing keeps its resume point and one that played and then
+        # stopped saves none. Whether to RESTORE on next launch is gated by
+        # settings.playback.resume_on_launch in _restore_session_state.
         resume = None
         if self.player and self.player.current_track and self.player.position > 1.0:
             video_id = self.player.current_track.get("video_id", "")
@@ -184,6 +223,8 @@ class SessionMixin(YTMHostBase):
                     "position": self.player.position,
                     "playlist_id": self._active_library_playlist_id,
                 }
+        if resume is None and self._loaded_resume is not None:
+            resume = self._loaded_resume
 
         state = {
             "schema_version": _SESSION_SCHEMA_VERSION,

@@ -37,7 +37,7 @@ from ytm_player.config.paths import (
     ensure_dirs,
 )
 from ytm_player.config.settings import get_settings
-from ytm_player.ipc import ipc_request, is_tui_running, try_claim_pid
+from ytm_player.ipc import get_running_pid, ipc_request, is_tui_running, try_claim_pid
 from ytm_player.services.auth import AuthManager
 from ytm_player.utils.logging import install_excepthooks, setup_logging
 
@@ -224,6 +224,12 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
 def setup(manual: bool, browser: str | None) -> None:
     """Interactive authentication wizard for YouTube Music."""
     auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
+
+    running = get_running_pid()
+    if running is not None:
+        click.echo(
+            f"ytm is running (PID {running}). Restart it after setup so it uses the new sign-in."
+        )
 
     if auth.is_authenticated():
         click.echo("Existing authentication found.")

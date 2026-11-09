@@ -96,14 +96,25 @@ CHART_REGIONS: tuple[tuple[str, str], ...] = (
 
 
 def normalise_region(value: str) -> str:
-    """Normalise a user-supplied region string to a valid two-letter code.
+    """Normalise a bare region code or a language-territory locale pair.
 
     YouTube's chart endpoint accepts only ISO 3166-1 alpha-2 codes.
     Locale-style values like ``ES-ES`` or ``en-GB`` fall through to
-    Global silently — bad UX. We strip after the first dash and
-    upper-case so ``es-es`` / ``ES-ES`` / ``ES_ES`` all become ``ES``.
+    Global silently — bad UX. Use the territory component, so ``en-GB``
+    becomes ``GB`` and ``es_MX`` becomes ``MX``. Other inputs keep the
+    previous uppercased-prefix behavior; this is not country validation.
     """
     if not value:
         return value
-    head = value.replace("_", "-").split("-", 1)[0]
+    head, separator, territory = value.strip().replace("_", "-").partition("-")
+    if (
+        separator
+        and len(head) in (2, 3)
+        and head.isascii()
+        and head.isalpha()
+        and len(territory) == 2
+        and territory.isascii()
+        and territory.isalpha()
+    ):
+        return territory.upper()
     return head.strip().upper()

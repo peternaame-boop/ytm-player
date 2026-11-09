@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ytm_player.app._base import YTMHostBase
+from ytm_player.app._ownership import owns_request, playback_request
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
@@ -277,19 +278,23 @@ class SidebarMixin(YTMHostBase):
         if playlist_id:
             await self.navigate_to("library", playlist_id=playlist_id)
 
+    @playback_request
     async def on_playlist_sidebar_playlist_double_clicked(
         self, message: PlaylistSidebar.PlaylistDoubleClicked
     ) -> None:
-        """Queue all tracks from double-clicked playlist and start playback."""
+        """Start the double-clicked playlist without leaving its Library view."""
         item = message.item_data
         playlist_id = item.get("playlistId") or item.get("browseId")
         name = item.get("title", "playlist")
         if playlist_id:
             prev = self.queue.current_track
             await self._play_playlist(playlist_id, name, order="recently_added")
-            if self.queue.current_track is not None and self.queue.current_track is not prev:
+            if (
+                owns_request(self)
+                and self.queue.current_track is not None
+                and self.queue.current_track is not prev
+            ):
                 self._active_library_playlist_id = playlist_id
-                await self.navigate_to("queue")
 
     def on_playlist_sidebar_playlist_right_clicked(
         self, message: PlaylistSidebar.PlaylistRightClicked
@@ -304,9 +309,9 @@ class SidebarMixin(YTMHostBase):
     async def on_playlist_sidebar_nav_item_clicked(
         self, message: PlaylistSidebar.NavItemClicked
     ) -> None:
-        """Navigate to liked_songs or recently_played, or start discovery mix."""
+        """Navigate to a pinned page, or start a radio-style mix."""
         if message.nav_id == "discovery_mix":
-            self.run_worker(self._start_discovery_mix(), exclusive=True)
+            self.run_worker(self._start_discovery_mix(), group="discovery-mix", exclusive=True)
         else:
             await self.navigate_to(message.nav_id)
 
@@ -317,19 +322,9 @@ class SidebarMixin(YTMHostBase):
             if action_id is None:
                 return
             if action_id in ("play_all", "shuffle_play"):
-                pid = item.get("playlistId") or item.get("browseId")
-
-                async def _play_and_navigate() -> None:
-                    prev = self.queue.current_track
-                    await self._dispatch_entity_action(action_id, item, "playlist")
-                    if (
-                        self.queue.current_track is not None
-                        and self.queue.current_track is not prev
-                    ):
-                        self._active_library_playlist_id = pid
-                        await self.navigate_to("queue")
-
-                self.run_worker(_play_and_navigate())
+                self.run_worker(
+                    self._play_entity_and_navigate(action_id, item, "playlist", sidebar=True)
+                )
             elif action_id == "edit":
                 self._prompt_edit_playlist(item)
             elif action_id == "delete":
@@ -532,6 +527,12 @@ class SidebarMixin(YTMHostBase):
                 # id from app._active_library_playlist_id in on_mount.
                 if self._active_library_playlist_id in dead_ids:
                     self._active_library_playlist_id = None
+                # Let page switches already running finish first (#145), so
+                # the checks below see the page that is really open and the
+                # purge comes after them. Loop: another switch can start
+                # before this worker resumes. Safe to wait: this is a worker.
+                while not self._nav_idle.is_set():
+                    await self._nav_idle.wait()
                 # If the deleted playlist is currently open — as a library page
                 # or as a playlist context page — navigate to plain library.
                 active_pid = self._current_page_kwargs.get("playlist_id", "")

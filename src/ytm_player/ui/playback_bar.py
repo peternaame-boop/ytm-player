@@ -230,6 +230,7 @@ class _ShuffleButton(Widget):
             return
         app = cast("YTMHostBase", self.app)
         app.queue.toggle_shuffle()
+        app._refresh_queue_page()
         enabled = app.queue.shuffle_enabled
         try:
             bar = app.query_one("#playback-bar", PlaybackBar)
@@ -274,7 +275,7 @@ class _HeartButton(Widget):
         event.stop()
         app = cast("YTMHostBase", self.app)
         try:
-            self.run_worker(app._toggle_like_current(), exclusive=True)
+            self.run_worker(app._toggle_like_current(), group="toggle-like", exclusive=True)
         except Exception:
             logger.debug("Failed to toggle like from heart click", exc_info=True)
 
@@ -493,6 +494,18 @@ class _FooterButton(Widget):
             case "next":
                 await app._play_next()
             case "spotify_import":
+                from ytm_player.services.spotify_import import _HAS_SPOTIFY_DEPS
+
+                if not _HAS_SPOTIFY_DEPS:
+                    # markup=False keeps "[spotify]" from being read as a style tag.
+                    app.notify(
+                        "Spotify import needs the thefuzz package. Install it "
+                        "(pip install 'ytm-player[spotify]', or python-thefuzz from the AUR) "
+                        "and restart ytm.",
+                        severity="error",
+                        markup=False,
+                    )
+                    return
                 from ytm_player.ui.popups.spotify_import import SpotifyImportPopup
 
                 app.push_screen(SpotifyImportPopup())

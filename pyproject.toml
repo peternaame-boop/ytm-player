@@ -1,5 +1,6 @@
 [build-system]
-requires = ["hatchling"]
+# 1.14.1 is the oldest release verified to build this project with the sdist allowlist below.
+requires = ["hatchling>=1.14"]
 build-backend = "hatchling.build"
 
 [project]
@@ -81,6 +82,7 @@ dev = [
     "anyascii>=0.3.0",
     "pre-commit>=4.6",
     "pyright>=1.1",
+    "hatchling>=1.14",  # tests/test_packaging inspects and builds distributions
 ]
 
 [project.urls]
@@ -93,6 +95,23 @@ Changelog = "https://github.com/peternaame-boop/ytm-player/blob/master/CHANGELOG
 
 [project.scripts]
 ytm = "ytm_player.cli:main"
+
+# hatchling packages from the working tree: it honours .gitignore but not
+# .git/info/exclude or the git index. Listing the sdist explicitly keeps local
+# notes and other files outside these paths out of a locally built archive;
+# tests/test_packaging reports untracked files inside them.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src/ytm_player",
+    "tests",
+    "docs",
+    "scripts",
+    ".github/scripts",
+    "aur",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ytm_player"]

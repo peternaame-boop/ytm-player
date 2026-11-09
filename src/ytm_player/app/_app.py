@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import logging
 import os
 import sys
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,7 @@ else:
     # Python 3.10 backport via PyPI
     import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
+import requests.exceptions
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 
@@ -29,7 +32,10 @@ from ytm_player.app._session import SessionMixin
 from ytm_player.app._sidebar import SidebarMixin
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.config import KeyMap, get_keymap
-from ytm_player.config.paths import THEME_FILE  # noqa: F401  # module-level for monkeypatch
+from ytm_player.config.paths import (  # noqa: F401  # THEME_FILE module-level for monkeypatch
+    HISTORY_DB,
+    THEME_FILE,
+)
 from ytm_player.config.settings import Settings, get_settings
 from ytm_player.ipc import IPCServer, remove_pid
 from ytm_player.services.auth import AuthManager
@@ -250,6 +256,11 @@ class YTMPlayerApp(
 
         # Monotonic counter making each context page's widget id unique.
         self._context_seq: int = 0
+        # Page-swap guard (#145): cleared while navigate_to swaps pages; the
+        # latest request that arrives meanwhile waits in _nav_pending.
+        self._nav_idle = asyncio.Event()
+        self._nav_idle.set()
+        self._nav_pending: tuple[str, dict[str, Any]] | None = None
 
         # Track position tracking for history logging.
         self._track_start_position: float = 0.0
@@ -257,14 +268,16 @@ class YTMPlayerApp(
         # Consecutive stream failure counter (prevents infinite skip loops).
         self._consecutive_failures: int = 0
 
-        # Guard against duplicate end-file events advancing twice.
-        self._advancing: bool = False
         # Debounce rapid play_track calls (e.g. double-click).
         self._last_play_video_id: str = ""
         self._last_play_time: float = 0.0
         # Cross-track supersede counter: each committed play_track call
         # bumps it; older in-flight calls abort at their next check.
         self._play_generation: int = 0
+        self._play_request: int = 0
+        self._active_stop_generation: int = 0
+        self._queue_stop_generation: int = 0
+        self._handled_end_attempt: int = -1
         # Generation of the one retry a failed play attempt gets, and the
         # highest attempt whose ERROR was handled (see _on_player_error).
         self._recovery_generation: int | None = None
@@ -281,6 +294,12 @@ class YTMPlayerApp(
         # we don't refetch on every visit, and is optimistically prepended to
         # when a play is reported. None = not fetched yet this session.
         self._ytm_history: list[dict] | None = None
+        # Plays the account accepted while _ytm_history was None, newest
+        # first, each with a sequence number so the next fetch can tell
+        # whether the play came before or after the feed it received (see
+        # _add_to_ytm_history_cache).
+        self._ytm_history_pending: list[tuple[int, dict]] = []
+        self._ytm_history_pending_seq = 0
         # Makes the generation check + mpv play command atomic.
         self._play_lock = asyncio.Lock()
 
@@ -288,6 +307,13 @@ class YTMPlayerApp(
         # Cleared on first matching play_track call.
         self._pending_resume_video_id: str | None = None
         self._pending_resume_position: float = 0.0
+        # Resume point read from session.json. _save_session_state writes it
+        # back until a track's load is accepted (play_track clears it).
+        self._loaded_resume: dict | None = None
+        # Set once _restore_session_state ran to completion. The session is
+        # never saved before that, so a start that fails part-way can't
+        # overwrite the previous session with empty state.
+        self._session_restored: bool = False
 
         # Reference to the position poll timer (for cleanup).
         self._poll_timer = None
@@ -613,9 +639,22 @@ class YTMPlayerApp(
             self.set_timer(2.0, self.exit)
             return
 
-        # Validate auth actually works (not just file exists).
-        auth_valid = await asyncio.to_thread(auth.validate)
-        if not auth_valid:
+        # Validate auth actually works (not just file exists). validate()
+        # re-raises connection errors and timeouts so an outage is never
+        # mistaken for an expired session: start without the check, and
+        # without touching the browser's cookies.
+        auth_valid: bool | None
+        try:
+            auth_valid = await asyncio.to_thread(auth.validate)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            logger.warning("YouTube Music unreachable during startup validation: %s", exc)
+            auth_valid = None
+            self.notify(
+                "YouTube Music couldn't be reached. Starting without validating your sign-in.",
+                severity="warning",
+                timeout=8,
+            )
+        if auth_valid is False:
             # Try to auto-refresh from the browser's cookies.
             logger.info("Auth expired, attempting auto-refresh from browser...")
             refreshed = await asyncio.to_thread(auth.try_auto_refresh)
@@ -649,8 +688,33 @@ class YTMPlayerApp(
             self.player = Player()
             self.player.set_event_loop(asyncio.get_running_loop())
             self.stream_resolver = StreamResolver(self.settings.playback.audio_quality)
-            self.history = HistoryManager()
+        except Exception as exc:
+            logger.exception("Failed to initialize services")
+            self.notify(
+                f"Could not start player services: {exc}",
+                severity="error",
+                timeout=10,
+            )
+            self.set_timer(2.0, self.exit)
+            return
+
+        # Play history is optional for this session: a history.db that can't
+        # be opened or prepared disables it instead of stopping the app. The
+        # manager has already closed its connection; the file stays as it is.
+        self.history = HistoryManager()
+        try:
             await self.history.init()
+        except RuntimeError:
+            logger.exception("Play history disabled for this session")
+            self.history = None
+            self.notify(
+                f"Play history is unavailable this session — couldn't open {HISTORY_DB}. "
+                "The database was not deleted or replaced. See ytm.log.",
+                severity="warning",
+                timeout=10,
+            )
+
+        try:
             self.cache = CacheManager()
             await self.cache.init()
         except Exception as exc:
@@ -810,49 +874,79 @@ class YTMPlayerApp(
             logger.warning("yt-dlp pre-warm import failed: %s", exc)
 
     async def on_unmount(self) -> None:
-        """Clean up services and remove PID file."""
-        self._save_session_state()
+        """Clean up services and remove PID file.
 
-        if self._ipc_server:
-            await self._ipc_server.stop()
+        Every step is attempted, in the same order as before, even when an
+        earlier one fails: a step that raises is logged with its name and
+        the rest of the shutdown goes on (see docs/broad-except-audit.md).
+        A cancellation arriving at an awaited step is remembered, the
+        remaining steps still run, and it is re-raised at the end so the
+        shutdown is never reported as an ordinary success.
+        """
+        cancelled: asyncio.CancelledError | None = None
+
+        async def _step(name: str, action: Callable[[], Any]) -> bool:
+            """Run one cleanup step; True only when it completed."""
+            nonlocal cancelled
+            try:
+                result = action()
+                if inspect.isawaitable(result):
+                    await result
+            except asyncio.CancelledError as exc:
+                cancelled = exc
+                logger.warning("Shutdown step cancelled: %s — finishing the other steps", name)
+                return False
+            except Exception:
+                logger.exception("Shutdown step failed: %s — continuing with the other steps", name)
+                return False
+            return True
+
+        await _step("save session", self._save_session_state)
+
+        # A reference is dropped only once its resource actually closed.
+        if self._ipc_server and await _step("stop IPC server", self._ipc_server.stop):
             self._ipc_server = None
 
-        remove_pid()
+        await _step("remove PID file", remove_pid)
 
         # Stop the position poll timer.
-        if self._poll_timer is not None:
-            self._poll_timer.stop()
+        if self._poll_timer is not None and await _step(
+            "stop position timer", self._poll_timer.stop
+        ):
             self._poll_timer = None
 
         if self.player:
             # Log the final track listen duration.
-            await self._log_current_listen()
-            self.player.clear_callbacks()
-            self.player.shutdown()
+            await _step("log final listen", self._log_current_listen)
+            await _step("remove player callbacks", self.player.clear_callbacks)
+            await _step("shut down player", self.player.shutdown)
 
         if self.stream_resolver:
-            self.stream_resolver.clear_cache()
+            await _step("clear resolver cache", self.stream_resolver.clear_cache)
 
         if self.mpris:
-            await self.mpris.stop()
+            await _step("stop MPRIS", self.mpris.stop)
 
         if self.mediakeys:
-            self.mediakeys.stop()
+            await _step("stop media keys", self.mediakeys.stop)
 
         if self.mac_media:
-            self.mac_media.stop()
+            await _step("stop macOS Now Playing", self.mac_media.stop)
 
         if self.mac_eventtap:
-            self.mac_eventtap.stop()
+            await _step("stop macOS event tap", self.mac_eventtap.stop)
 
         if self.discord:
-            await self.discord.disconnect()
+            await _step("disconnect Discord", self.discord.disconnect)
 
         if self.history:
-            await self.history.close()
+            await _step("close history database", self.history.close)
 
         if self.cache:
-            await self.cache.close()
+            await _step("close audio cache", self.cache.close)
+
+        if cancelled is not None:
+            raise cancelled
 
     def _start_update_check(self) -> None:
         """Background-check PyPI for a newer release; toast once if found."""

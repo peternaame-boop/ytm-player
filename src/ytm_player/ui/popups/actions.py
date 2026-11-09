@@ -8,6 +8,7 @@ from typing import Any
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.events import Key
 from textual.widgets import Label, ListItem, ListView, Static
 
 from ytm_player.ui.popups.base import BasePopup
@@ -243,8 +244,15 @@ class ActionsPopup(BasePopup[str | None]):
         if isinstance(item, _ActionItem):
             self.dismiss(item.action_id)
 
-    def key_enter(self) -> None:
-        """Fallback: select the highlighted item on Enter."""
+    def key_enter(self, event: Key) -> None:
+        """Fallback: select the highlighted item on Enter.
+
+        The key is consumed here: once the popup dismisses, an Enter left
+        to bubble reaches the app keymap as SELECT on the restored page
+        and plays the row the menu was opened on (#177).
+        """
+        event.stop()
+        event.prevent_default()
         list_view = self.query_one("#actions-list", ListView)
         if list_view.highlighted_child is not None:
             item = list_view.highlighted_child

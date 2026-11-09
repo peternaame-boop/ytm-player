@@ -1,13 +1,14 @@
-"""Tests for AuthManager._save_stream_cookiejar() and its call sites.
+"""Tests for the stream cookiejar AuthManager._commit_session() writes
+(built by _build_stream_cookiejar()) and its call sites.
 
-Covers the new stream-cookiejar artifact written alongside auth.json:
-symlink defense (O_NOFOLLOW + atomic replace), domain scoping
-(youtube.com/google.com family, confusable-suffix rejection), secure file
-mode, independent-failure behavior (a cookiejar write failure must never
-affect auth.json's own success/failure signal), _cookies_from_raw_header
+Covers the stream-cookiejar artifact written alongside auth.json:
+symlink defense (O_EXCL temp file + atomic replace, symlink destination
+refused), domain scoping (youtube.com/google.com family, confusable-suffix
+rejection), secure file mode, failure ordering (a cookiejar write failure
+stops the commit before auth.json is touched), _cookies_from_raw_header
 parsing for the manual-paste path, _setup_manual's end-to-end wiring, the
 account-scoping gate (no valid account => no cookiejar write), and
-_refresh_from_cookies_file's backup/restore extension for the cookiejar.
+_refresh_from_cookies_file's probe-before-write behaviour.
 
 Every test constructs AuthManager with config_dir, auth_file, AND
 stream_cookies_file all explicitly pointed at tmp_path — stream_cookies_file
@@ -18,7 +19,6 @@ write to the developer's/CI's actual ~/.config/ytm-player/.
 from __future__ import annotations
 
 import json
-import logging
 import sys
 import time
 from http.cookiejar import Cookie, MozillaCookieJar
@@ -28,9 +28,22 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ytm_player.config.paths import SECURE_FILE_MODE
-from ytm_player.services.auth import AuthManager, _atomic_write, _cookies_from_raw_header
+from ytm_player.services.auth import (
+    AuthManager,
+    _atomic_write,
+    _cookies_from_raw_header,
+    _ProbedAccount,
+)
 
 _PATCH_SAPISID = patch("ytm_player.services.auth.sapisid_from_cookie", return_value="fake_sapisid")
+_ACCOUNT = _ProbedAccount(slot=0, name="Alice", handle="", channel_id=None)
+_PAYLOAD = b'{"cookie": "SAPISID=synthetic", "x-goog-authuser": "0"}'
+
+
+def _commit(auth: AuthManager, jar) -> bool:
+    """Commit a synthetic session together with *jar* (the only way a stream
+    cookiejar is written)."""
+    return auth._commit_session(_PAYLOAD, _ACCOUNT, jar)
 
 
 def _slot_zero_only(mock_ytm):
@@ -108,22 +121,26 @@ def _write_netscape_cookie_file(path: Path, domain: str = ".youtube.com") -> Non
 # ── Step 1: symlink defense ─────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="O_NOFOLLOW is a POSIX-only defense")
 def test_symlink_target_is_not_followed(tmp_path):
-    """A symlink planted at the target path must not be written through —
-    proves the write path (O_NOFOLLOW temp file + atomic os.replace) is
-    actually wired in, not just documented."""
+    """A symlink planted at the target path is neither written through nor
+    replaced: _atomic_write refuses it, and the commit stops there — before
+    auth.json — so the previous session is untouched too."""
     stream_cookies_file = tmp_path / "stream_cookies.txt"
     victim = tmp_path / "victim.txt"
     victim.write_text("do not touch")
-    stream_cookies_file.symlink_to(victim)
+    try:
+        stream_cookies_file.symlink_to(victim)
+    except OSError as exc:  # pragma: no cover - Windows without the privilege
+        pytest.skip(f"cannot create a symlink here: {exc}")
 
     auth = _make_auth(tmp_path, stream_cookies_file=stream_cookies_file)
 
-    result = auth._save_stream_cookiejar([_cookie(".youtube.com")])
+    result = _commit(auth, [_cookie(".youtube.com")])
 
-    assert result is True
+    assert result is False
     assert victim.read_text() == "do not touch"
+    assert stream_cookies_file.is_symlink()
+    assert not auth.auth_file.exists()
 
 
 # ── Step 2: domain scoping ───────────────────────────────────────────────────
@@ -138,7 +155,7 @@ def test_success_writes_secure_file_scoped_to_youtube_google(tmp_path):
         _cookie("unrelated-shop.example", name="shop_cookie"),
     ]
 
-    auth._save_stream_cookiejar(jar)
+    assert _commit(auth, jar) is True
 
     assert auth._stream_cookies_file.exists()
     names = _read_cookie_names(auth._stream_cookies_file)
@@ -154,25 +171,25 @@ def test_rejects_confusable_domain_suffix(tmp_path):
         _cookie("notyoutube.com", name="confusable_cookie"),
     ]
 
-    auth._save_stream_cookiejar(jar)
+    _commit(auth, jar)
 
     names = _read_cookie_names(auth._stream_cookies_file)
     assert names == {"yt_cookie"}
 
 
 def test_rejects_cookie_with_embedded_control_character(tmp_path):
-    """_save_stream_cookiejar's own filter loop must reject control chars,
+    """_build_stream_cookiejar's own filter loop must reject control chars,
     not just _cookies_from_raw_header's manual-paste path (SEC-001) --
     the browser-extraction and cookies.txt-import call sites both reach
-    this method directly, so this is the coverage that actually protects
-    them."""
+    it through _commit_session, so this is the coverage that actually
+    protects them."""
     auth = _make_auth(tmp_path)
     jar = [
         _cookie(".youtube.com", name="clean_cookie"),
         _cookie(".youtube.com", name="bad_cookie", value="ab\tcd"),
     ]
 
-    auth._save_stream_cookiejar(jar)
+    _commit(auth, jar)
 
     names = _read_cookie_names(auth._stream_cookies_file)
     assert names == {"clean_cookie"}
@@ -258,20 +275,21 @@ def test_file_mode_is_secure(tmp_path):
         stream_cookies_file=tmp_path / "stream_cookies.txt",
     )
 
-    auth._save_stream_cookiejar([_cookie(".youtube.com")])
+    _commit(auth, [_cookie(".youtube.com")])
 
     mode = (tmp_path / "stream_cookies.txt").stat().st_mode & 0o777
     assert mode == SECURE_FILE_MODE
 
 
-# ── Step 4: independent failure ──────────────────────────────────────────────
+# ── Step 4: failure ordering ─────────────────────────────────────────────────
 
 
-def test_cookiejar_write_failure_does_not_affect_auth_json(tmp_path):
-    """_save_stream_cookiejar's own try/except must swallow a real write
-    failure without affecting auth.json's success signal. Point
-    stream_cookies_file's parent at a directory that never gets created
-    (only config_dir is mkdir'd) so the real internal open() fails."""
+def test_cookiejar_write_failure_stops_the_commit_before_auth_json(tmp_path):
+    """The jar is the first file a commit publishes. When that write fails
+    nothing else is written: auth.json still holds the previous session (or,
+    as here, does not exist yet). Point stream_cookies_file's parent at a
+    directory that never gets created (only config_dir is mkdir'd) so the
+    real internal open() fails."""
     auth = _make_auth(
         tmp_path, stream_cookies_file=tmp_path / "missing_subdir" / "stream_cookies.txt"
     )
@@ -287,33 +305,34 @@ def test_cookiejar_write_failure_does_not_affect_auth_json(tmp_path):
     ):
         result = auth._extract_and_save("vivaldi", interactive=True)
 
-    assert result is True
-    assert auth.auth_file.exists()
+    assert result is False
+    assert not auth.auth_file.exists()
     assert not (tmp_path / "missing_subdir" / "stream_cookies.txt").exists()
     assert not (tmp_path / "missing_subdir").exists()
 
 
-def test_cookiejar_write_failure_removes_previous_jar(tmp_path):
-    """A failed write must not leave the previous session's jar behind:
-    auth.json now belongs to the new session, and streaming would otherwise
-    keep using the old account's cookies."""
+def test_cookiejar_write_failure_keeps_the_previous_jar_and_session(tmp_path):
+    """A failed jar write leaves the previous session complete: its
+    auth.json is not replaced, so its jar still belongs to it and stays."""
     auth = _make_auth(tmp_path)
+    auth.auth_file.write_bytes(b'{"cookie": "SAPISID=old"}')
     auth._stream_cookies_file.write_text("# old account\n", encoding="utf-8")
     jar = [_cookie(".youtube.com", name="SAPISID", value="secret")]
 
     with patch(
         "ytm_player.services.auth._atomic_write", side_effect=OSError("simulated write failure")
     ):
-        result = auth._save_stream_cookiejar(jar)
+        result = _commit(auth, jar)
 
     assert result is False
-    assert not auth._stream_cookies_file.exists()
+    assert auth._stream_cookies_file.read_text(encoding="utf-8") == "# old account\n"
+    assert auth.auth_file.read_bytes() == b'{"cookie": "SAPISID=old"}'
 
 
 def test_cookiejar_write_success_returns_true(tmp_path):
     auth = _make_auth(tmp_path)
 
-    assert auth._save_stream_cookiejar([_cookie(".youtube.com")]) is True
+    assert _commit(auth, [_cookie(".youtube.com")]) is True
     assert auth._stream_cookies_file.exists()
 
 
@@ -324,7 +343,7 @@ def test_no_matching_cookies_writes_empty_jar(tmp_path):
     auth = _make_auth(tmp_path)
     jar = [_cookie(".chase.com"), _cookie("unrelated-shop.example")]
 
-    auth._save_stream_cookiejar(jar)
+    _commit(auth, jar)
 
     assert auth._stream_cookies_file.exists()
     assert _read_cookie_names(auth._stream_cookies_file) == set()
@@ -379,8 +398,8 @@ def test_setup_manual_saves_stream_cookiejar_from_pasted_cookie_header(tmp_path,
     responses = iter(["Host: music.youtube.com", "Cookie: SAPISID=abc123", ""])
     monkeypatch.setattr("builtins.input", lambda: next(responses))
 
-    def _fake_setup(filepath, headers_raw):
-        Path(filepath).write_text('{"cookie": "SAPISID=abc123"}', encoding="utf-8")
+    def _fake_setup(headers_raw=None, filepath=None):
+        return '{"cookie": "SAPISID=abc123", "x-goog-authuser": "0"}'
 
     with (
         patch("ytmusicapi.setup", side_effect=_fake_setup),
@@ -393,22 +412,20 @@ def test_setup_manual_saves_stream_cookiejar_from_pasted_cookie_header(tmp_path,
     assert _read_cookie_names(auth._stream_cookies_file) == {"SAPISID"}
 
 
-def test_no_cookie_header_skips_cookiejar_write(tmp_path, monkeypatch):
+def test_paste_without_cookie_header_is_rejected_and_writes_nothing(tmp_path, monkeypatch):
+    """ytmusicapi itself refuses headers without a cookie (and an
+    x-goog-authuser), so such a paste never reaches a commit."""
     auth = _make_auth(tmp_path)
     responses = iter(["Host: music.youtube.com", "Accept: */*", ""])
     monkeypatch.setattr("builtins.input", lambda: next(responses))
 
-    def _fake_setup(filepath, headers_raw):
-        Path(filepath).write_text('{"cookie": ""}', encoding="utf-8")
-
-    with (
-        patch("ytmusicapi.setup", side_effect=_fake_setup),
-        patch("ytm_player.services.auth.YTMusic", return_value=MagicMock()),
-    ):
+    with patch("ytm_player.services.auth.YTMusic", return_value=MagicMock()):
         result = auth.setup_interactive(manual=True)
 
-    assert result is True
+    assert result is False
+    assert not auth.auth_file.exists()
     assert not auth._stream_cookies_file.exists()
+    assert not auth._account_file.exists()
 
 
 # ── Step 8: account-scoping gate ─────────────────────────────────────────────
@@ -425,84 +442,19 @@ def test_no_valid_account_skips_stream_cookiejar_write(tmp_path):
     with (
         _PATCH_SAPISID,
         patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
-        patch.object(
-            auth, "_save_stream_cookiejar", wraps=auth._save_stream_cookiejar
-        ) as mock_save,
+        patch.object(auth, "_commit_session", wraps=auth._commit_session) as mock_commit,
     ):
         result = auth._save_youtube_cookies(cookies, interactive=True, stream_jar=stream_jar)
 
     assert result is False
-    mock_save.assert_not_called()
+    mock_commit.assert_not_called()
     assert not auth._stream_cookies_file.exists()
 
 
-# ── Step 9: _refresh_from_cookies_file backup/restore ────────────────────────
+# ── Step 9: _refresh_from_cookies_file probes before it writes ───────────────
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="O_NOFOLLOW is a POSIX-only defense")
-def test_restore_or_remove_does_not_follow_symlink_at_target(tmp_path):
-    """_restore_or_remove's restore branch must use the same O_NOFOLLOW
-    temp-file-plus-os.replace pattern as the primary writes -- a plain
-    write_bytes() would follow a symlink planted at *path* during the
-    network-bound window between backup and restore (found in
-    quality-gate's Layer 1.5 security review)."""
-    target = tmp_path / "auth.json"
-    victim = tmp_path / "victim.txt"
-    victim.write_text("do not touch")
-    target.symlink_to(victim)
-
-    AuthManager._restore_or_remove(target, backup=b'{"cookie": "restored=1"}', label="auth file")
-
-    assert victim.read_text() == "do not touch"
-    assert not target.is_symlink()
-    assert target.read_bytes() == b'{"cookie": "restored=1"}'
-
-
-def test_restore_or_remove_swallows_oserror_from_the_restore_itself(tmp_path, monkeypatch):
-    """_restore_or_remove's own except OSError: branch — what happens
-    when the restore/remove ITSELF fails (e.g. os.replace fails mid-way
-    through _atomic_write) — was untested; the delegation of temp-file
-    cleanup from this method into _atomic_write (quality-gate Layer 1
-    refactor) needs coverage that the failure is still contained here,
-    not just that the happy path still works."""
-    target = tmp_path / "auth.json"
-
-    monkeypatch.setattr(
-        "ytm_player.services.auth.os.replace",
-        MagicMock(side_effect=OSError("simulated replace failure")),
-    )
-
-    AuthManager._restore_or_remove(target, backup=b'{"cookie": "restored=1"}', label="auth file")
-
-    assert not target.exists()
-    assert list(tmp_path.glob("*.tmp-*")) == []
-
-
-def test_restore_or_remove_swallows_oserror_from_removing_with_no_backup(
-    tmp_path, monkeypatch, caplog
-):
-    """The no-prior-backup branch (elif path.exists(): path.unlink()) has
-    its own OSError failure mode, distinct from the restore-with-backup
-    branch above."""
-    target = tmp_path / "auth.json"
-    target.write_text("stale content that should have been removed")
-
-    monkeypatch.setattr(
-        "ytm_player.services.auth.Path.unlink",
-        MagicMock(side_effect=OSError("simulated unlink failure")),
-    )
-
-    with caplog.at_level(logging.WARNING):
-        AuthManager._restore_or_remove(target, backup=None, label="auth file")
-
-    # No exception escapes (calling the method above would have raised if
-    # one did); the failure is logged instead of silently disappearing.
-    assert "Failed to restore previous auth file" in caplog.text
-
-
-def test_refresh_from_cookies_file_restores_stream_cookiejar_on_validate_failure(
-    tmp_path, monkeypatch
-):
+def test_refresh_from_cookies_file_refused_probe_leaves_auth_and_jar_untouched(tmp_path):
     cookies_file = tmp_path / "cookies.txt"
     _write_netscape_cookie_file(cookies_file)
 
@@ -512,10 +464,9 @@ def test_refresh_from_cookies_file_restores_stream_cookiejar_on_validate_failure
     stream_cookies_file.write_text("# sentinel stream cookies\n")
 
     auth = _make_auth(tmp_path, auth_file=auth_file, stream_cookies_file=stream_cookies_file)
-    monkeypatch.setattr(auth, "validate", lambda: False)
 
     mock_ytm = MagicMock()
-    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
+    mock_ytm.get_account_info.return_value = {}  # no account in any slot
 
     with (
         _PATCH_SAPISID,
@@ -528,9 +479,7 @@ def test_refresh_from_cookies_file_restores_stream_cookiejar_on_validate_failure
     assert stream_cookies_file.read_text() == "# sentinel stream cookies\n"
 
 
-def test_refresh_from_cookies_file_removes_new_stream_cookiejar_when_no_prior_backup(
-    tmp_path, monkeypatch
-):
+def test_refresh_from_cookies_file_refused_probe_on_fresh_install_writes_nothing(tmp_path):
     cookies_file = tmp_path / "cookies.txt"
     _write_netscape_cookie_file(cookies_file)
 
@@ -539,10 +488,9 @@ def test_refresh_from_cookies_file_removes_new_stream_cookiejar_when_no_prior_ba
     # Neither auth_file nor stream_cookies_file exists beforehand.
 
     auth = _make_auth(tmp_path, auth_file=auth_file, stream_cookies_file=stream_cookies_file)
-    monkeypatch.setattr(auth, "validate", lambda: False)
 
     mock_ytm = MagicMock()
-    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
+    mock_ytm.get_account_info.return_value = {}
 
     with (
         _PATCH_SAPISID,
@@ -553,11 +501,12 @@ def test_refresh_from_cookies_file_removes_new_stream_cookiejar_when_no_prior_ba
     assert result is False
     assert not auth_file.exists()
     assert not stream_cookies_file.exists()
+    assert not auth._account_file.exists()
 
 
 # ── _atomic_write() direct coverage ──────────────────────────────────────────
 #
-# _restore_or_remove and _save_stream_cookiejar only reach _atomic_write's
+# _commit_session only reaches _atomic_write's
 # exception path via failures that occur BEFORE the temp file is created
 # (e.g. a missing parent directory raises in os.open itself) — coverage
 # tools mark the cleanup line as "hit" without ever exercising the actual

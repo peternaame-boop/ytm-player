@@ -460,7 +460,12 @@ class SpotifyImportPopup(BasePopup[str | None]):
         self.query_one("#si-progress", ProgressBar).display = True
         self.query_one("#si-results", ListView).display = True
         self.query_one("#si-status", Static).update("Fetching Spotify playlist...")
-        self.run_worker(self._do_single_import(url), name="spotify_import", exclusive=True)
+        self.run_worker(
+            self._do_single_import(url),
+            name="spotify_import",
+            group="spotify-import",
+            exclusive=True,
+        )
 
     async def _do_single_import(self, url: str) -> None:
         """Fetch Spotify tracks, then match each against YouTube Music."""
@@ -621,7 +626,12 @@ class SpotifyImportPopup(BasePopup[str | None]):
         self.query_one("#si-progress", ProgressBar).display = True
         self.query_one("#si-results", ListView).display = True
 
-        self.run_worker(self._do_multi_import(), name="spotify_multi_import", exclusive=True)
+        self.run_worker(
+            self._do_multi_import(),
+            name="spotify_multi_import",
+            group="spotify-import",
+            exclusive=True,
+        )
 
     async def _do_multi_import(self) -> None:
         """Process all split playlists sequentially."""
@@ -850,7 +860,9 @@ class SpotifyImportPopup(BasePopup[str | None]):
     def _create_playlist(self, name: str) -> None:
         """Create the playlist on YouTube Music."""
         self._phase = "creating"
-        self.run_worker(self._do_create(name), name="create_playlist", exclusive=True)
+        self.run_worker(
+            self._do_create(name), name="create_playlist", group="spotify-import", exclusive=True
+        )
 
     async def _do_create(self, name: str) -> None:
         """Create playlist and add tracks in batches of 100."""

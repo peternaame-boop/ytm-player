@@ -1,14 +1,18 @@
 """Tests for ytm_player.services.auth."""
 
+import hashlib
 import json
 from unittest.mock import MagicMock
 
-from ytm_player.services.auth import AuthManager, _normalize_raw_headers
+from ytm_player.services.auth import AuthManager, _normalize_raw_headers, _SessionOwner
 
 
 class TestAutoRefresh:
     def test_reuses_cookies_found_during_browser_detection(self, tmp_path, monkeypatch):
-        manager = AuthManager(config_dir=tmp_path, auth_file=tmp_path / "auth.json")
+        auth_file = tmp_path / "auth.json"
+        auth_bytes = b'{"cookie": "SAPISID=x", "x-goog-authuser": "0"}'
+        auth_file.write_bytes(auth_bytes)
+        manager = AuthManager(config_dir=tmp_path, auth_file=auth_file)
         cookies = [MagicMock()]
         jar = [MagicMock(), MagicMock()]
         detect = MagicMock(return_value=("brave", cookies, jar))
@@ -19,7 +23,25 @@ class TestAutoRefresh:
         assert manager.try_auto_refresh()
 
         detect.assert_called_once_with()
-        save.assert_called_once_with(cookies, stream_jar=jar, expected_channel_id=None)
+        # The snapshot taken at entry (no record → no identity) is what the
+        # browser source commits against.
+        save.assert_called_once_with(
+            cookies,
+            stream_jar=jar,
+            expected_channel_id=None,
+            recorded=None,
+            owner=_SessionOwner(hashlib.sha256(auth_bytes).hexdigest(), None),
+        )
+
+    def test_refresh_without_a_saved_session_is_refused_before_detection(
+        self, tmp_path, monkeypatch
+    ):
+        manager = AuthManager(config_dir=tmp_path, auth_file=tmp_path / "auth.json")
+        detect = MagicMock(return_value=("brave", [MagicMock()], [MagicMock()]))
+        monkeypatch.setattr(manager, "_detect_browser", detect)
+
+        assert manager.try_auto_refresh() is False
+        detect.assert_not_called()
 
     def test_silent_refresh_refuses_without_recorded_identity(self, tmp_path, monkeypatch, capsys):
         """No account.json (a session set up before identities were recorded):

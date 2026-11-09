@@ -53,6 +53,16 @@ sync_history_to_ytmusic = true  # report TUI plays back to your YT Music account
 
 > `sync_history_to_ytmusic` reports tracks you play in the TUI back to your YouTube Music account history (via ytmusicapi's `add_history_item`), so they show up in your history and feed recommendations like any other client. It uses `history_min_listen_seconds` as the reporting threshold. Set to `false` to keep TUI listening off your account.
 
+#### Recently Played tabs
+
+`g r` opens Recently Played with three tabs; a line under the tab row says what the active one shows.
+
+- **All** (default) — local history first, followed by additional account history. One row per track: a track played both here and elsewhere keeps its local position and time, with artist, album and artwork details filled in from the account row. It is two groups, not one timeline — the account feed only says roughly when a track was played, so a phone play from an hour ago can sit below an older play from this app. Up to 100 local rows plus up to 100 further account rows.
+- **Local** — tracks played in this app, most recent first, up to 100.
+- **YT Music** — your account's complete play history from any device, in YouTube Music's order, up to 100. Needs a signed-in session.
+
+If one source can't be loaded, All shows the other and says so in the footer. Re-selecting the active tab refreshes it; refreshing All refetches both sources. A play the account accepts (with `sync_history_to_ytmusic` on) appears on the YT Music and All tabs right away.
+
 ### `[cache]`
 
 ```toml
@@ -62,6 +72,8 @@ max_size_mb = 1024           # 1GB default LRU audio cache
 prefetch_next = true         # resolve next track's stream URL in background for instant skip
 location = ""                # blank = default cache dir; set a path to override
 ```
+
+Tracks saved with **Download for Offline** live in this cache and count toward `max_size_mb`. When the limit is reached, the least recently accessed files are removed — downloads included. A download that doesn't fit within the limit on its own is reported as not retained. A download interrupted by the app being killed starts again from the beginning the next time you download that track.
 
 ### `[yt_dlp]`
 
@@ -114,7 +126,8 @@ col_album = 0                # 0 = auto-fill
 col_duration = 8
 bidi_mode = "auto"           # auto, reorder, passthrough — RTL text handling
 region = "ZZ"                # ISO 3166-1 alpha-2 (or "ZZ" = Global, default) — Browse → Charts. 68 regions selectable; locale-style codes like "ES-ES" auto-normalise to "ES".
-home_shelves = 3             # number of recommendation shelves on Browse → For You (1–25)
+home_shelves = 3             # number of recommendation shelves on Browse → For You (1–25);
+                             # the Playlists tab always reads up to 25
 show_selection_info = true   # show focused-item full name in the row above the playback bar
 sidebar_overflow = "truncate"  # "truncate" (1-row + ellipsis) or "wrap" (multi-line names)
 show_queue_source = true     # show "Generated from: …" header on radio/discovery queues

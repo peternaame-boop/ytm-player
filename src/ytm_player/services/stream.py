@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
-import os
 import re
 import threading
 import time
@@ -53,17 +53,30 @@ def _detect_stream_cookies() -> str | None:
     return str(STREAM_COOKIES_FILE) if STREAM_COOKIES_FILE.exists() else None
 
 
-def _session_cookiejar_signature() -> tuple[str, int, int] | None:
-    """``(path, mtime_ns, size)`` of the stream cookiejar the resolver should be
-    using right now, or None.
+def _detect_session_record() -> tuple[str, str] | None:
+    """``(auth.json path, account.json path)`` the stream cookiejar is checked
+    against — AuthManager's record vouches for the jar by hash (see
+    auth.read_vouched_stream_jar). No existence check: a missing file is
+    part of what the check decides on. Tests point this at a scratch pair.
+    """
+    from ytm_player.config.paths import ACCOUNT_FILE, AUTH_FILE
+
+    return str(AUTH_FILE), str(ACCOUNT_FILE)
+
+
+def _session_cookiejar_signature() -> tuple[Any, ...] | None:
+    """Signature of the stream cookiejar the resolver should be using right
+    now — ``(jar path, jar, auth.json, account.json)`` with each file as an
+    ``(st_ino, st_mtime_ns, st_size)`` triple — or None.
 
     None unless ``[yt_dlp] use_session_cookies`` is on (streaming is anonymous
     by default) and no explicit ``[yt_dlp] cookies_file`` is configured (that
     file is the user's own and goes through yt-dlp's ``cookiefile``), or when
-    the jar file doesn't exist. Compared on every _get_ydl() call so a jar
-    rewritten by ``ytm setup`` or a mid-session auto-refresh is picked up by
-    the next resolve instead of the cached YoutubeDL instance keeping its
-    stale in-memory copy.
+    the jar file doesn't exist. Compared on every _get_ydl() call so a change
+    to ANY of the three files — a jar rewritten by ``ytm setup`` or a
+    mid-session auto-refresh, but also an auth.json or account.json replaced
+    on its own — rebuilds the instance and reruns the vouching check instead
+    of the cached YoutubeDL instance keeping cookies it may no longer use.
     """
     settings = get_settings().yt_dlp
     if not settings.use_session_cookies or normalize_cookiefile(settings.cookies_file):
@@ -71,11 +84,11 @@ def _session_cookiejar_signature() -> tuple[str, int, int] | None:
     path = _detect_stream_cookies()
     if path is None:
         return None
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return (path, st.st_mtime_ns, st.st_size)
+    from ytm_player.services.auth import file_signature
+
+    session = _detect_session_record()
+    auth_path, record_path = session if session is not None else (None, None)
+    return (path, file_signature(path), file_signature(auth_path), file_signature(record_path))
 
 
 class _YtDlpLogger:
@@ -131,6 +144,13 @@ class StreamInfo:
     duration: int  # seconds
     expires_at: float  # unix timestamp
     thumbnail_url: str | None = None
+    # yt-dlp's available_at: googlevideo answers 403 until this unix time
+    # (streams served behind a pre-roll ad). 0 = fetchable now.
+    available_at: float = 0.0
+
+    def wait_seconds(self) -> float:
+        """Seconds until the stream URL can be fetched."""
+        return max(0.0, self.available_at - time.time())
 
 
 class StreamResolver:
@@ -163,7 +183,7 @@ class StreamResolver:
         self._ydl_generation = 0
         # Signature of the stream cookiejar file self._ydl was built against
         # (see _session_cookiejar_signature); None when none was loaded.
-        self._ydl_cookiejar_sig: tuple[str, int, int] | None = None
+        self._ydl_cookiejar_sig: tuple[Any, ...] | None = None
         # YoutubeDL is not thread-safe; a play resolve and a prefetch can run
         # on separate threads against the shared instance, so extract_info()
         # calls are serialized. Only the network call is held under it.
@@ -205,7 +225,7 @@ class StreamResolver:
         }
         return apply_configured_yt_dlp_options(opts, settings)
 
-    def _build_ydl(self, opts: dict) -> tuple[Any, tuple[str, int, int] | None]:
+    def _build_ydl(self, opts: dict) -> tuple[Any, tuple[Any, ...] | None]:
         """Construct a YoutubeDL instance from *opts* and, when
         ``[yt_dlp] use_session_cookies`` is on, load the stream cookiejar into it.
 
@@ -218,7 +238,12 @@ class StreamResolver:
         through ``cookiefile`` — that file is theirs, and write-back is
         yt-dlp's normal behaviour for it.
 
-        Returns the instance and the jar signature it was built against.
+        Only a jar the sign-in record vouches for is loaded (see
+        auth.read_vouched_stream_jar); the bytes loaded are the bytes that
+        were checked, and the signature cached with the instance is the one
+        of that exact snapshot — never a separate stat taken before or after.
+
+        Returns the instance and the signature it was built against.
         """
         import yt_dlp  # Lazy import
 
@@ -227,10 +252,23 @@ class StreamResolver:
         ydl = yt_dlp.YoutubeDL(opts)  # type: ignore[arg-type]
         sig = _session_cookiejar_signature()
         if sig is not None:
-            try:
-                ydl.cookiejar.load(sig[0], ignore_discard=True, ignore_expires=True)
-            except Exception:
-                logger.warning("Could not load stream cookiejar %s", sig[0], exc_info=True)
+            from ytm_player.services.auth import read_vouched_stream_jar
+
+            vouched = read_vouched_stream_jar(sig[0], _detect_session_record())
+            sig = vouched.signature
+            if vouched.payload is not None:
+                try:
+                    # load()'s stub types filename as str | None, but its
+                    # open() accepts a file object directly at runtime
+                    # (non-path-like branch yields it as is) — verified
+                    # against yt-dlp source.
+                    ydl.cookiejar.load(
+                        io.StringIO(vouched.payload.decode("utf-8")),  # type: ignore[arg-type]
+                        ignore_discard=True,
+                        ignore_expires=True,
+                    )
+                except Exception:
+                    logger.warning("Could not load stream cookiejar %s", sig[0], exc_info=True)
         return ydl, sig
 
     def _get_ydl(self) -> Any:
@@ -344,13 +382,18 @@ class StreamResolver:
                 logger.error("yt-dlp returned no info for video_id=%s", video_id)
                 return None
 
+            # Formats served behind a pre-roll ad carry yt-dlp's available_at;
+            # googlevideo answers 403 until it passes. It is recorded on the
+            # StreamInfo and resolve() waits for it, not this worker thread.
             stream_url: str = info.get("url", "")
+            available_at = float(info.get("available_at") or 0)
             if not stream_url:
                 # Some formats nest the URL under requested_formats.
                 formats = info.get("requested_formats") or []
                 for fmt in formats:
                     if fmt.get("vcodec") == "none" or fmt.get("acodec") != "none":
                         stream_url = fmt.get("url", "")
+                        available_at = float(fmt.get("available_at") or 0)
                         break
 
             if not stream_url:
@@ -377,6 +420,7 @@ class StreamResolver:
                 duration=duration,
                 expires_at=expires_at,
                 thumbnail_url=thumbnail,
+                available_at=available_at,
             )
 
         except yt_dlp.utils.DownloadError as exc:  # type: ignore[attr-defined]
@@ -446,10 +490,12 @@ class StreamResolver:
         """Resolve a video ID to a StreamInfo, using cache when possible.
 
         This is the synchronous version. Prefer `resolve()` in async code.
+        Like `resolve()`, it returns once the stream URL can be fetched.
         """
         cached = self._get_cached(video_id)
         if cached is not None:
             logger.debug("Cache hit for video_id=%s", video_id)
+            time.sleep(cached.wait_seconds())
             return cached
 
         logger.debug("Cache miss for video_id=%s, resolving via yt-dlp", video_id)
@@ -457,6 +503,7 @@ class StreamResolver:
         info = self._resolve_sync(video_id)
         if info is not None:
             self._put_cache(info, generation)
+            time.sleep(info.wait_seconds())
         return info
 
     def is_expired(self, video_id: str) -> bool:
@@ -468,7 +515,23 @@ class StreamResolver:
             return _is_stale(cached.expires_at)
 
     async def resolve(self, video_id: str) -> StreamInfo | None:
-        """Resolve a video ID to a StreamInfo asynchronously.
+        """Resolve a video ID to a StreamInfo whose URL can be fetched now.
+
+        Streams YouTube serves behind a pre-roll ad answer 403 until their
+        available_at. yt-dlp's own downloader sleeps through that, but mpv
+        opens the URL at once, so wait here: on the event loop, where the
+        wait never holds a worker thread and shutdown can cancel it. A
+        prefetched entry is usually past it already.
+        """
+        info = await self._resolve(video_id)
+        if info is not None and (wait := info.wait_seconds()) > 0:
+            logger.debug("Waiting %.1fs for video_id=%s to become available", wait, video_id)
+            await asyncio.sleep(wait)
+        return info
+
+    async def _resolve(self, video_id: str) -> StreamInfo | None:
+        """Resolve a video ID to a StreamInfo asynchronously, without waiting
+        for its available_at.
 
         Runs the synchronous yt-dlp extraction in a thread to avoid
         blocking the event loop. Deduplicates concurrent requests for
@@ -539,7 +602,7 @@ class StreamResolver:
         if self._current_pending(video_id, self._cache_generation) is not None:
             return  # Already being resolved.
         try:
-            await self.resolve(video_id)
+            await self._resolve(video_id)  # caches without waiting; playback waits in resolve()
         except Exception:
             logger.debug("Prefetch failed for video_id=%s", video_id, exc_info=True)
 

@@ -44,6 +44,28 @@ _LYRICS_PANE_ACTIONS = frozenset(
     }
 )
 
+# A modifier pressed on its own. Textual asks kitty-protocol terminals to
+# report all keys, and they then send one of these when Shift, Ctrl, Alt etc.
+# goes down; it is never part of a binding (#178).
+_MODIFIER_ONLY_KEYS = frozenset(
+    {
+        "left_shift",
+        "left_control",
+        "left_alt",
+        "left_super",
+        "left_hyper",
+        "left_meta",
+        "right_shift",
+        "right_control",
+        "right_alt",
+        "right_super",
+        "right_hyper",
+        "right_meta",
+        "iso_level3_shift",
+        "iso_level5_shift",
+    }
+)
+
 
 class KeyHandlingMixin(YTMHostBase):
     """Keyboard input processing and action dispatch."""
@@ -65,6 +87,11 @@ class KeyHandlingMixin(YTMHostBase):
 
         focused = self.focused
         if isinstance(focused, (Input, TextArea)):
+            return
+
+        # Skip a bare modifier press: in the buffer it ended "g" before the
+        # Shift+L of "g L" arrived, so no sequence with a capital matched.
+        if event.key in _MODIFIER_ONLY_KEYS:
             return
 
         key = self._normalize_key(event)
@@ -215,6 +242,7 @@ class KeyHandlingMixin(YTMHostBase):
                     )
                     return
                 self.queue.toggle_shuffle()
+                self._refresh_queue_page()
                 bar = self.query_one("#playback-bar", PlaybackBar)
                 bar.update_shuffle(self.queue.shuffle_enabled)
                 state = "on" if self.queue.shuffle_enabled else "off"
@@ -277,7 +305,7 @@ class KeyHandlingMixin(YTMHostBase):
 
             # -- Discovery roulette: random mix from one of seven sources --
             case Action.DISCOVERY_MIX:
-                self.run_worker(self._start_discovery_mix(), exclusive=True)
+                self.run_worker(self._start_discovery_mix(), group="discovery-mix", exclusive=True)
 
             # -- Track actions (opens popup, handles result) --
             case Action.TRACK_ACTIONS:
@@ -336,6 +364,9 @@ class KeyHandlingMixin(YTMHostBase):
                 | Action.PICK_COUNTRY
                 | Action.REORDER_DOWN
                 | Action.REORDER_UP
+                | Action.MARK_TOGGLE
+                | Action.MARK_RANGE
+                | Action.MARK_CLEAR
             ):
                 await self._route_navigation_action(action, count)
 

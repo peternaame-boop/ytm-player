@@ -22,6 +22,7 @@ def _fresh_ipc_host():
     h.player.seek_absolute = AsyncMock()
     h.queue = MagicMock()
     h.queue.clear = MagicMock()
+    h._refresh_queue_page = MagicMock()
     h.ytmusic = MagicMock()
     h._play_next = AsyncMock()
     h._play_previous = AsyncMock()
@@ -74,6 +75,7 @@ class TestPlayPauseDispatch:
         result = await h._handle_ipc_command("queue_clear", {})
         assert result == {"ok": True}
         h.queue.clear.assert_called_once()
+        h._refresh_queue_page.assert_called_once()
 
 
 class TestSeekParsing:
@@ -123,3 +125,24 @@ class TestSeekParsing:
         result = await h._ipc_seek({"offset": "1:2:3:4"})
         assert result["ok"] is False
         assert "invalid time format" in result["error"]
+
+
+class TestQueueAdd:
+    async def test_queue_add_refreshes_queue_page(self):
+        h = _fresh_ipc_host()
+        h.ytmusic.get_watch_playlist = AsyncMock(
+            return_value=[{"videoId": "v1", "title": "T", "artists": []}]
+        )
+        result = await h._handle_ipc_command("queue_add", {"video_id": "v1"})
+        assert result == {"ok": True}
+        h.queue.add.assert_called_once()
+        assert h.queue.add.call_args.args[0]["video_id"] == "v1"
+        h._refresh_queue_page.assert_called_once()
+
+    async def test_unresolved_track_does_not_refresh(self):
+        h = _fresh_ipc_host()
+        h.ytmusic.get_watch_playlist = AsyncMock(return_value=[])
+        result = await h._handle_ipc_command("queue_add", {"video_id": "v1"})
+        assert result["ok"] is False
+        h.queue.add.assert_not_called()
+        h._refresh_queue_page.assert_not_called()

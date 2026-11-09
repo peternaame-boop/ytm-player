@@ -46,9 +46,9 @@ def test_extract_from_cookies_file_rejects_non_youtube_suffix(tmp_path):
     assert not auth_file.exists()
 
 
-def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
-    tmp_path, monkeypatch
-):
+def test_refresh_from_cookies_file_refused_probe_leaves_previous_auth(tmp_path, monkeypatch):
+    """The candidate session is probed before anything is written; a refusal
+    leaves the working credentials untouched (nothing to restore)."""
     cookies_file = tmp_path / "cookies.txt"
     _write_netscape_cookie_file(cookies_file)
 
@@ -57,10 +57,8 @@ def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
     auth_file.write_text(original)
 
     auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
-
-    monkeypatch.setattr(auth, "validate", lambda: False)
     mock_ytm = MagicMock()
-    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
+    mock_ytm.get_account_info.return_value = {}  # no account in any slot
 
     with (
         _PATCH_SAPISID,
@@ -70,14 +68,17 @@ def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
     assert auth_file.read_text() == original
 
 
-def test_refresh_from_cookies_file_restores_backup_on_network_error(tmp_path, monkeypatch):
-    """If validate() raises a network error, backup should still be restored."""
+def test_refresh_from_cookies_file_commits_the_probed_session_without_validate(
+    tmp_path, monkeypatch
+):
+    """The probe already validated the exact bytes that are committed, so no
+    post-commit validate() runs — a network error there can no longer undo
+    (or roll back over) a committed session."""
     cookies_file = tmp_path / "cookies.txt"
     _write_netscape_cookie_file(cookies_file)
 
     auth_file = tmp_path / "headers_auth.json"
-    original = '{"cookie": "old=1"}'
-    auth_file.write_text(original)
+    auth_file.write_text('{"cookie": "old=1"}')
 
     auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
@@ -92,5 +93,7 @@ def test_refresh_from_cookies_file_restores_backup_on_network_error(tmp_path, mo
         _PATCH_SAPISID,
         patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
     ):
-        assert auth._refresh_from_cookies_file(cookies_file, interactive=True) is False
-    assert auth_file.read_text() == original
+        assert auth._refresh_from_cookies_file(cookies_file, interactive=True) is True
+    saved = json.loads(auth_file.read_text(encoding="utf-8"))
+    assert saved["x-goog-authuser"] == "0"
+    assert "abc123" in saved["cookie"]

@@ -14,9 +14,10 @@ The release flow is **tag-driven**. Pushing a `vX.Y.Z` tag triggers PyPI publish
    .venv/bin/ruff check src/ tests/
    .venv/bin/pytest -x -q
    ```
-4. **Commit + tag + push**:
+4. **Commit + tag + push** — stage the release files explicitly and review the complete staged diff before committing:
    ```bash
-   git add -A
+   git add src/ytm_player/__init__.py CHANGELOG.md
+   git diff --cached
    git commit -m "chore(release): vX.Y.Z"
    git tag vX.Y.Z
    git push origin master --tags
@@ -39,6 +40,12 @@ No API tokens — auth is via OIDC trusted-publisher entries at PyPI and TestPyP
 Triggered after `Publish` succeeds. Checks out the exact commit the `Publish` run built (the one the tag guard verified), reads the version from `__version__` in `src/ytm_player/__init__.py`, clones `ssh://aur@aur.archlinux.org/ytm-player-git.git` via SSH key, copies `PKGBUILD`, rewrites its `pkgver=` line to the real version (the committed `pkgver=` is only a placeholder), regenerates `.SRCINFO` via `scripts/regenerate_srcinfo.py` (pure Python — no Arch dependency on Ubuntu CI runners), commits and pushes.
 
 The `regenerate_srcinfo.py` script handles shell variable expansion (`${url}`, `$pkgname`) so PKGBUILD constructs like `source=("git+${url}.git")` resolve correctly in the emitted `.SRCINFO`.
+
+## Local builds
+
+PyPI and GitHub Release artifacts are built only by `publish.yml` from a clean checkout. Never upload a locally built `dist/`.
+
+hatchling packages from the working tree and ignores `.git/info/exclude`. The sdist is an explicit allowlist (`[tool.hatch.build.targets.sdist]` in `pyproject.toml`) and `*.local.md` is in `.gitignore`, which keeps the known private-file locations out of a local build. Any other untracked file inside the allowlisted directories would still be packaged: `pytest tests/test_packaging` reports such files before anything is archived. Review them; stage intended project files explicitly, or exclude private files.
 
 ## Manual fallback (if AUR action fails)
 

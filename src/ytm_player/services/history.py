@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from pathlib import Path
@@ -62,28 +63,59 @@ class HistoryManager:
     # ------------------------------------------------------------------
 
     async def init(self) -> None:
-        """Open the database and create tables if they don't exist."""
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(self._db_path)
-        secure_chmod(self._db_path, SECURE_FILE_MODE)
-        self._db.row_factory = aiosqlite.Row
-        await self._db.execute("PRAGMA journal_mode=WAL")
-        await self._db.executescript(_SCHEMA)
-        await self._db.commit()
+        """Open the database and create tables if they don't exist.
 
-        # Prune old entries beyond retention limit.
+        Raises ``RuntimeError`` when the file can't be opened or prepared.
+        On failure or cancellation the connection is closed before raising;
+        a close that fails itself is logged, not hidden. This code never
+        deletes, renames or replaces the file, but SQLite may already have
+        touched its journal/WAL state while opening it.
+        """
+        db: aiosqlite.Connection | None = None
+        phase = "open"
         try:
-            await self._db.execute(
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            db = await aiosqlite.connect(self._db_path)
+            secure_chmod(self._db_path, SECURE_FILE_MODE)
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.executescript(_SCHEMA)
+            await db.commit()
+
+            # Prune old entries beyond retention limit.
+            phase = "write"
+            await db.execute(
                 "DELETE FROM play_history WHERE rowid NOT IN "
                 "(SELECT rowid FROM play_history ORDER BY played_at DESC LIMIT ?)",
                 (self._max_history,),
             )
-            await self._db.commit()
+            await db.commit()
+        except asyncio.CancelledError:
+            await self._discard(db)
+            raise
         except (OSError, sqlite3.Error) as exc:
+            await self._discard(db)
+            if phase == "open":
+                logger.warning("Failed to open history database %s: %s", self._db_path, exc)
+                raise RuntimeError(f"Failed to open history database: {exc}") from exc
             logger.warning("Failed to prune history database: %s", exc)
             raise RuntimeError(f"Failed to write to history database: {exc}") from exc
 
+        self._db = db
         logger.info("History database initialised at %s", self._db_path)
+
+    async def _discard(self, db: aiosqlite.Connection | None) -> None:
+        """Best-effort close of a connection whose initialisation failed.
+
+        This code never touches the file itself; a failed close is logged.
+        """
+        self._db = None
+        if db is None:
+            return
+        try:
+            await db.close()
+        except Exception:
+            logger.exception("Failed to close the history database connection after a failed init")
 
     async def close(self) -> None:
         """Close the database connection."""

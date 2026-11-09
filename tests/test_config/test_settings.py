@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -81,6 +83,41 @@ def test_settings_load_respects_show_queue_source_false(tmp_config_dir):
 
 
 class TestSaveLoadRoundTrip:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "{title}\n{artist}",
+            "\r\n\t\b\f",
+            "".join(chr(code) for code in range(32)) + "\x7f",
+            '"quoted" \\ path \\n literal',
+            "Björk 日本語 🎵 \u0085\u2028\u2029",
+            '"\n[ui]\ntheme = "unexpected"\n#',
+            "",
+        ],
+    )
+    def test_string_values_round_trip_without_reset(self, tmp_path, value):
+        path = tmp_path / "config.toml"
+        original = Settings()
+        original.notifications.format = value
+        original.ui.theme = "nord"
+        original.playback.default_volume = 37
+        original.save(path)
+
+        # Parse directly too: Settings.load recovers invalid TOML with defaults.
+        with path.open("rb") as source:
+            assert tomllib.load(source)["notifications"]["format"] == value
+        loaded = Settings.load(path)
+        assert loaded.notifications.format == value
+        assert loaded.ui.theme == "nord"
+        assert loaded.playback.default_volume == 37
+        assert not path.with_suffix(".toml.bak").exists()
+
+    def test_list_strings_use_the_same_escaping(self):
+        from ytm_player.config.settings import _format_toml_value
+
+        values = ["a\nb", "\x00\x7f", '"quoted"', "🎵", "C:\\path"]
+        assert tomllib.loads(f"values = {_format_toml_value(values)}")["values"] == values
+
     def test_round_trip(self, tmp_config_dir):
         path = tmp_config_dir / "config.toml"
 

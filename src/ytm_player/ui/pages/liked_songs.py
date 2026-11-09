@@ -246,7 +246,9 @@ class LikedSongsPage(TrackFilterHost, Widget):
     def on_click(self, event: Click) -> None:
         if event.widget is not None and event.widget.id == "start-radio-btn":
             event.stop()
-            self.run_worker(self._start_radio(), name="start_radio", exclusive=True)
+            self.run_worker(
+                self._start_radio(), name="start_radio", group="start-radio", exclusive=True
+            )
 
     async def _start_radio(self) -> None:
         import random
