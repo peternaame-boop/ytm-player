@@ -630,7 +630,10 @@ class YTMPlayerApp(
         ensure_dirs()
 
         # Check authentication.
-        auth = AuthManager(cookies_file=self.settings.yt_dlp.cookies_file)
+        auth = AuthManager(
+            cookies_file=self.settings.yt_dlp.cookies_file,
+            cookie_browser=self.settings.yt_dlp.cookie_browser,
+        )
         if not auth.is_authenticated():
             self.notify(
                 "Not signed in to YouTube Music. Run `ytm setup` to connect your account.",

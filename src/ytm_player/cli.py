@@ -105,7 +105,8 @@ def _query_history(query: str, limit: int, error_label: str) -> list[dict]:
 
 def _require_auth() -> Path:
     """Return the auth file path, or exit if not authenticated."""
-    auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
+    yt_dlp = get_settings().yt_dlp
+    auth = AuthManager(cookies_file=yt_dlp.cookies_file, cookie_browser=yt_dlp.cookie_browser)
     if not auth.is_authenticated():
         _error("Not authenticated. Run `ytm setup` to configure YouTube Music credentials.")
     return auth.auth_file
@@ -234,7 +235,8 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
 )
 def setup(manual: bool, browser: str | None, slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS) -> None:
     """Interactive authentication wizard for YouTube Music."""
-    auth = AuthManager(cookies_file=get_settings().yt_dlp.cookies_file)
+    yt_dlp = get_settings().yt_dlp
+    auth = AuthManager(cookies_file=yt_dlp.cookies_file, cookie_browser=yt_dlp.cookie_browser)
 
     running = get_running_pid()
     if running is not None:
@@ -385,7 +387,10 @@ def search(query: tuple[str, ...], filter_type: str | None, limit: int, compact_
     search_query = " ".join(query)
 
     settings = get_settings()
-    auth = AuthManager(cookies_file=settings.yt_dlp.cookies_file)
+    auth = AuthManager(
+        cookies_file=settings.yt_dlp.cookies_file,
+        cookie_browser=settings.yt_dlp.cookie_browser,
+    )
     try:
         ytm = auth.create_ytmusic_client(user=settings.general.brand_account_id or None)
         # click.Choice guarantees one of ytmusicapi's accepted filter literals

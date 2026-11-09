@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Unreleased
 
+**New features**
+
+- **Choose the browser used for cookie extraction**: `[yt_dlp] cookie_browser` selects the browser used by setup and automatic session renewal, with configured cookies files tried first. `ytm setup --browser` overrides the sources for one setup run without changing the setting. Thanks to @londospark (#193, #194).
+
 **Fixes**
 
 - **MPRIS and macOS Now Playing kept reporting Playing after the queue ran out**: when the last track finished, nothing updated the status, so `playerctl status` still said `Playing` with nothing playing. It now reports `Stopped`. Thanks to @tmbrid for the report and @TheeCoderAhmed for the fix (#176, #207).
