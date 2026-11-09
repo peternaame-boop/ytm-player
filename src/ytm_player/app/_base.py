@@ -101,6 +101,8 @@ if TYPE_CHECKING:
         _page_state_cache: dict[str, dict]
         _active_library_playlist_id: str | None
         _context_seq: int
+        _nav_idle: asyncio.Event
+        _nav_pending: tuple[str, dict[str, Any]] | None
 
         # ── Playback state tracking ────────────────────────────────────
         _track_start_position: float
