@@ -11,7 +11,10 @@ from pathlib import Path
 
 from ytm_player.config.paths import SECURE_FILE_MODE, secure_chmod
 from ytm_player.config.settings import get_settings
-from ytm_player.services.yt_dlp_options import apply_configured_yt_dlp_options
+from ytm_player.services.yt_dlp_options import (
+    apply_configured_yt_dlp_options,
+    withhold_cookie_file_details,
+)
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
 logger = logging.getLogger(__name__)
@@ -116,8 +119,10 @@ class DownloadService:
             )
 
         except Exception as exc:
-            logger.warning("Download failed for %s: %s", video_id, exc)
-            return DownloadResult(video_id=video_id, success=False, error=str(exc))
+            # The text goes to the log and into the failure toast.
+            error = withhold_cookie_file_details(str(exc))
+            logger.warning("Download failed for %s: %s", video_id, error)
+            return DownloadResult(video_id=video_id, success=False, error=error)
 
     async def download(self, video_id: str) -> DownloadResult:
         """Download or reuse a completed track, retaining ownership until its thread exits.

@@ -15,6 +15,7 @@ from ytm_player.config.settings import get_settings
 from ytm_player.services.yt_dlp_options import (
     apply_configured_yt_dlp_options,
     normalize_cookiefile,
+    withhold_cookie_file_details,
 )
 from ytm_player.utils.formatting import VALID_VIDEO_ID
 
@@ -105,19 +106,19 @@ class _YtDlpLogger:
     def debug(self, message: str) -> None:
         # yt-dlp routes both normal progress lines ("Downloading webpage")
         # and its own "[debug] ..."-prefixed messages through here.
-        logger.debug("yt-dlp: %s", message)
+        logger.debug("yt-dlp: %s", withhold_cookie_file_details(message))
 
     def info(self, message: str) -> None:
         # A default logger doesn't implement to_screen(), so without this
         # method, yt-dlp's own info-level messages during extract_info()
         # would be silently dropped rather than surfacing in ytm.log.
-        logger.info("yt-dlp: %s", message)
+        logger.info("yt-dlp: %s", withhold_cookie_file_details(message))
 
     def warning(self, message: str, **_kwargs: object) -> None:
-        logger.warning("yt-dlp: %s", message)
+        logger.warning("yt-dlp: %s", withhold_cookie_file_details(message))
 
     def error(self, message: str) -> None:
-        logger.error("yt-dlp: %s", message)
+        logger.error("yt-dlp: %s", withhold_cookie_file_details(message))
 
 
 # bestaudio first (real audio-only DASH formats when the resolve is
@@ -280,8 +281,17 @@ class StreamResolver:
                         ignore_discard=True,
                         ignore_expires=True,
                     )
-                except Exception:
-                    logger.warning("Could not load stream cookiejar %s", sig[0], exc_info=True)
+                except Exception as exc:
+                    from http.cookiejar import LoadError
+
+                    # A LoadError's message quotes the row it could not parse,
+                    # cookie value included: name it, do not print it.
+                    logger.warning(
+                        "Could not load stream cookiejar %s (%s)",
+                        sig[0],
+                        type(exc).__name__,
+                        exc_info=not isinstance(exc, LoadError),
+                    )
         return ydl, sig
 
     def _get_ydl(self) -> Any:
@@ -446,7 +456,7 @@ class StreamResolver:
                 "yt-dlp download error for video_id=%s (attempt %d): %s%s",
                 video_id,
                 attempt + 1,
-                exc,
+                withhold_cookie_file_details(str(exc)),
                 hint,
             )
             return None

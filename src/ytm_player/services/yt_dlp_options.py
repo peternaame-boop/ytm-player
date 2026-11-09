@@ -13,6 +13,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# http.cookiejar reports a malformed cookies-file row as
+# "invalid Netscape format cookies file '<path>': '<row>'", and the row holds
+# the cookie's value. yt-dlp passes that text on in its own error messages.
+_COOKIE_FILE_ERROR = "invalid Netscape format cookies file"
+
+
+def withhold_cookie_file_details(message: str) -> str:
+    """Return *message* without what follows a cookies-file parse error."""
+    head, found, _details = message.partition(_COOKIE_FILE_ERROR)
+    if not found:
+        return message
+    return f"{head}{_COOKIE_FILE_ERROR} (details withheld: they can contain cookie values)"
+
 
 def _split_csv_or_space(value: str) -> list[str]:
     """Split a string by commas/whitespace and drop empties."""
