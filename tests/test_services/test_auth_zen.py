@@ -67,7 +67,9 @@ def test_extract_zen_skips_unusable_root_and_uses_next(tmp_path, monkeypatch):
     _extract_browser_jar("zen")  # must not raise
 
 
-def test_extract_zen_merges_cookies_from_all_roots(tmp_path, monkeypatch):
+def test_extract_zen_prefers_signed_in_root_and_never_merges(tmp_path, monkeypatch):
+    """A readable but signed-out root (e.g. leftover ~/.zen) must not win."""
+
     from http.cookiejar import Cookie
 
     root_a = tmp_path / "a"
@@ -79,11 +81,11 @@ def test_extract_zen_merges_cookies_from_all_roots(tmp_path, monkeypatch):
         lambda: [root_a, root_b],
     )
 
-    def _cookie(name):
+    def _cookie(name, value="v"):
         return Cookie(
             version=0,
             name=name,
-            value="v",
+            value=value,
             port=None,
             port_specified=False,
             domain=".youtube.com",
@@ -99,19 +101,22 @@ def test_extract_zen_merges_cookies_from_all_roots(tmp_path, monkeypatch):
             rest={},
         )
 
+    signed_out = [_cookie("PREF"), _cookie("__Secure-3PAPISID", value="")]
+    signed_in = [_cookie("__Secure-3PAPISID", value="pap"), _cookie("SID")]
+    jars = {str(root_a): signed_out, str(root_b): signed_in}
+
     def _fake_extract(browser, profile=None, **kwargs):
-        jar = MagicMock()
-        if profile == str(root_a):
-            jar.__iter__.return_value = iter([_cookie("A")])
-        else:
-            jar.__iter__.return_value = iter([_cookie("B")])
-        return jar
+        return list(jars[profile])
 
     monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", _fake_extract)
 
-    merged = _extract_browser_jar("zen")
+    chosen = _extract_browser_jar("zen")
 
-    assert {c.name for c in merged} == {"A", "B"}
+    assert [(c.name, c.value) for c in chosen] == [("__Secure-3PAPISID", "pap"), ("SID", "v")]
+
+    # With no signed-in root, the first readable one is returned unchanged.
+    jars[str(root_b)] = [_cookie("NID")]
+    assert [c.name for c in _extract_browser_jar("zen")] == ["PREF", "__Secure-3PAPISID"]
 
 
 def test_extract_zen_reraises_when_all_roots_unusable(tmp_path, monkeypatch):

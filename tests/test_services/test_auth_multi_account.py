@@ -214,10 +214,10 @@ def test_multiple_accounts_retries_on_invalid_input(tmp_path, monkeypatch):
 
 
 def test_tracking_cookies_excluded_from_auth_header(tmp_path):
-    """Heavy tracking cookies (e.g. multi-KB ST-*) must not reach auth.json.
+    """The multi-KB ST-* tracking cookies must not reach auth.json.
 
     Joining the whole .youtube.com jar into one Cookie header (300+ KB
-    observed) gets the request rejected, so only session/auth names persist.
+    observed) gets the request rejected. Every other cookie is kept.
     """
     auth = _make_auth(tmp_path)
     cookies = [
@@ -225,6 +225,7 @@ def test_tracking_cookies_excluded_from_auth_header(tmp_path):
         _make_cookie("SID", "sid-val"),
         _make_cookie("ST-1g10wvg", "x" * 3000),
         _make_cookie("__Secure-3PAPISID", "pap"),
+        _make_cookie("__Secure-1PSIDCC", "cc"),
     ]
 
     def _ytmusic_factory(path):
@@ -246,6 +247,7 @@ def test_tracking_cookies_excluded_from_auth_header(tmp_path):
     saved = json.loads((tmp_path / "headers_auth.json").read_text())
     assert "SAPISID=secret" in saved["cookie"]
     assert "SID=sid-val" in saved["cookie"]
+    assert "__Secure-1PSIDCC=cc" in saved["cookie"]
     assert "ST-1g10wvg" not in saved["cookie"]
 
 

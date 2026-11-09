@@ -57,42 +57,6 @@ _BROWSERS = (
     "opera",
 )
 
-# Cookies actually sent with an authenticated music.youtube.com request.
-# The jar dump for .youtube.com can hold hundreds of heavy tracking cookies
-# (notably the multi-KB ``ST-*`` series) — joining all of them into one Cookie
-# header (300+ KB observed) gets the request rejected, so probing finds "no
-# valid account" in a browser that is signed in. Only these session/auth names
-# reach auth.json; the full jar still feeds the stream cookiejar file.
-_AUTH_COOKIE_NAMES = frozenset(
-    {
-        "SID",
-        "HSID",
-        "SSID",
-        "APISID",
-        "SAPISID",
-        "SIDCC",
-        "LOGIN_INFO",
-        "__Secure-1PAPISID",
-        "__Secure-3PAPISID",
-        "__Secure-1PSID",
-        "__Secure-3PSID",
-        "__Secure-1PSIDTS",
-        "__Secure-3PSIDTS",
-        "PREF",
-        "VISITOR_INFO1_LIVE",
-        "VISITOR_PRIVACY_METADATA",
-        "YSC",
-        "GPS",
-        "CONSISTENCY",
-        "__Secure-YNID",
-        "__Secure-ROLLOUT_TOKEN",
-        "OTZ",
-        "NID",
-        "AEC",
-        "SOCS",
-        "DV",
-    }
-)
 # Custom Chromium-based browsers not in yt-dlp's built-in list.
 # Maps browser name → (config_dir_name, keyring_name).
 _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
@@ -143,39 +107,43 @@ def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
     """Extract cookies from a supported browser, including Zen profiles.
 
     Zen keeps Firefox-format profiles in its own directories, which yt-dlp
-    does not search. Every candidate root that exists is tried through the
-    Firefox extractor and the results merged — a stale/empty directory (e.g.
-    a leftover ``~/.zen`` after Zen migrated to ``~/.config/zen``) must not
-    shadow the real profile.
+    does not search. Each candidate root that exists is tried through the
+    Firefox extractor, and the first one holding a signed-in YouTube session
+    wins: a stale directory (e.g. a leftover ``~/.zen`` after Zen migrated
+    to ``~/.config/zen``) must not shadow the real profile. Jars are never
+    merged, so one profile's cookies don't mix with another's.
     """
     from yt_dlp.cookies import extract_cookies_from_browser
 
     if browser == "zen":
-        from yt_dlp.cookies import YoutubeDLCookieJar
-
-        merged: Any = YoutubeDLCookieJar()
-        found_root = False
-        succeeded = False
+        first_jar = None
         last_error: Exception | None = None
         for root in _zen_profile_roots():
             if not root.is_dir():
                 continue
-            found_root = True
             try:
                 jar = extract_cookies_from_browser("firefox", profile=str(root))
             except Exception as exc:  # noqa: BLE001 — one bad root must not hide the rest
                 logger.debug("Zen profile root %s not usable: %s", root, exc)
                 last_error = exc
                 continue
-            succeeded = True
-            for cookie in jar:
-                merged.set_cookie(cookie)
-        if not found_root:
-            raise FileNotFoundError("no Zen profile directory found")
-        if not succeeded:
-            assert last_error is not None
+            if first_jar is None:
+                first_jar = jar
+            # Signed in: ytmusicapi signs requests with __Secure-3PAPISID.
+            if any(
+                c.domain == ".youtube.com"
+                and c.name == "__Secure-3PAPISID"
+                and bool(c.value)
+                and not c.is_expired()
+                for c in jar
+            ):
+                return jar
+        # No signed-in profile: the first readable one, so callers report no account.
+        if first_jar is not None:
+            return first_jar
+        if last_error is not None:
             raise last_error
-        return merged
+        raise FileNotFoundError("no Zen profile directory found")
 
     return extract_cookies_from_browser(browser)
 
@@ -1201,7 +1169,11 @@ class AuthManager:
         session as expired and the user runs ``ytm setup`` once. The commit
         itself refuses when the files no longer match *owner*.
         """
-        auth_cookies = [c for c in cookies if c.name in _AUTH_COOKIE_NAMES]
+        # The multi-KB ST-* tracking cookies can push the header past the
+        # server's size limit: sign-in probes come back empty and home-feed
+        # continuations get 413. Requests never need them; the stream jar
+        # keeps the full set.
+        auth_cookies = [c for c in cookies if not c.name.startswith("ST-")]
         cookie_str = "; ".join(f"{c.name}={c.value}" for c in auth_cookies)
 
         # Verify we have the critical SAPISID cookie.
