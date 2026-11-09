@@ -20,6 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **macOS Now Playing stays active** — the Cocoa main run loop is serviced alongside Textual's asyncio loop, so published track metadata appears reliably in Control Center. Thanks @alvaro0x404 (#131).
 - **macOS media keys stopped working after a while** — macOS disables the media-key event tap when a callback is slow or during an input flood, and nothing re-enabled it, so the keys silently went to Apple Music for the rest of the session. The tap is re-enabled as soon as macOS reports it disabled. Thanks @wgordon17 (#141).
 - **Phantom bouncing "Python" Dock icon on macOS** — creating the mpv handle promotes the process to a foreground app and nothing ever finishes that launch, so a generic Python tile bounced in the Dock indefinitely. The process is demoted to an accessory app (no Dock tile, still a Now Playing source) once mpv is up. Thanks @aksholokhov (#128).
+- **`ytm doctor` now shows the traceback under a logged error**: the Recent ERROR/WARNING section kept only lines carrying a level tag, so an entry such as `Failed to initialize services` lost the traceback and the exception message logged under it. Each entry now keeps the lines logged under it, up to its last 40, and the section shows the last 20 entries. Thanks to @dhivyanj for the report (#181).
 
 ### v2.1.0 (2026-09-08)
 
