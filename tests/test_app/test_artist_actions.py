@@ -160,6 +160,11 @@ class TestPlayArtistTopSongs:
         await TrackActionsMixin._play_artist_top_songs(host, "UC_ax")
 
         host.run_worker.assert_called_once()
+        assert host.run_worker.call_args.kwargs == {
+            "name": "fetch-artist-songs",
+            "group": "fetch-artist-songs",
+            "exclusive": True,
+        }
 
     async def test_no_songs(self):
         """When artist has no songs, shows warning."""
@@ -295,15 +300,15 @@ class TestFetchRemainingArtistSongs:
         host._refresh_queue_page.assert_called_once()
 
     async def test_bails_when_queue_replaced(self):
-        """Skips enrichment if the queue no longer contains initial tracks."""
+        """A replacement during the fetch invalidates its captured lifetime."""
         host = _make_host()
-        host.ytmusic.get_playlist = AsyncMock(
-            return_value={
-                "tracks": [
-                    {"videoId": "s1", "title": "Old", "artists": [{"name": "A", "id": "a"}]},
-                ]
-            }
-        )
+        host.queue.generation = 1
+
+        async def replace_during_fetch(*args):
+            host.queue.generation = 2
+            return {"tracks": [{"videoId": "s1", "title": "Old"}]}
+
+        host.ytmusic.get_playlist = AsyncMock(side_effect=replace_during_fetch)
         host.queue.tracks = ({"video_id": "different", "title": "New Content"},)
         initial = [{"video_id": "s1", "title": "Old"}]
         await TrackActionsMixin._fetch_remaining_artist_songs(host, "VLPLfull", initial)
@@ -432,6 +437,7 @@ class TestPlayPlaylist:
         host.ytmusic = MagicMock()
         host.ytmusic.get_playlist = AsyncMock(return_value=get_playlist_return or {})
         host._replace_queue_and_play = AsyncMock()
+        host.queue.shuffle_enabled = False
         host.notify = MagicMock()
         host.run_worker = MagicMock()
         return host

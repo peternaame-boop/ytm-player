@@ -131,12 +131,13 @@ class CacheManager:
         return dest
 
     async def put_file(self, video_id: str, source_path: Path, format: str) -> Path:
-        """Copy (or move) *source_path* into the cache directory."""
+        """Copy an external file, or index a download already in the cache."""
         if not VALID_VIDEO_ID.match(video_id):
             raise ValueError(f"Invalid video_id: {video_id!r}")
         dest = self._cache_dir / f"{video_id}.{format}"
         try:
-            await asyncio.to_thread(shutil.copy2, source_path, dest)
+            if not dest.exists() or not source_path.samefile(dest):
+                await asyncio.to_thread(shutil.copy2, source_path, dest)
             file_size = dest.stat().st_size
             await self._index(video_id, dest, file_size, format)
             await self.evict()

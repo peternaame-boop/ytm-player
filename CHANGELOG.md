@@ -10,9 +10,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Duration column cut off again once a track list needs scrolling** — the Title column is sized from the table's width before the layout has settled, so the fit misses the row-label gutter, the width Artist and Album grow into, and the vertical scrollbar that appears as soon as the list is longer than the window. The table came out wider than its viewport, scrolled sideways, and pushed the rightmost column off the right edge — the same symptom the v1.9.2 fix addressed. The fit now runs once more after the layout settles, including when rows are appended to a table that has already been painted.
+- **Choosing an action with Enter no longer replaces the queue**: picking Play Next, Add to Queue or Go to Artist from the track actions menu with the keyboard also played the row the menu was opened on, replacing the queue with the page's list. The menu now consumes the Enter that picks the action, so the keyboard does exactly what a mouse click does. Thanks for the report @tmbrid (#177).
+- **Tracks skipped with `HTTP error 403 Forbidden` on yt-dlp 2026.10.21 or newer**: that release made `tv_samsung` one of yt-dlp's default YouTube clients. On a free account, its stream for a track with a pre-roll ad stays locked until the ad would have finished, and yt-dlp marks that moment as `available_at`. yt-dlp's own downloader waits for it, but ytm handed the URL to mpv straight away, so the open hit 403, the one-time retry got a fresh ad timer and failed the same way, and the track was skipped. Playback now waits until the stream is available, which delays the start of that track by up to the length of the ad. A prefetched next track usually has no wait left. Thanks to @tmbrid for the report, @ardzz for the fix and @slastra for the diagnosis (#195, #190).
+- **Crash at startup on Termux (Android)**: Termux builds Python without `os.link`, so claiming the instance lock raised `AttributeError` and ytm exited with a traceback. The lock now falls back to the plain exclusive create it already used on filesystems without hard links. Thanks to @giquo for the report and the fix (#204).
+- **Spotify import no longer crashes when `thefuzz` is missing**: the Import button opened the import popup even when the optional `thefuzz` package was not installed, and matching the first track crashed the app with `NameError: name 'fuzz' is not defined`. The button now shows an error that names the missing package and how to install it. Thanks to @Bimasakti1024 for the report and @Jah-yee for the fix (#180, #187).
+- **Crash when two page switches overlap**: a page switch that started while another was still running, for example a footer click while the previous page was still being swapped out, could mount the same page twice and crash with `DuplicateIds`, or leave two pages on screen at once. Page switches now run one at a time, and if more are requested during a switch, the last one is carried out when it finishes. Thanks to @pay-87 for the report (#145).
+- **`g L` and other key sequences with a capital letter did nothing in kitty**: recent Textual versions ask terminals that speak the kitty keyboard protocol to report every key, and they then also send a key event for pressing Shift on its own. ytm counted that press as part of the sequence, so `g`, Shift, `L` matched nothing. The same broke `s A`, `s D` and a count before a capital, such as `15 J`. Modifier presses on their own are now skipped. Thanks to @tmbrid for the report (#178).
 - **macOS Now Playing stays active** — the Cocoa main run loop is serviced alongside Textual's asyncio loop, so published track metadata appears reliably in Control Center.
 
----
+### v2.1.0 (2026-09-08)
+
+#### Upgrade notes
+
+- **Existing sign-ins keep working.** When an older session expires, run `ytm setup` once to enable account-checked automatic renewal.
+- **Authenticated streaming is optional.** `[yt_dlp] use_session_cookies` remains off by default. Enabling it requires a working JavaScript solver and runtime; anonymous streaming is unaffected. See [configuration](docs/configuration.md#yt_dlp).
+- **Downloads share the audio cache limit.** Older cache entries may be evicted, oversized downloads are reported as not retained, and interrupted downloads restart from the beginning.
+
+#### New features
+
+- **Multi-select tracks:** click a track, then Shift-click another to select the range; Ctrl-click toggles individual tracks. Keyboard alternatives are `v` to mark and `V` to extend a range. Press `A` to add the selection to a playlist. Marks survive sorting, filtering and background refreshes, including duplicate song occurrences. Mouse modifiers depend on terminal support. See [keybindings](docs/keybindings.md). (#159)
+- **Browse Playlists and Subscriptions:** discover playlists from your home feed and open your subscribed artists. Five tabs fit alongside the sidebar in an 80-column terminal. Thanks @ThePhatLeee. (#125)
+- **Combined listening history:** Recently Played now opens on **All**, showing local history first, followed by additional account history—not one combined timeline. Separate Local and YT Music tabs remain available; the account tab no longer excludes songs played in this app. Thanks @Villoh. (#115)
+
+#### Playback and queue
+
+- Playlist shuffle now includes the first track played and respects saved shuffle preferences. Selecting a specific song still plays that song. For playlists over 300 tracks, the first song is chosen from the first 300; the remaining tracks shuffle in as they load.
+- Double-clicking a sidebar playlist starts playback without leaving its Library view.
+- Failed streams retry once with a fresh resolver after network or VPN changes. Exhausted recovery reports the failure rather than silently stopping or looping in repeat-one. (#135)
+- Stop and newer playback requests supersede stale loads, radio requests and delayed queue updates. Old playback events no longer advance a newer selection.
+- Queue actions target the selected occurrence, including duplicate songs. Removing the playing row lets that song finish before continuing with its surviving successor.
+- Shuffle toggles and background queue changes keep the displayed rows synchronized. Turning shuffle off preserves the current track; reordering clears temporary sorting while retaining filters.
+- Opening and quitting without playback preserves the saved resume point. Failed startup, failed loads and superseded seeks no longer overwrite it.
+
+#### Playlists, Browse and search
+
+- Playlist changes report rejected or unconfirmed results accurately. After a timeout, check the playlist before retrying—the change may already have succeeded.
+- The playlist picker prevents duplicate submissions, retains filter focus, handles duplicate confirmation consistently, and displays newly created playlists even when adding tracks is declined.
+- Recently Played preserves marks and cursor position across repeated account-history rows and background updates.
+- Browse and Charts recover from failed or interrupted loads. Country changes show matching data, and locale values select the correct country.
+- Large playlist libraries and full artist album/single lists are no longer truncated. (#134, #138)
+- Radio, discovery, search and background playlist loading no longer cancel unrelated work. Sidebar double-clicks no longer trigger redundant playlist loads.
+
+#### Sign-in and reliability
+
+- Automatic renewal stays with the recorded account, works for sorted playlists, and backs off for 60 seconds after failure.
+- Sign-in updates protect newer setup sessions from concurrent renewal and bind stream cookies to the corresponding sign-in.
+- Manual setup accepts Chrome’s pasted headers more reliably, preserves the existing session until replacement, and reports when a running app needs restarting. Zen Browser detection is supported. (#119)
+- Unreachable YouTube Music, an unreadable history database, or malformed session/update-cache files no longer prevent the supported startup paths from continuing.
+- Shutdown attempts remaining cleanup even when a service fails. Settings containing multiline or control characters round-trip correctly.
+- Downloads are indexed correctly, publish only completed files, and report directory failures without closing the app.
+
+#### Interface, diagnostics and dependencies
+
+- Custom themes correctly control selection highlights and album-art placeholders; switching themes preserves terminal colours and other base settings. (#122, #158)
+- Fixed punctuation seek keys, missing radio artwork, markup-like titles and duplicate artist-album rows. (#143)
+- `ytm doctor` redacts HTTP(S)/TCP URLs, including embedded stream IP/signature parameters. Review diagnostics before sharing; arbitrary secrets are not guaranteed to be removed.
+- yt-dlp warnings reach the app log, resolver resets handle concurrent work safely, and `pycryptodomex` supports faster browser-cookie extraction. Thanks @wgordon17. (#136)
+- Updated yt-dlp requirements address widespread 403 failures; Spotify scraper compatibility and full-playlist fetching are restored. (#140, #142)
+- Packaging excludes known local-note files and checks for unintended untracked inclusions in locally built distributions.
 
 ### v2.0.0 (2026-07-04)
 

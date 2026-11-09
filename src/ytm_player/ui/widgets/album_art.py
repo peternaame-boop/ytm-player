@@ -38,6 +38,55 @@ _ART_CACHE_MAX = 20
 _DOWNLOAD_TIMEOUT = 5
 
 
+def _relative_luminance(hex_color: str) -> float | None:
+    """WCAG relative luminance of a six-digit hex colour, or None if it isn't one.
+
+    Accepts ``#rrggbb`` and ``rrggbb``. Terminal-dependent colours
+    (``ansi_default``, named colours) have no RGB value the terminal is
+    bound to, so they are not guessed at.
+    """
+    hex_str = hex_color.strip().lstrip("#")
+    if len(hex_str) != 6:
+        return None
+    try:
+        channels = [int(hex_str[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    except ValueError:
+        return None
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(luminance_a: float, luminance_b: float) -> float:
+    """WCAG contrast ratio, (lighter + 0.05) / (darker + 0.05)."""
+    lighter, darker = max(luminance_a, luminance_b), min(luminance_a, luminance_b)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _readable_on(bg_hex: str, first: str, *others: str) -> str:
+    """Return the candidate colour with the highest contrast ratio against *bg_hex*.
+
+    The placeholder's note glyph used to hardcode ``theme.foreground`` as
+    its colour regardless of the background it sits on, which goes nearly
+    invisible on a light or pastel ``primary``. Neither candidate is
+    assumed to be the light or the dark one: on a light theme the
+    foreground is dark and the background light, the reverse of the
+    stock theme. *first* wins ties and is kept whenever the comparison
+    isn't possible, i.e. the background or any candidate is not a
+    six-digit hex colour (with or without ``#``).
+    """
+    background = _relative_luminance(bg_hex)
+    candidates = (first, *others)
+    luminances = [_relative_luminance(c) for c in candidates]
+    if background is None or any(lum is None for lum in luminances):
+        return first
+    best, best_ratio = first, 0.0
+    for candidate, luminance in zip(candidates, luminances):
+        ratio = _contrast_ratio(cast(float, luminance), background)
+        if ratio > best_ratio:
+            best, best_ratio = candidate, ratio
+    return best
+
+
 class AlbumArt(Widget):
     """Displays album art in the terminal using half-block Unicode rendering.
 
@@ -202,8 +251,9 @@ class AlbumArt(Widget):
                 result.append(_BLOCK_TOP * w, style=f"{accent} on {bg}")
             elif row == h // 2:
                 pad = (w - 1) // 2
+                note_color = _readable_on(accent, theme.foreground, theme.background)
                 result.append(_BLOCK_FULL * pad, style=accent)
-                result.append(_NOTE, style=f"bold {theme.foreground} on {accent}")
+                result.append(_NOTE, style=f"bold {note_color} on {accent}")
                 result.append(_BLOCK_FULL * (w - pad - 1), style=accent)
             else:
                 result.append(_BLOCK_FULL * w, style=accent)

@@ -15,6 +15,7 @@ depends=(
     'python-mpv'
     'python-packaging'
     'python-pillow'
+    'python-pycryptodomex'
     'python-textual>=7.0'
     'python-textual<9.0'
     'python-ytmusicapi'

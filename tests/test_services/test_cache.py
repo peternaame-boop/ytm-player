@@ -97,6 +97,41 @@ class TestClear:
 
 
 class TestPutFile:
+    async def test_put_file_recognizes_equivalent_path(self, cache_manager):
+        await cache_manager.init()
+        source = cache_manager._cache_dir / f"{VID_A}.opus"
+        source.write_bytes(b"downloaded audio")
+        alias = cache_manager._cache_dir / ".." / "cache" / source.name
+        try:
+            assert await cache_manager.put_file(VID_A, alias, "opus") == source
+            assert await cache_manager.get(VID_A) == source
+        finally:
+            await cache_manager.close()
+
+    async def test_indexing_existing_file_still_runs_eviction(self, cache_manager):
+        await cache_manager.init()
+        source = cache_manager._cache_dir / f"{VID_A}.opus"
+        source.write_bytes(b"x" * (2 * 1024 * 1024))
+        try:
+            await cache_manager.put_file(VID_A, source, "opus")
+            assert await cache_manager.get(VID_A) is None
+            assert not source.exists()
+        finally:
+            await cache_manager.close()
+
+    async def test_put_file_indexes_download_already_in_cache(self, cache_manager):
+        await cache_manager.init()
+        source = cache_manager._cache_dir / f"{VID_A}.opus"
+        source.write_bytes(b"downloaded audio")
+        try:
+            dest = await cache_manager.put_file(VID_A, source, "opus")
+            assert dest == source
+            assert source.read_bytes() == b"downloaded audio"
+            assert await cache_manager.get(VID_A) == source
+            assert (await cache_manager.get_status())["total_size"] == len(b"downloaded audio")
+        finally:
+            await cache_manager.close()
+
     async def test_put_file_copies_file_into_cache(self, cache_manager, tmp_path):
         await cache_manager.init()
         source = tmp_path / "source.opus"

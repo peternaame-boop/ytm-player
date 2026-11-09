@@ -1,10 +1,26 @@
 """Tests for AuthManager cookies-file refresh behavior."""
 
+import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import requests.exceptions
 
 from ytm_player.services.auth import AuthManager
+
+_PATCH_SAPISID = patch("ytm_player.services.auth.sapisid_from_cookie", return_value="fake_sapisid")
+
+
+def _slot_zero_only(mock_ytm):
+    """YTMusic stand-in that is a valid account in browser slot 0 only, so the
+    interactive selection auto-picks it instead of prompting."""
+
+    def factory(path, user=None):
+        if json.loads(Path(path).read_text(encoding="utf-8")).get("x-goog-authuser") != "0":
+            raise Exception("no account in this slot")
+        return mock_ytm
+
+    return factory
 
 
 def _write_netscape_cookie_file(path: Path, domain: str = ".youtube.com") -> None:
@@ -24,15 +40,15 @@ def test_extract_from_cookies_file_rejects_non_youtube_suffix(tmp_path):
     _write_netscape_cookie_file(cookies_file, domain="notyoutube.com")
 
     auth_file = tmp_path / "headers_auth.json"
-    auth = AuthManager(auth_file=auth_file)
+    auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
     assert auth._extract_and_save_from_cookies_file(cookies_file) is False
     assert not auth_file.exists()
 
 
-def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
-    tmp_path, monkeypatch
-):
+def test_refresh_from_cookies_file_refused_probe_leaves_previous_auth(tmp_path, monkeypatch):
+    """The candidate session is probed before anything is written; a refusal
+    leaves the working credentials untouched (nothing to restore)."""
     cookies_file = tmp_path / "cookies.txt"
     _write_netscape_cookie_file(cookies_file)
 
@@ -40,29 +56,44 @@ def test_refresh_from_cookies_file_restores_previous_auth_on_validate_failure(
     original = '{"cookie": "old=1"}'
     auth_file.write_text(original)
 
-    auth = AuthManager(auth_file=auth_file)
+    auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
+    mock_ytm = MagicMock()
+    mock_ytm.get_account_info.return_value = {}  # no account in any slot
 
-    monkeypatch.setattr(auth, "validate", lambda: False)
-
-    assert auth._refresh_from_cookies_file(cookies_file) is False
+    with (
+        _PATCH_SAPISID,
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
+    ):
+        assert auth._refresh_from_cookies_file(cookies_file, interactive=True) is False
     assert auth_file.read_text() == original
 
 
-def test_refresh_from_cookies_file_restores_backup_on_network_error(tmp_path, monkeypatch):
-    """If validate() raises a network error, backup should still be restored."""
+def test_refresh_from_cookies_file_commits_the_probed_session_without_validate(
+    tmp_path, monkeypatch
+):
+    """The probe already validated the exact bytes that are committed, so no
+    post-commit validate() runs — a network error there can no longer undo
+    (or roll back over) a committed session."""
     cookies_file = tmp_path / "cookies.txt"
     _write_netscape_cookie_file(cookies_file)
 
     auth_file = tmp_path / "headers_auth.json"
-    original = '{"cookie": "old=1"}'
-    auth_file.write_text(original)
+    auth_file.write_text('{"cookie": "old=1"}')
 
-    auth = AuthManager(auth_file=auth_file)
+    auth = AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
     def _raise_network_error():
         raise requests.exceptions.ConnectionError("connection reset")
 
     monkeypatch.setattr(auth, "validate", _raise_network_error)
+    mock_ytm = MagicMock()
+    mock_ytm.get_account_info.return_value = {"accountName": "Alice"}
 
-    assert auth._refresh_from_cookies_file(cookies_file) is False
-    assert auth_file.read_text() == original
+    with (
+        _PATCH_SAPISID,
+        patch("ytm_player.services.auth.YTMusic", side_effect=_slot_zero_only(mock_ytm)),
+    ):
+        assert auth._refresh_from_cookies_file(cookies_file, interactive=True) is True
+    saved = json.loads(auth_file.read_text(encoding="utf-8"))
+    assert saved["x-goog-authuser"] == "0"
+    assert "abc123" in saved["cookie"]

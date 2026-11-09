@@ -1,5 +1,30 @@
 # Troubleshooting
 
+## Playback fails with "HTTP error 403 Forbidden"
+
+Every track fails and `~/.config/ytm-player/logs/ytm.log` shows
+`mpv[ffmpeg]: https: HTTP error 403 Forbidden`.
+
+YouTube stopped serving streams to yt-dlp's former default client on
+2026-08-17. yt-dlp 2026.08.19 fixed this, and ytm-player now requires it.
+If you still see 403s, the yt-dlp ytm-player actually uses is stale. For
+pipx/uv/pip installs that is the copy inside ytm-player's own environment —
+updating a system-wide `yt-dlp` does not touch it. Upgrade ytm-player itself,
+which pulls the required yt-dlp:
+
+- pipx: `pipx upgrade ytm-player` (or `pipx uninstall ytm-player && pipx install ytm-player`)
+- uv: `uv tool upgrade ytm-player`
+- pip: `pip install -U ytm-player`
+- AUR: `yay -Syu` (yt-dlp is a system package there, so a system update is the fix)
+- Nix, declarative: `nix flake update` on your input, then rebuild
+- Nix, `nix profile`: `nix profile list`, then `nix profile upgrade <name>`
+
+Then restart `ytm` — it keeps its yt-dlp instance and cached stream URLs for
+the whole process lifetime. After changing networks or disconnecting a VPN
+(stream URLs are bound to the IP that requested them) no restart is needed:
+a stream that fails to open drops the cached URLs and the yt-dlp instance and
+the track is retried once; restart only if that retry fails too.
+
 ## "mpv not found" or playback doesn't start
 
 Ensure mpv is installed and in your `$PATH`:
@@ -23,9 +48,10 @@ For Windows-specific libmpv setup, see [docs/installation.md#windows-setup](inst
 ## Authentication fails
 
 - Make sure you're signed in to YouTube Music (free or Premium) in your browser.
-- Try a different browser: `ytm setup` auto-detects Chrome, Firefox, Brave, Edge, Chromium, Vivaldi, Opera, Helium.
+- Try a different browser: `ytm setup` auto-detects Chrome, Firefox, Zen, Brave, Edge, Chromium, Vivaldi, Opera, Helium.
 - If auto-detection fails, use the manual paste method: `ytm setup --manual`.
 - Re-run `ytm setup` to re-authenticate.
+- **"Your YouTube Music session expired" even though the browser is signed in**: automatic renewal only replaces a session with the *same* account, using the channel ID `ytm setup` records in `account.json`. Sessions set up before that file existed keep working until they expire, but can't be renewed automatically; run `ytm setup` once and renewal works from then on. Renewal is also refused when the browser no longer has that account signed in, or when the account has no YouTube channel. After a renewal attempt fails, ytm waits 60 seconds before trying the browser again, so signing back in can take up to a minute to be picked up.
 - For multi-account or Brand Account setups: `ytm setup` will detect multiple Google accounts and prompt you to pick. Brand Accounts can also be configured via `[general] brand_account_id` in `config.toml`.
 
 ## No sound / wrong audio device

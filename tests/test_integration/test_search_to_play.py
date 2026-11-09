@@ -114,7 +114,9 @@ async def test_search_then_queue_then_play_logs_history(
 
     # mpv received the play call with the resolved URL.
     fake_mpv_instance = mock_mpv.MPV.return_value
-    fake_mpv_instance.play.assert_called_once_with("http://fake.stream/abc12345678.opus")
+    fake_mpv_instance.command.assert_called_once_with(
+        "loadfile", "http://fake.stream/abc12345678.opus"
+    )
 
     # Player tracked the current track and dispatched TRACK_CHANGE.
     assert player.current_track == track

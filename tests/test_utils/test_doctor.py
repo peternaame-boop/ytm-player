@@ -8,6 +8,79 @@ from pathlib import Path
 import pytest
 
 
+class TestDiagnosticUrlRedaction:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://media.invalid/play?ip=192.0.2.42&sig=fake-signature&pot=fake-token",
+            "HTTP://media.invalid/play?ip=2001%3Adb8%3A%3A42&signature=fake-signature",
+            "tcp://[2001:db8::42]:443",
+            "TcP://192.0.2.42:443",
+            "https://media.invalid/a(b)?unknown=fake-secret",
+        ],
+    )
+    @pytest.mark.parametrize("quotes", ["", "'", '"'])
+    def test_removes_whole_url_preserving_error_text(self, url, quotes):
+        from ytm_player.utils.doctor import _redact
+
+        message = f"HTTP 403 opening {quotes}{url}{quotes} failed\nnext diagnostic line"
+        assert _redact(message) == (
+            f"HTTP 403 opening {quotes}[URL REDACTED]{quotes} failed\nnext diagnostic line"
+        )
+
+    def test_multiple_urls_and_header_redaction(self):
+        from ytm_player.utils.doctor import _redact
+
+        assert _redact(
+            "https://one.invalid/?secret=one http://two.invalid/?secret=two\n"
+            "Authorization: Bearer fake-auth\nCookie: SAPISID=fake-cookie\n"
+            "Bearer fake-bearer\nstatus: 403; retry unavailable"
+        ) == (
+            "[URL REDACTED] [URL REDACTED]\nAuthorization: [REDACTED]\n"
+            "Cookie: [REDACTED]\nBearer [REDACTED]\nstatus: 403; retry unavailable"
+        )
+
+    def test_normal_text_is_unchanged(self):
+        from ytm_player.utils.doctor import _redact
+
+        text = "Version: 2.1.0\nHTTP 403\nmpv: available\nconfig: /tmp/ytm/config.toml"
+        assert _redact(text) == text
+
+    def test_public_report_redacts_synthetic_logs_and_crash_without_rewriting(
+        self, monkeypatch, tmp_path
+    ):
+        from ytm_player.config import paths
+        from ytm_player.utils import doctor
+        from ytm_player.utils import logging as log_utils
+
+        for name in ("CONFIG_FILE", "THEME_FILE", "SESSION_STATE_FILE", "LOG_FILE"):
+            monkeypatch.setattr(paths, name, tmp_path / name)
+        crash_dir = tmp_path / "crashes"
+        crash_dir.mkdir()
+        monkeypatch.setattr(paths, "CRASH_DIR", crash_dir)
+        for name in ("_mpv_version", "_libmpv_status", "_running_status", "_mpris_status"):
+            monkeypatch.setattr(doctor, name, lambda: "synthetic collector")
+        monkeypatch.setattr(log_utils, "list_active_hooks", lambda: "synthetic hooks")
+        url = "https://media.invalid/play?ip=192.0.2.42&sig=fake-signature&pot=fake-token"
+        payload = f"[WARNING] mpv[file]: HTTP 403 opening '{url}' failed\n"
+        paths.LOG_FILE.write_text(payload, encoding="utf-8")
+        crash = crash_dir / "ytm-crash-20260908-000000-000000.log"
+        crash.write_text(f"=== Crash ===\nversion: 2.0.0\n\n{payload}", encoding="utf-8")
+        fault = crash_dir / "faulthandler.log"
+        fault.write_text(f"Fatal Python error: synthetic\n{payload}", encoding="utf-8")
+        before = {p: p.read_bytes() for p in (paths.LOG_FILE, crash, fault)}
+
+        report = doctor.gather_diagnostics()
+
+        assert report.count("[URL REDACTED]") == 4  # log, mpv, faulthandler, crash
+        assert "HTTP 403" in report
+        assert "=== Paths ===" in report
+        assert "synthetic hooks" in report
+        for private in ("192.0.2.42", "fake-signature", "fake-token", "media.invalid"):
+            assert private not in report
+        assert {p: p.read_bytes() for p in before} == before
+
+
 class TestGatherDiagnosticsExisting:
     """v1 sections must still work."""
 

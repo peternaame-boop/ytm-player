@@ -26,8 +26,12 @@
 | `Ctrl+w l` | Focus the main content, then the lyrics sidebar if it's open |
 | `Ctrl+w w` | Cycle focus through the visible panes |
 | `tab` / `Shift+tab` | Focus next / previous section — track table, result panel, Browse tab label, or any visible sidebar (then `j`/`k` move within it, `enter` activates). On Browse, `tab` highlights a tab label and `enter` opens it. |
-| `J` / `K` | Queue: move the selected track down / up (count-aware, e.g. `15 J` moves down 15) |
+| `J` / `K` | Queue: move the selected track down / up in queue order (count-aware, e.g. `15 J` moves down 15). Clears an active sort so the move is visible; a filter stays, and hidden rows still count as positions |
 | `a` | Track actions menu |
+| `v` | Mark / unmark the highlighted track (marks survive sorting and filtering; a marked track the filter hides still counts) |
+| `V` | Start a range of marks that follows the cursor; `V` again ends it, keeping the marks |
+| `escape` | Clear all marks |
+| `A` | Add the marked tracks to a playlist, in the order shown (with no marks: the playing track) |
 | `/` | Filter current list |
 | `Ctrl+r` | Cycle repeat mode (off → all → one) |
 | `Ctrl+s` | Toggle shuffle |
@@ -55,6 +59,11 @@
 | Click | Charts shelf pills | Switch between chart shelves. Two rows: `Featured globally:` (events like Coachella, hidden on terminals < 80 cols) and the country charts (Top 100 Songs → Weekly Top Songs on Shorts → Trending 20 → rest). |
 | Click | Liked Songs / Recently Played `[▶ Start Radio]` | Seed a radio from 5 random tracks in the collection |
 | Right-click | Track row | Open context menu (play, queue, add to playlist, etc.). Works on every track-listing page including Queue / Liked Songs / Recently Played. |
+| Click | Mark column (leftmost cell of a track row) | Mark / unmark that track. Never starts playback. |
+| Ctrl+click | Track row | Mark / unmark that track and move the highlight there. Never starts playback. |
+| Shift+click | Track row | Mark every row from the range's starting row to this one, keeping other marks. A normal click, Ctrl+click, or `v` sets the starting row. |
+
+Whether Ctrl+click and Shift+click reach the app with their modifier depends on the terminal — some keep them for their own text selection or link handling. The keyboard alternative is `v` to mark the highlighted track and `V` to mark a range that follows the cursor.
 
 ## Custom keybindings
 

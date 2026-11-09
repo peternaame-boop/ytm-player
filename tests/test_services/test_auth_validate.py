@@ -30,7 +30,7 @@ def _make_auth(tmp_path: Path) -> AuthManager:
     """Create an AuthManager with a valid auth file in tmp_path."""
     auth_file = tmp_path / "headers_auth.json"
     _write_auth_file(auth_file)
-    return AuthManager(auth_file=auth_file)
+    return AuthManager(auth_file=auth_file, stream_cookies_file=tmp_path / "stream_cookies.txt")
 
 
 # ── validate() unit tests ───────────────────────────────────────────────

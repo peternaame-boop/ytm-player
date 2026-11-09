@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import types
@@ -59,6 +60,7 @@ class PlaybackSettings:
 @dataclass
 class YtDlpSettings:
     cookies_file: str = ""
+    use_session_cookies: bool = False
     ca_bundle: str = ""
     remote_components: str | list[str] = ""
     js_runtimes: str | list[str] = ""
@@ -317,8 +319,9 @@ def _format_toml_value(value: object) -> str:
         case int():
             return str(value)
         case str():
-            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-            return f'"{escaped}"'
+            # JSON's string escapes also work in TOML basic strings. DEL is
+            # allowed literally by JSON, but must be escaped in TOML too.
+            return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
         case list():
             items = ", ".join(_format_toml_value(v) for v in value)
             return f"[{items}]"

@@ -76,6 +76,10 @@ def _build_session_host():
     h._pending_resume_position = 0.0
     h._first_run_hint_shown = False
     h._mpris_hint_shown = False
+    # This host models a session whose restore already ran (see
+    # SessionMixin._save_session_state: nothing is saved before that).
+    h._session_restored = True
+    h._loaded_resume = None
     h.theme = "ytm-dark"
 
     # Override _get_transliteration_state so save serialises a clean bool

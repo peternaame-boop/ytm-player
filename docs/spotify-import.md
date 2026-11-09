@@ -35,6 +35,4 @@ Interactive flow: fetches tracks, shows match results, lets you resolve ambiguou
 The importer tries two approaches in order:
 
 1. **Spotify Web API** (full pagination, handles any playlist size) — requires a free [Spotify Developer](https://developer.spotify.com/) app. On first use, you'll be prompted for your `client_id` and `client_secret`, which are stored in `~/.config/ytm-player/spotify.json`.
-2. **Scraper fallback** (no credentials needed, limited to ~100 tracks) — used automatically if API credentials aren't configured.
-
-For playlists over 100 tracks, set up the API credentials.
+2. **Scraper fallback** (no credentials needed, also handles any playlist size) — used automatically if API credentials aren't configured.

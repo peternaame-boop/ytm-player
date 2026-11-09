@@ -33,7 +33,7 @@ jobs:
             echo "::error::Tag v$TAG_VERSION does not match __version__ ($PKG_VERSION). Refusing to publish."
             exit 1
           fi
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip

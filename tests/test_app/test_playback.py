@@ -10,9 +10,13 @@ Three bug classes guarded against:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from ytm_player.app._playback import PlaybackMixin
+import pytest
+
+from ytm_player.app._mpris import MPRISMixin
+from ytm_player.app._playback import _MAX_CONSECUTIVE_FAILURES, PlaybackMixin
 
 
 def _fresh_playback_host():
@@ -51,9 +55,84 @@ def _fresh_playback_host():
     p._pending_resume_video_id = None
     p._pending_resume_position = 0.0
     p._play_generation = 0
+    p._recovery_generation = None
+    p._handled_error_attempt = 0
     p._local_history_claim = None
     p._play_lock = asyncio.Lock()
     return p
+
+
+def _stream_info(video_id: str):
+    from ytm_player.services.stream import StreamInfo
+
+    return StreamInfo(
+        url=f"http://stream/{video_id}",
+        video_id=video_id,
+        format="opus",
+        bitrate=0,
+        duration=180,
+        expires_at=float("inf"),
+        thumbnail_url=None,
+    )
+
+
+def _accept_playback(host):
+    """Model load acceptance explicitly; an idle return models a failed load."""
+
+    async def accept(url, track, attempt=None):
+        host.player.current_track = track
+
+    host.player.play = AsyncMock(side_effect=accept)
+
+
+class TestResumeInvalidationHook:
+    """The resume point read from session.json is a fallback for the session
+    save only until a track's load is accepted (not proof audio started —
+    stream errors still arrive later as ERROR events)."""
+
+    _RESUME = {"video_id": "A", "position": 42.0, "playlist_id": None}
+
+    @pytest.mark.parametrize("video_id", ["A", "B"])
+    async def test_accepted_load_invalidates_the_disk_resume(self, video_id):
+        host = _fresh_playback_host()
+        host._loaded_resume = dict(self._RESUME)
+        host.stream_resolver.resolve = AsyncMock(return_value=_stream_info(video_id))
+
+        async def _accept_load(url, track, attempt=None):
+            host.player.current_track = track
+
+        host.player.play = AsyncMock(side_effect=_accept_load)
+        host.player.seek_absolute = AsyncMock()
+
+        await host.play_track({"video_id": video_id, "title": "X"})
+
+        assert host._loaded_resume is None
+
+    async def test_failed_load_keeps_the_disk_resume(self):
+        host = _fresh_playback_host()
+        host._loaded_resume = dict(self._RESUME)
+        host.stream_resolver.resolve = AsyncMock(return_value=_stream_info("B"))
+        # play() swallows a load failure: current_track stays None.
+        host.player.play = AsyncMock()
+
+        await host.play_track({"video_id": "B", "title": "X"})
+
+        assert host._loaded_resume == self._RESUME
+
+    async def test_superseded_play_keeps_the_disk_resume(self):
+        host = _fresh_playback_host()
+        host._loaded_resume = dict(self._RESUME)
+
+        async def _resolve_and_supersede(video_id):
+            host._play_generation += 1  # a newer play_track landed meanwhile
+            return _stream_info(video_id)
+
+        host.stream_resolver.resolve = AsyncMock(side_effect=_resolve_and_supersede)
+
+        await host.play_track({"video_id": "B", "title": "X"})
+
+        host.player.play.assert_not_awaited()
+        assert host._loaded_resume == self._RESUME
 
 
 class TestPlayTrackDebounce:
@@ -178,6 +257,7 @@ def _resume_capable_host():
     from ytm_player.services.stream import StreamInfo
 
     host = _fresh_playback_host()
+    _accept_playback(host)
     host.player.seek_absolute = AsyncMock()
     host.stream_resolver.resolve = AsyncMock(
         return_value=StreamInfo(
@@ -459,6 +539,53 @@ class TestFetchAndPlayRadioSeedFirst:
         host.play_track.assert_not_called()
 
 
+class TestFetchAndPlayRadioNotifyOrder:
+    """Regression: 'Playing: X' must announce as soon as the radio is
+    fetched and queued, not wait for the first track's stream resolve to
+    finish (which can include a one-time cookie decryption)."""
+
+    async def test_notify_fires_before_play_track(self):
+        from ytm_player.services.queue import QueueManager
+
+        host = _fresh_playback_host()
+        host.queue = QueueManager()
+        host.ytmusic = MagicMock()
+        host.ytmusic.get_radio = AsyncMock(
+            return_value=[
+                {
+                    "video_id": "r1",
+                    "title": "Radio 1",
+                    "artist": "",
+                    "artists": [],
+                    "album": "",
+                    "album_id": "",
+                    "duration": 200,
+                    "thumbnail_url": "",
+                    "is_video": False,
+                },
+            ]
+        )
+        host._refresh_queue_page = MagicMock()
+
+        call_order = []
+
+        def _record_notify(message, *args, **kwargs):
+            if message.startswith("Playing:"):
+                call_order.append("notify")
+
+        host.notify = MagicMock(side_effect=_record_notify)
+
+        async def _slow_play_track(track):
+            call_order.append("play_track")
+
+        host.play_track = AsyncMock(side_effect=_slow_play_track)
+
+        seeds = [{"videoId": "s1", "title": "Seed 1", "artists": [{"name": "A"}]}]
+        await host._fetch_and_play_radio(seeds, label="Test Radio")
+
+        assert call_order == ["notify", "play_track"]
+
+
 class TestCrossTrackRace:
     """T11: a later play_track call must supersede an in-flight one —
     the older call may not steal playback back or push stale metadata."""
@@ -473,6 +600,7 @@ class TestCrossTrackRace:
         host.discord = MagicMock()
         host.discord.is_connected = True
         host.discord.update = AsyncMock()
+        _accept_playback(host)
 
         a_resolving = asyncio.Event()
         release_a = asyncio.Event()
@@ -525,6 +653,7 @@ class TestCrossTrackRace:
         host.discord = MagicMock()
         host.discord.is_connected = True
         host.discord.update = discord_update
+        _accept_playback(host)
         host.lastfm = MagicMock()
         host.lastfm.is_connected = True
         host.lastfm.now_playing = AsyncMock()
@@ -625,7 +754,7 @@ class TestDiscordRecoveryFanout:
         host.discord.update = AsyncMock()
         track = {"video_id": "abc", "title": "Song", "artist": "Artist"}
 
-        async def _play(url, t):
+        async def _play(url, t, attempt=None):
             host.player.current_track = t
 
         host.player.play = AsyncMock(side_effect=_play)
@@ -656,7 +785,7 @@ class TestTrackEndFinalize:
         host._play_next = AsyncMock()
         host.player.current_track = {"video_id": "new"}
 
-        await host._on_track_end({"track": {"video_id": "old"}})
+        await host._on_track_end({"track": {"video_id": "old"}, "attempt": 0})
 
         host._log_listen_for.assert_not_awaited()
         host._play_next.assert_not_awaited()
@@ -668,7 +797,7 @@ class TestTrackEndFinalize:
         host._play_next = AsyncMock()
         host.player.current_track = None
 
-        await host._on_track_end({"track": {"video_id": "old"}})
+        await host._on_track_end({"track": {"video_id": "old"}, "attempt": 0})
 
         host._log_listen_for.assert_awaited_once_with({"video_id": "old"})
         host._play_next.assert_awaited_once()
@@ -710,7 +839,7 @@ class TestHistoryArming:
         host.stream_resolver.resolve = AsyncMock(return_value=self._stream_info())
         track = {"video_id": "abc", "title": "X"}
 
-        async def _play(url, t):
+        async def _play(url, t, attempt=None):
             host.player.current_track = t
 
         host.player.play = AsyncMock(side_effect=_play)
@@ -718,3 +847,245 @@ class TestHistoryArming:
 
         host.set_timer.assert_called_once()
         assert host._local_history_claim is not None
+
+
+# ── Stream error recovery (#135) ────────────────────────────────────────────
+
+_TRACK = {"video_id": "abc12345678", "title": "Song"}
+_OTHER = {"video_id": "zyx98765432", "title": "Other"}
+
+
+def _recovery_host():
+    host = _fresh_playback_host()
+    host.stream_resolver.resolve = AsyncMock(
+        side_effect=lambda vid: SimpleNamespace(url=f"http://stream/{vid}", duration=1)
+    )
+    return host
+
+
+def _stream_error(attempt, track, error=-1):
+    """What Player dispatches when mpv's end-file reports an error for *attempt*."""
+    return {"reason": 4, "error": error, "track": track, "attempt": attempt}
+
+
+def _attempts(host):
+    return [c.kwargs["attempt"] for c in host.player.play.await_args_list]
+
+
+class TestPlayerErrorRecovery:
+    async def test_first_failure_resets_resolver_and_replays_with_a_fresh_url(self):
+        host = _recovery_host()
+        host.stream_resolver.resolve = AsyncMock(
+            side_effect=[SimpleNamespace(url="http://stale"), SimpleNamespace(url="http://fresh")]
+        )
+        await host.play_track(_TRACK)
+        assert _attempts(host) == [1]
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+
+        host.stream_resolver.clear_cache.assert_called_once()
+        assert [c.args[0] for c in host.player.play.await_args_list] == [
+            "http://stale",
+            "http://fresh",
+        ]
+        assert host.player.play.await_args.args[1] is _TRACK
+        assert _attempts(host) == [1, 2]
+        assert host._recovery_generation == 2
+        host.notify.assert_not_called()
+        assert host._consecutive_failures == 0
+
+    async def test_failed_recovery_applies_the_failure_policy_once(self):
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        await host.play_track(_TRACK)
+        await host._on_player_error(_stream_error(1, _TRACK))
+        host.stream_resolver.clear_cache.reset_mock()
+
+        await host._on_player_error(_stream_error(2, _TRACK))
+
+        host._handle_play_failure.assert_called_once()
+        assert host._handle_play_failure.call_args.kwargs["failure_kind"] == "stream"
+        host.notify.assert_called_once()
+        assert host.notify.call_args.kwargs["severity"] == "error"
+        host.stream_resolver.clear_cache.assert_not_called()
+        assert _attempts(host) == [1, 2]  # the retry gets no retry of its own
+        assert host._recovery_generation is None
+
+    async def test_duplicate_errors_are_ignored(self):
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        await host.play_track(_TRACK)
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+        await host._on_player_error(_stream_error(1, _TRACK))
+        assert _attempts(host) == [1, 2]
+        host.stream_resolver.clear_cache.assert_called_once()
+
+        await host._on_player_error(_stream_error(2, _TRACK))
+        await host._on_player_error(_stream_error(2, _TRACK))
+        host._handle_play_failure.assert_called_once()
+        assert _attempts(host) == [1, 2]
+
+    async def test_late_error_after_a_newer_play_is_ignored(self):
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        await host.play_track(_TRACK)
+        await host.play_track(_OTHER)
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+
+        host.stream_resolver.clear_cache.assert_not_called()
+        host._handle_play_failure.assert_not_called()
+        host.notify.assert_not_called()
+        assert _attempts(host) == [1, 2]
+
+    async def test_late_error_after_stop_is_ignored(self):
+        host = _recovery_host()
+        host.player.stop = AsyncMock()
+        await host.play_track(_TRACK)
+
+        await MPRISMixin._mpris_stop(host)
+        await host._on_player_error(_stream_error(1, _TRACK))
+
+        host.player.stop.assert_awaited_once()
+        host.stream_resolver.clear_cache.assert_not_called()
+        assert _attempts(host) == [1]
+
+    async def test_same_song_replay_ignores_the_old_error_and_gets_its_own_retry(self):
+        host = _recovery_host()
+        await host.play_track(_TRACK)
+        host._last_play_video_id = ""  # the user replays after the debounce window
+        await host.play_track(_TRACK)
+        assert _attempts(host) == [1, 2]
+
+        await host._on_player_error(_stream_error(1, _TRACK))
+        host.stream_resolver.clear_cache.assert_not_called()
+        assert _attempts(host) == [1, 2]
+
+        await host._on_player_error(_stream_error(2, _TRACK))
+        host.stream_resolver.clear_cache.assert_called_once()
+        assert _attempts(host) == [1, 2, 3]
+        assert host._recovery_generation == 3
+
+    async def test_synchronous_load_failure_is_handled_once(self):
+        """player.play() swallows a load failure and reports it as an ERROR
+        event; play_track must not apply the failure policy on top."""
+        host = _recovery_host()
+        host._handle_play_failure = MagicMock()
+        errors: list[dict] = []
+
+        async def _play(url, track, attempt=None):
+            errors.append(
+                {
+                    "reason": "load",
+                    "error": RuntimeError("boom"),
+                    "track": track,
+                    "attempt": attempt,
+                }
+            )
+
+        host.player.play = AsyncMock(side_effect=_play)
+
+        await host.play_track(_TRACK)
+        host._handle_play_failure.assert_not_called()
+        assert host._consecutive_failures == 0
+        assert [e["attempt"] for e in errors] == [1]
+
+        await host._on_player_error(errors[0])
+        host.stream_resolver.clear_cache.assert_called_once()
+        assert [e["attempt"] for e in errors] == [1, 2]
+
+        await host._on_player_error(errors[1])
+        host._handle_play_failure.assert_called_once()
+        assert [e["attempt"] for e in errors] == [1, 2]
+
+    async def test_repeated_unplayable_tracks_reach_the_failure_limit(self):
+        host = _recovery_host()
+        tracks = [
+            {"video_id": f"vid{i:08d}", "title": f"t{i}"} for i in range(_MAX_CONSECUTIVE_FAILURES)
+        ]
+        host.queue.next_track = MagicMock(side_effect=tracks[1:] + [None])
+        await host.play_track(tracks[0])
+
+        for i, track in enumerate(tracks):
+            attempt = host._play_generation
+            await host._on_player_error(_stream_error(attempt, track))
+            # A play that never produced audio must not reset the counter.
+            assert host._consecutive_failures == i
+            await host._on_player_error(_stream_error(attempt + 1, track))
+            if i < len(tracks) - 1:
+                await host.play_track(tracks[i + 1])  # what the policy's call_later runs
+
+        exhausted = [c for c in host.notify.call_args_list if "Multiple tracks failed" in c.args[0]]
+        assert len(exhausted) == 1
+        assert exhausted[0].kwargs["severity"] == "error"
+        assert host._consecutive_failures == 0
+        # One reset per track's first failure, plus the escalation's.
+        assert host.stream_resolver.clear_cache.call_count == len(tracks) + 1
+
+    async def _fail_twice_and_schedule_advance(self, host):
+        """Initial play and its recovery both fail; the policy defers the queue advance."""
+        host.queue.next_track = MagicMock(return_value=_OTHER)
+        await host.play_track(_TRACK)
+        await host._on_player_error(_stream_error(1, _TRACK))
+        await host._on_player_error(_stream_error(2, _TRACK))
+        host.call_later.assert_called_once()
+        return host.call_later.call_args.args[0]
+
+    async def _run_deferred(self, host, deferred):
+        """What Textual does later: run the callback, then the worker it starts."""
+        deferred()
+        await host.run_worker.call_args.args[0]
+
+    async def test_deferred_advance_plays_the_next_track_when_not_superseded(self):
+        host = _recovery_host()
+        deferred = await self._fail_twice_and_schedule_advance(host)
+
+        await self._run_deferred(host, deferred)
+
+        assert [c.args[1] for c in host.player.play.await_args_list] == [_TRACK, _TRACK, _OTHER]
+        assert host._play_generation == 3
+
+    async def test_deferred_advance_after_stop_does_not_resume_playback(self):
+        host = _recovery_host()
+        host.player.stop = AsyncMock()
+        deferred = await self._fail_twice_and_schedule_advance(host)
+
+        await MPRISMixin._mpris_stop(host)
+        await self._run_deferred(host, deferred)
+
+        assert _attempts(host) == [1, 2]
+        assert host._play_generation == 3
+
+    async def test_deferred_advance_after_a_newer_play_is_dropped(self):
+        host = _recovery_host()
+        deferred = await self._fail_twice_and_schedule_advance(host)
+        chosen = {"video_id": "usr00000001", "title": "Chosen"}
+        await host.play_track(chosen)
+
+        await self._run_deferred(host, deferred)
+
+        assert [c.args[1] for c in host.player.play.await_args_list] == [_TRACK, _TRACK, chosen]
+        assert host._play_generation == 3
+
+    def test_audio_progress_resets_failure_state(self):
+        host = _recovery_host()
+        host._consecutive_failures = 3
+        host._recovery_generation = 4
+        host.player.is_playing = True
+        host.player.position = 12.5
+        host.player.current_attempt = host._play_generation
+
+        host._poll_position()
+
+        assert (host._consecutive_failures, host._recovery_generation) == (0, None)
+
+    def test_loaded_but_not_advancing_does_not_reset_failure_state(self):
+        host = _recovery_host()
+        host._consecutive_failures = 3
+        host.player.is_playing = True
+        host.player.position = 0.0
+
+        host._poll_position()
+
+        assert host._consecutive_failures == 3

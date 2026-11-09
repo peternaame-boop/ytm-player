@@ -1,8 +1,9 @@
-"""Browse page — recommendations, charts, and new releases."""
+"""Browse page — recommendations, charts, new releases, playlists, subscriptions."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from textual.app import ComposeResult
@@ -29,12 +30,35 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# A coroutine returning the home feed at least this many shelves deep, or None
+# when the fetch failed. BrowsePage hands its shared cache to the two tabs that
+# read the home feed (see BrowsePage.get_home_shelves).
+HomeFeed = Callable[[int], Awaitable["list[dict[str, Any]] | None"]]
+
+# How deep the Playlists tab reads the home feed: the documented ceiling of
+# ``home_shelves``. YouTube's own mixes sit well past the first few shelves
+# (around shelf 17-19 of 24 on a real account), so the tab reads the feed to
+# its end instead of the handful of shelves For You is configured to show.
+_PLAYLISTS_SHELF_DEPTH = 25
+
+# Failure copy for the lazily loaded tabs. The page forgets a tab whose loader
+# ended on a message, so selecting it again runs the loader again.
+_RETRY = "select the tab again to retry"
+_FORYOU_LOAD_FAILED = f"Failed to load recommendations — {_RETRY}."
+_RELEASES_LOAD_FAILED = f"Failed to load new releases — {_RETRY}."
+_PLAYLISTS_LOAD_FAILED = f"Failed to load playlists — {_RETRY}."
+_SUBSCRIPTIONS_LOAD_FAILED = f"Failed to load subscriptions — {_RETRY}."
+
 
 # ---------------------------------------------------------------------------
 # Tab bar
 # ---------------------------------------------------------------------------
 
-_TABS = ("For You", "Charts", "New Releases")
+# For You keeps the first slot, and the two tabs added after it go last, so the
+# indices that existed before them still hold (saved nav state, the country
+# picker's Charts check). Short labels: the five must fit the page width left
+# next to the 30-column playlist sidebar in an 80-column terminal.
+_TABS = ("For You", "Charts", "Releases", "Playlists", "Subs")
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +155,92 @@ def _split_events_and_charts(
     return events, charts
 
 
+# ---------------------------------------------------------------------------
+# Playlist rows in the home feed
+# ---------------------------------------------------------------------------
+
+
+def _is_playlist_row(item: object) -> bool:
+    """True for a home-feed row that is a playlist: a mix, a curated or a user
+    playlist, a recap, Liked Music.
+
+    The rule follows ytmusicapi's home parser rather than ID prefixes: it
+    emits ``playlistId`` without ``videoId`` only for playlist pages and
+    watch playlists (mixes). Songs always carry ``videoId`` — some carry a
+    ``playlistId`` too — albums carry ``audioPlaylistId`` and never
+    ``playlistId``, artists and podcasts carry neither. Malformed rows
+    (``None``, non-dicts, missing or non-string ids) are rejected.
+    """
+    if not isinstance(item, dict):
+        return False
+    playlist_id = item.get("playlistId")
+    return isinstance(playlist_id, str) and bool(playlist_id) and not item.get("videoId")
+
+
+def _playlist_rows(shelves: list[Any]) -> list[dict[str, Any]]:
+    """The playlist rows across *shelves*, in feed order, one per playlist id."""
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for shelf in shelves:
+        if not isinstance(shelf, dict):
+            continue
+        contents = shelf.get("contents")
+        if not isinstance(contents, list):
+            continue
+        for item in contents:
+            if not _is_playlist_row(item):
+                continue
+            playlist_id = item["playlistId"]
+            if playlist_id in seen:
+                continue
+            seen.add(playlist_id)
+            rows.append(item)
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Shared item routing
+# ---------------------------------------------------------------------------
+
+
+async def navigate_browse_item(host: "YTMHostBase", item: dict[str, Any]) -> None:
+    """Route a get_home()-shaped item to the right context page, or play it
+    directly if it's a track.
+
+    Shared by every Browse tab that surfaces raw get_home() shelf content
+    (For You and Playlists), so the routing rules live in exactly one place.
+    """
+    result_type = (item.get("resultType") or item.get("type") or "").lower()
+    video_id = get_video_id(item)
+    browse_id = item.get("browseId")
+    playlist_id = item.get("playlistId") or item.get("audioPlaylistId")
+
+    if result_type in ("song", "video", "flat_song") or video_id:
+        normalized_tracks = normalize_tracks([item])
+        track_to_play = normalized_tracks[0] if normalized_tracks else item
+        # Replace the queue instead of playing around it — otherwise the
+        # queue page goes stale and next-track resumes the old queue.
+        await host._replace_queue_and_play([track_to_play])
+    elif result_type in ("album", "single"):
+        if browse_id:
+            await host.navigate_to("context", context_type="album", context_id=browse_id)
+    elif result_type == "artist":
+        if browse_id:
+            await host.navigate_to("context", context_type="artist", context_id=browse_id)
+    elif result_type == "playlist":
+        if playlist_id or browse_id:
+            await host.navigate_to(
+                "context", context_type="playlist", context_id=playlist_id or browse_id
+            )
+    elif playlist_id:
+        # Shelves like "Mixed for you", "Listen again" radio entries, mixes
+        # etc. have a playlistId but no resultType.
+        await host.navigate_to("context", context_type="playlist", context_id=playlist_id)
+    elif browse_id:
+        # Fallback: treat any remaining browseId as an album/playlist context.
+        await host.navigate_to("context", context_type="album", context_id=browse_id)
+
+
 class BrowseTab(Static):
     """A focusable tab label in the Browse tab bar.
 
@@ -173,9 +283,10 @@ class BrowseTabBar(Widget):
     }
 
     BrowseTabBar .tab-item {
+        /* No padding or minimum width: the label carries its own surrounding
+           spaces, and five of them have to fit the 48 content columns the
+           page gets beside the sidebar in an 80-column terminal. */
         width: auto;
-        min-width: 12;
-        padding: 0 2;
         height: 3;
         content-align: center middle;
         color: $text-muted;
@@ -240,9 +351,12 @@ class BrowseTabBar(Widget):
                 return
 
     def switch_to(self, index: int) -> None:
-        """Activate the tab at *index*."""
-        if index == self.active_tab:
-            return
+        """Activate the tab at *index*.
+
+        Selecting the active tab again posts ``TabChanged`` as well: the page
+        answers it by running the tab's loader again after a failure (and by
+        doing nothing when the tab is loaded).
+        """
         # Update CSS classes.
         for i in range(len(_TABS)):
             tab = self.query_one(f"#tab-{i}", BrowseTab)
@@ -297,9 +411,13 @@ class ForYouSection(Widget):
             super().__init__()
             self.item = item
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, *, home_feed: HomeFeed | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._home_feed = home_feed
         self._shelves: list[dict[str, Any]] = []
+        # True while the section shows a message instead of content; the page
+        # then lets selecting the tab again run the loader again.
+        self.load_failed = False
 
     def compose(self) -> ComposeResult:
         yield Static("Loading recommendations...", id="foryou-loading", classes="loading")
@@ -314,25 +432,34 @@ class ForYouSection(Widget):
         self._shelves.clear()
 
     async def load_data(self) -> None:
-        """Fetch and display personalised home shelves."""
+        """Fetch and display personalised home shelves.
+
+        Reads the page's shared home feed when it has one (so a deeper feed
+        the Playlists tab already fetched is reused) and shows the first
+        ``home_shelves`` shelves of whatever it gets.
+        """
         self.is_loading = True
+        self.load_failed = False
         try:
-            ytmusic = cast("YTMHostBase", self.app).ytmusic
-            assert ytmusic is not None
             limit = get_settings().ui.home_shelves
-            shelves = await ytmusic.get_home(limit=limit)
+            if self._home_feed is not None:
+                shelves = await self._home_feed(limit)
+            else:
+                ytmusic = cast("YTMHostBase", self.app).ytmusic
+                assert ytmusic is not None
+                shelves = await ytmusic.get_home(limit=limit)
         except Exception:
             logger.exception("Failed to load home recommendations")
-            self._show_error("Failed to load recommendations.")
+            self._show_error(_FORYOU_LOAD_FAILED)
             self.is_loading = False
             return
         if shelves is None:
             # The service returns None on any fetch failure (network, auth,
             # server error) — distinct from a genuinely empty home feed.
-            self._show_error("Failed to load recommendations.")
+            self._show_error(_FORYOU_LOAD_FAILED)
             self.is_loading = False
             return
-        self._shelves = shelves
+        self._shelves = shelves[:limit]
 
         try:
             await self._populate_shelves()
@@ -344,7 +471,7 @@ class ForYouSection(Widget):
                 await container.remove_children()
             except Exception:
                 pass
-            self._show_error("Failed to load recommendations.")
+            self._show_error(_FORYOU_LOAD_FAILED)
         finally:
             self.is_loading = False
 
@@ -395,6 +522,7 @@ class ForYouSection(Widget):
                 logger.debug("Failed to render shelf %r", title, exc_info=True)
 
     def _show_error(self, message: str) -> None:
+        self.load_failed = True
         loading = self.query_one("#foryou-loading", Static)
         loading.update(message)
         loading.display = True
@@ -515,6 +643,25 @@ class ChartsSection(Widget):
 
     is_loading: reactive[bool] = reactive(True)
 
+    class ShelfRequested(Message):
+        """A chart pill was clicked.
+
+        The page runs the shelf fetch as its own worker (``load_shelf``) so
+        that its outcome reaches the page's worker handler —
+        ``Worker.StateChanged`` does not bubble.
+        """
+
+        def __init__(self, section: ChartsSection, index: int, revision: int) -> None:
+            super().__init__()
+            self.section = section
+            self.index = index
+            # The chart data the pill belonged to (``ChartsSection.revision``).
+            self.revision = revision
+
+        @property
+        def control(self) -> ChartsSection:
+            return self.section
+
     # Below this terminal width (cols), the event pill row is hidden to
     # reclaim vertical space. Chart pills always render — they're the
     # primary content.
@@ -523,7 +670,15 @@ class ChartsSection(Widget):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._chart_data: dict[str, Any] = {}
+        self.load_failed = False
         self._country: str = get_settings().ui.region
+        # ``_revision`` counts the loads started on this section;
+        # ``_data_revision`` is the load whose chart data the pills show. A
+        # pill click carries the latter, and the page runs it only while the
+        # two agree: a click on pills a later load is replacing is refused
+        # (its index means nothing on the new pills).
+        self._revision = 0
+        self._data_revision = 0
         # Combined shelves list: events first, then country charts (sorted
         # by priority). Each entry is the dict ytmusicapi returns —
         # keys include "title", "playlistId", "thumbnails".
@@ -579,6 +734,21 @@ class ChartsSection(Widget):
         except Exception:
             logger.debug("Failed to hide charts content on mount", exc_info=True)
 
+    @property
+    def revision(self) -> int:
+        """The latest load started on this section; see ``begin_load``."""
+        return self._revision
+
+    def begin_load(self) -> None:
+        """Mark the chart data as being replaced, before the load runs.
+
+        The page calls this when it schedules ``load_data``. From here a
+        click on the current pills is refused, whether it is handled before
+        or after the load's coroutine starts.
+        """
+        self._revision += 1
+        self.is_loading = True
+
     async def load_data(self, country: str | None = None) -> None:
         """Fetch chart data for *country* and display the first daily shelf.
 
@@ -591,9 +761,9 @@ class ChartsSection(Widget):
         error so the user knows whether to retry or pick a different region.
         """
         self.is_loading = True
+        self.load_failed = False
         if country is None:
             country = get_settings().ui.region
-        self._country = country
         try:
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
@@ -608,6 +778,10 @@ class ChartsSection(Widget):
             self.is_loading = False
             return
         self._chart_data = chart_data
+        # Only now: the label ``_populate_charts`` writes must never name a
+        # country the table's data is not for.
+        self._country = country
+        self._data_revision = self._revision
 
         try:
             raw: list[dict[str, Any]] = []
@@ -729,10 +903,27 @@ class ChartsSection(Widget):
             logger.exception("Failed to load playlist for chart shelf %r", playlist_id)
             self._show_error("Failed to load chart playlist — try again later.")
             return
+        if not tracks:
+            # The service turns a failed playlist request into an empty list,
+            # so an empty shelf may be a failure: keep the tab retryable.
+            self._show_error("No chart tracks returned — select the tab again to retry.")
+            return
         self._populate_charts(tracks)
 
+    async def load_shelf(self, index: int, revision: int) -> None:
+        """Switch the table to the shelf at *index*, requested on chart data *revision*.
+
+        Run by the page as its own worker (see ``ShelfRequested``). A request
+        made on chart data a later load has replaced is dropped.
+        """
+        if revision != self._revision or not (0 <= index < len(self._dailies)):
+            return
+        self._active_daily = index
+        self._refresh_pill_active_class()
+        await self._load_active_daily()
+
     def on_click(self, event: Click) -> None:
-        """Pill click → switch active daily shelf."""
+        """Pill click → ask the page to switch to that shelf."""
         widget = getattr(event, "widget", None)
         wid = getattr(widget, "id", None) if widget is not None else None
         if not isinstance(wid, str) or not wid.startswith("charts-pill-"):
@@ -743,14 +934,11 @@ class ChartsSection(Widget):
             return
         if new_index == self._active_daily or not (0 <= new_index < len(self._dailies)):
             return
-        self._active_daily = new_index
-        self._refresh_pill_active_class()
-        self.run_worker(
-            self._load_active_daily(),
-            name="charts-switch-shelf",
-            exclusive=True,
-            exit_on_error=False,
-        )
+        if self.is_loading:
+            # The load in flight is about to replace these pills, or is still
+            # fetching their first shelf.
+            return
+        self.post_message(self.ShelfRequested(self, new_index, self._data_revision))
 
     def _populate_charts(self, tracks: list[dict[str, Any]]) -> None:
         loading = self.query_one("#charts-loading", Static)
@@ -767,6 +955,7 @@ class ChartsSection(Widget):
         table.load_tracks(normalize_tracks(tracks))
 
     def _show_error(self, message: str) -> None:
+        self.load_failed = True
         loading = self.query_one("#charts-loading", Static)
         loading.update(message)
         loading.display = True
@@ -815,6 +1004,7 @@ class NewReleasesSection(Widget):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._albums: list[dict[str, Any]] = []
+        self.load_failed = False
 
     def on_unmount(self) -> None:
         """Release album data to prevent memory retention."""
@@ -835,14 +1025,20 @@ class NewReleasesSection(Widget):
     async def load_data(self) -> None:
         """Fetch and display new releases."""
         self.is_loading = True
+        self.load_failed = False
         try:
             ytmusic = cast("YTMHostBase", self.app).ytmusic
             assert ytmusic is not None
-            self._albums = await ytmusic.get_new_releases()
+            albums = await ytmusic.get_new_releases()
+            if albums is None:
+                # None = the fetch failed; an empty explore page is [].
+                self._show_error(_RELEASES_LOAD_FAILED)
+                return
+            self._albums = albums
             self._populate_releases()
         except Exception:
             logger.exception("Failed to load new releases")
-            self._show_error("Failed to load new releases.")
+            self._show_error(_RELEASES_LOAD_FAILED)
         finally:
             self.is_loading = False
 
@@ -855,6 +1051,11 @@ class NewReleasesSection(Widget):
 
         list_view = self.query_one("#releases-list", ListView)
         list_view.clear()
+
+        if not self._albums:
+            content.display = False
+            self._show_error("No new releases right now — check back later.")
+            return
 
         for album in self._albums:
             title = album.get("title", "Unknown Album")
@@ -879,6 +1080,7 @@ class NewReleasesSection(Widget):
             list_view.append(ListItem(Label(display)))
 
     def _show_error(self, message: str) -> None:
+        self.load_failed = True
         loading = self.query_one("#releases-loading", Static)
         loading.update(message)
         loading.display = True
@@ -897,15 +1099,276 @@ class NewReleasesSection(Widget):
             logger.exception("NewReleasesSection.on_list_view_selected failed")
 
 
+class PlaylistsSection(Widget):
+    """Playlists from the home feed — YouTube Music's own mixes (Discover Mix,
+    New Release Mix, My Supermix, ...), curated and community playlists,
+    recaps, Liked Music: every row the feed presents as a playlist, read up
+    to ``_PLAYLISTS_SHELF_DEPTH`` shelves deep, one row per playlist.
+
+    Albums and songs stay out (see ``_is_playlist_row``); they have their
+    own pages. The feed comes from the page's shared, lazily expanded cache
+    (``BrowsePage.get_home_shelves``), so this tab and For You never fetch
+    the same depth twice in one visit.
+    """
+
+    DEFAULT_CSS = """
+    PlaylistsSection {
+        height: 1fr;
+        width: 1fr;
+        padding: 0 1;
+    }
+
+    PlaylistsSection .loading {
+        height: 1fr;
+        width: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+    }
+
+    PlaylistsSection .section-title {
+        text-style: bold;
+        color: $text;
+        height: 1;
+        padding: 0 0 1 0;
+    }
+
+    PlaylistsSection ListView {
+        height: 1fr;
+    }
+    """
+
+    is_loading: reactive[bool] = reactive(True)
+
+    class PlaylistSelected(Message):
+        def __init__(self, playlist: dict[str, Any]) -> None:
+            super().__init__()
+            self.playlist = playlist
+
+    def __init__(self, *, home_feed: HomeFeed | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._home_feed = home_feed
+        self._playlists: list[dict[str, Any]] = []
+        self.load_failed = False
+
+    def on_unmount(self) -> None:
+        self._playlists.clear()
+
+    def compose(self) -> ComposeResult:
+        yield Static("Loading playlists...", id="playlists-loading", classes="loading")
+        with Vertical(id="playlists-content"):
+            yield Label("Playlists", classes="section-title")
+            yield ListView(id="playlists-list")
+
+    def on_mount(self) -> None:
+        try:
+            self.query_one("#playlists-content").display = False
+        except Exception:
+            logger.debug("Failed to hide playlists content on mount", exc_info=True)
+
+    async def load_data(self) -> None:
+        """Read the home feed and keep its playlist rows."""
+        self.is_loading = True
+        self.load_failed = False
+        try:
+            shelves = await self._fetch_shelves()
+            if shelves is None:
+                # None = the fetch failed (network, auth, server error); an
+                # empty feed is an empty list.
+                self._show_error(_PLAYLISTS_LOAD_FAILED)
+                return
+            self._playlists = _playlist_rows(shelves)
+            self._populate_playlists()
+        except Exception:
+            logger.exception("Failed to load playlists")
+            self._show_error(_PLAYLISTS_LOAD_FAILED)
+        finally:
+            self.is_loading = False
+
+    async def _fetch_shelves(self) -> list[dict[str, Any]] | None:
+        if self._home_feed is not None:
+            return await self._home_feed(_PLAYLISTS_SHELF_DEPTH)
+        ytmusic = cast("YTMHostBase", self.app).ytmusic
+        assert ytmusic is not None
+        return await ytmusic.get_home(limit=_PLAYLISTS_SHELF_DEPTH)
+
+    def _populate_playlists(self) -> None:
+        loading = self.query_one("#playlists-loading", Static)
+        loading.display = False
+
+        content = self.query_one("#playlists-content")
+        content.display = True
+
+        list_view = self.query_one("#playlists-list", ListView)
+        list_view.clear()
+
+        if not self._playlists:
+            content.display = False
+            self._show_error("No playlists in your home feed right now — check back later.")
+            return
+
+        for playlist in self._playlists:
+            title = playlist.get("title") or "Untitled playlist"
+            parts = [str(title)]
+            description = playlist.get("description", "")
+            count = playlist.get("count", "")
+            if description:
+                parts.append(f"({description})")
+            elif count:
+                parts.append(f"({count} songs)")
+            list_view.append(ListItem(Label(truncate(" ".join(parts), 80))))
+
+    def _show_error(self, message: str) -> None:
+        self.load_failed = True
+        loading = self.query_one("#playlists-loading", Static)
+        loading.update(message)
+        loading.display = True
+        try:
+            self.query_one("#playlists-content").display = False
+        except Exception:
+            logger.debug("Failed to hide playlists content on error", exc_info=True)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        try:
+            idx = event.list_view.index
+            if idx is not None and 0 <= idx < len(self._playlists):
+                self.post_message(self.PlaylistSelected(self._playlists[idx]))
+        except Exception:
+            logger.exception("PlaylistsSection.on_list_view_selected failed")
+
+
+class SubscriptionsSection(Widget):
+    """Artists the user is subscribed to.
+
+    The service's ``get_library_artists`` wraps ytmusicapi's
+    ``get_library_subscriptions`` (not its library-artists endpoint); asked
+    with ``limit=None`` it follows every continuation, so the whole list
+    shows rather than the first 50.
+    """
+
+    DEFAULT_CSS = """
+    SubscriptionsSection {
+        height: 1fr;
+        width: 1fr;
+        padding: 0 1;
+    }
+
+    SubscriptionsSection .loading {
+        height: 1fr;
+        width: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+    }
+
+    SubscriptionsSection .section-title {
+        text-style: bold;
+        color: $text;
+        height: 1;
+        padding: 0 0 1 0;
+    }
+
+    SubscriptionsSection ListView {
+        height: 1fr;
+    }
+    """
+
+    is_loading: reactive[bool] = reactive(True)
+
+    class ArtistSelected(Message):
+        def __init__(self, artist: dict[str, Any]) -> None:
+            super().__init__()
+            self.artist = artist
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._artists: list[dict[str, Any]] = []
+        self.load_failed = False
+
+    def on_unmount(self) -> None:
+        self._artists.clear()
+
+    def compose(self) -> ComposeResult:
+        yield Static("Loading subscriptions...", id="subs-loading", classes="loading")
+        with Vertical(id="subs-content"):
+            yield Label("Subscriptions", classes="section-title")
+            yield ListView(id="subs-list")
+
+    def on_mount(self) -> None:
+        try:
+            self.query_one("#subs-content").display = False
+        except Exception:
+            logger.debug("Failed to hide subscriptions content on mount", exc_info=True)
+
+    async def load_data(self) -> None:
+        """Fetch and display subscribed artists."""
+        self.is_loading = True
+        self.load_failed = False
+        try:
+            ytmusic = cast("YTMHostBase", self.app).ytmusic
+            assert ytmusic is not None
+            artists = await ytmusic.get_library_artists(limit=None)
+            if artists is None:
+                # None = the fetch failed; no subscriptions is [].
+                self._show_error(_SUBSCRIPTIONS_LOAD_FAILED)
+                return
+            self._artists = artists
+            self._populate_subscriptions()
+        except Exception:
+            logger.exception("Failed to load subscriptions")
+            self._show_error(_SUBSCRIPTIONS_LOAD_FAILED)
+        finally:
+            self.is_loading = False
+
+    def _populate_subscriptions(self) -> None:
+        loading = self.query_one("#subs-loading", Static)
+        loading.display = False
+
+        content = self.query_one("#subs-content")
+        content.display = True
+
+        list_view = self.query_one("#subs-list", ListView)
+        list_view.clear()
+
+        if not self._artists:
+            content.display = False
+            self._show_error("No subscriptions yet — follow an artist to see them here.")
+            return
+
+        for artist in self._artists:
+            name = artist.get("artist", "Unknown artist")
+            subscribers = artist.get("subscribers", "")
+            display = f"{name}  ({subscribers} subscribers)" if subscribers else name
+            list_view.append(ListItem(Label(truncate(display, 80))))
+
+    def _show_error(self, message: str) -> None:
+        self.load_failed = True
+        loading = self.query_one("#subs-loading", Static)
+        loading.update(message)
+        loading.display = True
+        try:
+            self.query_one("#subs-content").display = False
+        except Exception:
+            logger.debug("Failed to hide subscriptions content on error", exc_info=True)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        try:
+            idx = event.list_view.index
+            if idx is not None and 0 <= idx < len(self._artists):
+                self.post_message(self.ArtistSelected(self._artists[idx]))
+        except Exception:
+            logger.exception("SubscriptionsSection.on_list_view_selected failed")
+
+
 # ---------------------------------------------------------------------------
 # Main browse page
 # ---------------------------------------------------------------------------
 
 
 class BrowsePage(Widget):
-    """Tabbed browse page: For You, Charts, New Releases.
+    """Tabbed browse page: For You, Charts, Releases, Playlists, Subs.
 
-    Each tab lazily loads its data on first activation.
+    Each tab lazily loads its data on first activation and can be loaded
+    again by selecting it after a failure. For You and Playlists read one
+    shared home feed (``get_home_shelves``).
     """
 
     DEFAULT_CSS = """
@@ -946,6 +1409,18 @@ class BrowsePage(Widget):
         super().__init__(name=name, id=id, classes=classes)
         self._tabs_loaded: set[int] = set()
         self._restore_tab = active_tab
+        # The latest loader started for each tab, and the latest pill fetch:
+        # only their outcomes count in on_worker_state_changed. A loader this
+        # page has since replaced (a region change during the Charts load)
+        # says nothing about the newer one.
+        self._tab_workers: dict[int, Worker] = {}
+        self._shelf_worker: Worker | None = None
+        # One home feed per page visit, shared by For You and Playlists and
+        # expanded lazily: For You alone fetches ``home_shelves`` shelves;
+        # opening Playlists fetches up to _PLAYLISTS_SHELF_DEPTH unless the
+        # cache is already that deep. See get_home_shelves().
+        self._home_shelves: list[dict[str, Any]] | None = None
+        self._home_depth = 0
         # Set by _open_tab when Enter opens a not-yet-loaded tab; consumed by
         # on_worker_state_changed to move focus into the section once its
         # async load has rendered.
@@ -955,9 +1430,15 @@ class BrowsePage(Widget):
         with Vertical():
             yield BrowseTabBar(id="browse-tabs")
             with Vertical(id="browse-content"):
-                yield ForYouSection(id="section-foryou", classes="active-section")
+                yield ForYouSection(
+                    home_feed=self.get_home_shelves,
+                    id="section-foryou",
+                    classes="active-section",
+                )
                 yield ChartsSection(id="section-charts")
                 yield NewReleasesSection(id="section-releases")
+                yield PlaylistsSection(home_feed=self.get_home_shelves, id="section-playlists")
+                yield SubscriptionsSection(id="section-subscriptions")
 
     def on_mount(self) -> None:
         if self._restore_tab and self._restore_tab > 0:
@@ -981,6 +1462,33 @@ class BrowsePage(Widget):
         return {}
 
     # ------------------------------------------------------------------
+    # Shared home feed
+    # ------------------------------------------------------------------
+
+    async def get_home_shelves(self, depth: int) -> list[dict[str, Any]] | None:
+        """The home feed at least *depth* shelves deep, fetching only when the
+        cache is shallower than that.
+
+        Returns None when the fetch fails; a shallower feed already cached
+        stays for the tab that showed it. A result never replaces a deeper
+        one, so a slow shallow request that finishes after an expansion
+        cannot shrink the cache — the caller gets the deeper feed instead.
+        """
+        cached = self._home_shelves
+        if cached is not None and self._home_depth >= depth:
+            return cached
+        ytmusic = cast("YTMHostBase", self.app).ytmusic
+        if ytmusic is None:
+            return None
+        shelves = await ytmusic.get_home(limit=depth)
+        if shelves is None:
+            return None
+        if self._home_shelves is None or depth >= self._home_depth:
+            self._home_shelves = shelves
+            self._home_depth = depth
+        return self._home_shelves
+
+    # ------------------------------------------------------------------
     # Tab switching
     # ------------------------------------------------------------------
 
@@ -990,13 +1498,7 @@ class BrowsePage(Widget):
 
     def _switch_section(self, index: int) -> None:
         """Show the section at *index* and hide all others."""
-        section_ids = [
-            "section-foryou",
-            "section-charts",
-            "section-releases",
-        ]
-
-        for i, sid in enumerate(section_ids):
+        for i, sid in enumerate(self._SECTION_IDS):
             try:
                 section = self.query_one(f"#{sid}")
                 if i == index:
@@ -1013,40 +1515,100 @@ class BrowsePage(Widget):
         """Lazy-load data for a tab if not already loaded."""
         if index in self._tabs_loaded:
             return
+        if index == self._CHARTS_TAB:
+            self._load_charts()
+            return
         self._tabs_loaded.add(index)
+        section = self._section(index)
+        if section is None:
+            return
+        self._tab_workers[index] = self.run_worker(
+            section.load_data(),
+            name=self._LOAD_WORKERS[index],
+            group=self._LOAD_GROUP,
+            exclusive=True,
+            exit_on_error=False,
+        )
 
-        match index:
-            case 0:
-                section = self.query_one("#section-foryou", ForYouSection)
-                self.run_worker(
-                    section.load_data(),
-                    name="load-foryou",
-                    exclusive=True,
-                    exit_on_error=False,
-                )
-            case 1:
-                section = self.query_one("#section-charts", ChartsSection)
-                self.run_worker(
-                    section.load_data(),
-                    name="load-charts",
-                    exclusive=True,
-                    exit_on_error=False,
-                )
-            case 2:
-                section = self.query_one("#section-releases", NewReleasesSection)
-                self.run_worker(
-                    section.load_data(),
-                    name="load-releases",
-                    exclusive=True,
-                    exit_on_error=False,
-                )
+    def _load_charts(self, country: str | None = None) -> None:
+        """Run the Charts loader: the tab's first load, a retry, or a region change.
+
+        One worker name and group for all three, so a region change that a
+        tab switch cancels is forgotten like any other cancelled load and
+        fetched again when Charts is next selected. The pill fetch in flight
+        is cancelled first and the section moved past its current chart
+        data, so a click on the old pills cannot land on the new ones.
+        """
+        section = self._section(self._CHARTS_TAB)
+        if not isinstance(section, ChartsSection):
+            return
+        self._tabs_loaded.add(self._CHARTS_TAB)
+        self.workers.cancel_group(self, self._SHELF_GROUP)
+        self._shelf_worker = None
+        section.begin_load()
+        self._tab_workers[self._CHARTS_TAB] = self.run_worker(
+            section.load_data(country=country),
+            name=self._LOAD_WORKERS[self._CHARTS_TAB],
+            group=self._LOAD_GROUP,
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    def on_charts_section_shelf_requested(self, message: ChartsSection.ShelfRequested) -> None:
+        """Fetch a clicked pill's shelf as this page's worker.
+
+        A request the load in flight has overtaken — queued before a region
+        change, or clicked before the reload's coroutine started — is
+        refused: its index belongs to the previous chart data. So is one
+        made during the load that rendered its pills.
+        """
+        message.stop()
+        section = message.section
+        if message.revision != section.revision or section.is_loading:
+            return
+        self._shelf_worker = self.run_worker(
+            section.load_shelf(message.index, message.revision),
+            name=self._SHELF_WORKER,
+            group=self._SHELF_GROUP,
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    def _section(self, index: int) -> Any:
+        """The content section widget for tab *index*, or None."""
+        if not (0 <= index < len(self._SECTION_IDS)):
+            return None
+        try:
+            return self.query_one(f"#{self._SECTION_IDS[index]}")
+        except Exception:
+            logger.debug("Browse section %d not found", index, exc_info=True)
+            return None
 
     # ------------------------------------------------------------------
     # Section focus traversal (Tab labels → content)
     # ------------------------------------------------------------------
 
-    _SECTION_IDS = ("section-foryou", "section-charts", "section-releases")
-    _LOAD_WORKER_TABS = {"load-foryou": 0, "load-charts": 1, "load-releases": 2}
+    _SECTION_IDS = (
+        "section-foryou",
+        "section-charts",
+        "section-releases",
+        "section-playlists",
+        "section-subscriptions",
+    )
+    _LOAD_WORKERS = (
+        "load-foryou",
+        "load-charts",
+        "load-releases",
+        "load-playlists",
+        "load-subscriptions",
+    )
+    _LOAD_WORKER_TABS = {name: index for index, name in enumerate(_LOAD_WORKERS)}
+    # The tab loaders are mutually exclusive: a tab switch cancels the loader
+    # in flight. The Charts pill fetch is exclusive among pill fetches only.
+    _LOAD_GROUP = "browse-load"
+    _CHARTS_TAB = 1
+    _SHELF_WORKER = "load-charts-shelf"
+    _SHELF_GROUP = "charts-shelf"
 
     def _focus_active_tab_label(self) -> None:
         """Focus the currently-active tab label."""
@@ -1079,6 +1641,10 @@ class BrowsePage(Widget):
         tab_bar = self.query_one("#browse-tabs", BrowseTabBar)
         if tab_bar.active_tab != index:
             tab_bar.switch_to(index)  # → TabChanged → _switch_section → _load_tab
+        else:
+            # Enter on the active tab: run its loader again if it never
+            # finished or ended on a message; a loaded tab is left alone.
+            self._load_tab(index)
         self._pending_focus_tab = index
         self.call_after_refresh(self._try_focus_section_content, index)
 
@@ -1130,13 +1696,64 @@ class BrowsePage(Widget):
         return True
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-        """Once a deferred tab's load finishes, move focus into its content."""
+        """Keep every tab retryable; move focus into a deferred tab once it rendered.
+
+        A loader that raised, was cancelled (the user switched tabs while it
+        ran) or ended on a message instead of content is forgotten in
+        ``_tabs_loaded``, so selecting the tab again runs it again. A loader
+        that raised also gets a visible failure message: ``exit_on_error``
+        is off, so nothing else would replace its "Loading..." placeholder.
+        """
+        name = event.worker.name or ""
+        if name == self._SHELF_WORKER:
+            self._on_shelf_worker_state(event)
+            return
+        index = self._LOAD_WORKER_TABS.get(name)
+        if index is None:
+            return
+        current = self._tab_workers.get(index)
+        if current is not None and event.worker is not current:
+            return
+        if event.state in (WorkerState.ERROR, WorkerState.CANCELLED):
+            self._tabs_loaded.discard(index)
+            if event.state == WorkerState.ERROR:
+                self._show_load_failure(index)
+            return
         if event.state != WorkerState.SUCCESS:
             return
-        index = self._LOAD_WORKER_TABS.get(event.worker.name or "")
-        if index is not None and self._pending_focus_tab == index:
+        section = self._section(index)
+        if section is not None and getattr(section, "load_failed", False):
+            self._tabs_loaded.discard(index)
+        if self._pending_focus_tab == index:
             self._pending_focus_tab = None
             self._focus_section_content(index)
+
+    def _on_shelf_worker_state(self, event: Worker.StateChanged) -> None:
+        """Keep Charts retryable after a pill fetch fails.
+
+        Only the latest pill fetch counts: one cancelled by a newer pill or
+        by a region change is no failure, and a stale one's outcome is
+        ignored.
+        """
+        if event.worker is not self._shelf_worker:
+            return
+        if event.state == WorkerState.ERROR:
+            self._tabs_loaded.discard(self._CHARTS_TAB)
+            self._show_load_failure(self._CHARTS_TAB)
+        elif event.state == WorkerState.SUCCESS:
+            section = self._section(self._CHARTS_TAB)
+            if section is not None and getattr(section, "load_failed", False):
+                self._tabs_loaded.discard(self._CHARTS_TAB)
+
+    def _show_load_failure(self, index: int) -> None:
+        section = self._section(index)
+        show_error = getattr(section, "_show_error", None)
+        if show_error is None:
+            return
+        try:
+            show_error(f"Failed to load {_TABS[index]} — {_RETRY}.")
+        except Exception:
+            logger.debug("Failed to show browse load failure for tab %d", index, exc_info=True)
 
     # ------------------------------------------------------------------
     # Item selection handlers
@@ -1144,8 +1761,13 @@ class BrowsePage(Widget):
 
     async def on_for_you_section_item_selected(self, event: ForYouSection.ItemSelected) -> None:
         """Handle item selection from the For You shelves."""
-        item = event.item
-        await self._navigate_item(item)
+        await navigate_browse_item(cast("YTMHostBase", self.app), event.item)
+
+    async def on_playlists_section_playlist_selected(
+        self, event: PlaylistsSection.PlaylistSelected
+    ) -> None:
+        """Open the selected playlist's context page."""
+        await navigate_browse_item(cast("YTMHostBase", self.app), event.playlist)
 
     async def on_new_releases_section_album_selected(
         self, event: NewReleasesSection.AlbumSelected
@@ -1156,6 +1778,16 @@ class BrowsePage(Widget):
         if album_id:
             host = cast("YTMHostBase", self.app)
             await host.navigate_to("context", context_type="album", context_id=album_id)
+
+    async def on_subscriptions_section_artist_selected(
+        self, event: SubscriptionsSection.ArtistSelected
+    ) -> None:
+        """Navigate to the selected subscribed artist."""
+        artist = event.artist
+        browse_id = artist.get("browseId")
+        if browse_id:
+            host = cast("YTMHostBase", self.app)
+            await host.navigate_to("context", context_type="artist", context_id=browse_id)
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected chart track and populate the queue."""
@@ -1169,39 +1801,6 @@ class BrowsePage(Widget):
             autoplay=False,
         )
         await host.play_track(event.track)
-
-    async def _navigate_item(self, item: dict[str, Any]) -> None:
-        """Route an item to the appropriate context page or play it directly."""
-        result_type = (item.get("resultType") or item.get("type") or "").lower()
-        video_id = get_video_id(item)
-        browse_id = item.get("browseId")
-        playlist_id = item.get("playlistId") or item.get("audioPlaylistId")
-        host = cast("YTMHostBase", self.app)
-
-        if result_type in ("song", "video", "flat_song") or video_id:
-            normalized_tracks = normalize_tracks([item])
-            track_to_play = normalized_tracks[0] if normalized_tracks else item
-            # Replace the queue instead of playing around it — otherwise the
-            # queue page goes stale and next-track resumes the old queue.
-            await host._replace_queue_and_play([track_to_play])
-        elif result_type in ("album", "single"):
-            if browse_id:
-                await host.navigate_to("context", context_type="album", context_id=browse_id)
-        elif result_type == "artist":
-            if browse_id:
-                await host.navigate_to("context", context_type="artist", context_id=browse_id)
-        elif result_type == "playlist":
-            if playlist_id or browse_id:
-                await host.navigate_to(
-                    "context", context_type="playlist", context_id=playlist_id or browse_id
-                )
-        elif playlist_id:
-            # Shelves like "Mixed for you", "Listen again" radio entries, mixes etc.
-            # have a playlistId but no resultType.
-            await host.navigate_to("context", context_type="playlist", context_id=playlist_id)
-        elif browse_id:
-            # Fallback: treat any remaining browseId as an album/playlist context.
-            await host.navigate_to("context", context_type="album", context_id=browse_id)
 
     # ------------------------------------------------------------------
     # Vim-style action handler
@@ -1271,9 +1870,15 @@ class BrowsePage(Widget):
                 elif isinstance(focused, TrackTable):
                     await focused.handle_action(action, count)
 
+            case Action.MARK_TOGGLE | Action.MARK_RANGE | Action.MARK_CLEAR:
+                focused = self.app.focused
+                if isinstance(focused, TrackTable):
+                    await focused.handle_action(action, count)
+
             case Action.PICK_COUNTRY:
-                # Charts sub-tab only — index 1 in the (For You, Charts, New
-                # Releases) tab order. No-op on other sub-tabs.
+                # Charts sub-tab only — index 1 in the (For You, Charts,
+                # Releases, Playlists, Subs) tab order. No-op on other
+                # sub-tabs.
                 if self.active_tab != 1:
                     return
                 from ytm_player.ui.popups.country_picker import CountryPickerModal
@@ -1294,13 +1899,4 @@ class BrowsePage(Widget):
             settings.save()
         except Exception:
             logger.exception("Failed to persist new region setting")
-        try:
-            section = self.query_one("#section-charts", ChartsSection)
-            self.run_worker(
-                section.load_data(country=code),
-                name="reload-charts",
-                exclusive=True,
-                exit_on_error=False,
-            )
-        except Exception:
-            logger.exception("Failed to reload charts after region change")
+        self._load_charts(country=code)

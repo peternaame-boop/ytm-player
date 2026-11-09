@@ -11,7 +11,7 @@ Windows: replace `ytm` with `py -m ytm_player` in any of the commands below.
 
 ```bash
 ytm setup                    # Auto-detect browser cookies
-ytm setup --browser firefox  # Target a specific browser (chrome, firefox, brave, edge, chromium, vivaldi, opera, helium)
+ytm setup --browser firefox  # Target a specific browser (chrome, firefox, zen, brave, edge, chromium, vivaldi, opera, helium)
 ytm setup --manual           # Skip detection, paste raw request headers
 ```
 

@@ -51,9 +51,10 @@ def _fetch_latest_from_pypi() -> str | None:
 
 def _read_cache(cache_file: Path) -> dict:
     try:
-        return json.loads(cache_file.read_text(encoding="utf-8"))
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _write_cache(cache_file: Path, latest: str) -> None:
@@ -74,12 +75,15 @@ def check_for_update(current_version: str, cache_file: Path) -> str | None:
     - The latest version is not newer than *current_version*.
     """
     cache = _read_cache(cache_file)
-    last_checked = float(cache.get("checked_at", 0) or 0)
+    try:
+        last_checked = float(cache.get("checked_at", 0) or 0)
+    except (TypeError, ValueError):
+        last_checked = 0.0
     elapsed = time.time() - last_checked
     # Negative elapsed (clock went backwards) → treat as stale and re-fetch.
     if 0 <= elapsed < _CHECK_INTERVAL_SECONDS:
         latest = cache.get("latest")
-        if latest and _is_newer(latest, current_version):
+        if isinstance(latest, str) and latest and _is_newer(latest, current_version):
             return latest
         return None
 

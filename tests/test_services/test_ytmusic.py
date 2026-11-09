@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import requests
@@ -83,6 +83,74 @@ class TestCallNarrowedCatch:
         assert ytmusic_service._consecutive_api_failures == 0, (
             "The failure counter must be reset after a reinit."
         )
+
+
+_CHANNEL = "UCa1b2c3d4e5f6g7h8i9j0k1"
+
+
+class TestAuthAutoRefresh:
+    async def test_refreshes_browser_auth_and_retries_401(self):
+        from ytmusicapi.exceptions import YTMusicServerError
+
+        class ExpiredClient:
+            def rate_song(self, *_args):
+                raise YTMusicServerError("Server returned HTTP 401: Unauthorized.\n")
+
+        fresh_client = MagicMock()
+        fresh_client.rate_song.return_value = "ok"
+        auth_manager = MagicMock()
+        auth_manager.try_auto_refresh.return_value = True
+        auth_manager.create_bound_client.return_value = (fresh_client, _CHANNEL)
+        on_auth_refresh = AsyncMock()
+        expired = ExpiredClient()
+        service = make_ytmusic_service(
+            _ytm=expired,
+            _auth_manager=auth_manager,
+            _on_auth_refresh=on_auth_refresh,
+        )
+        service._client_identities[expired] = _CHANNEL
+
+        result = await service._call(service.client.rate_song, "abc", "LIKE")
+
+        assert result == "ok"
+        on_auth_refresh.assert_awaited_once_with()
+        auth_manager.try_auto_refresh.assert_called_once_with(_CHANNEL)
+        auth_manager.create_bound_client.assert_called_once_with(user=None)
+        fresh_client.rate_song.assert_called_once_with("abc", "LIKE")
+
+    async def test_failed_refresh_preserves_auth_expired_result(self):
+        from ytmusicapi.exceptions import YTMusicServerError
+
+        class ExpiredClient:
+            def rate_song(self, *_args):
+                raise YTMusicServerError("Server returned HTTP 401: Unauthorized.\n")
+
+        auth_manager = MagicMock()
+        auth_manager.try_auto_refresh.return_value = False
+        expired = ExpiredClient()
+        service = make_ytmusic_service(_ytm=expired, _auth_manager=auth_manager)
+        service._client_identities[expired] = _CHANNEL
+
+        assert await service.rate_song("abc", "LIKE") == "auth_expired"
+
+    async def test_refreshes_auth_shaped_parser_failure(self):
+        class ExpiredClient:
+            def get_liked_songs(self):
+                raise KeyError("response contains signInEndpoint: Sign in to continue")
+
+        fresh_client = MagicMock()
+        fresh_client.get_liked_songs.return_value = {"tracks": []}
+        auth_manager = MagicMock()
+        auth_manager.try_auto_refresh.return_value = True
+        auth_manager.create_bound_client.return_value = (fresh_client, _CHANNEL)
+        expired = ExpiredClient()
+        service = make_ytmusic_service(_ytm=expired, _auth_manager=auth_manager)
+        service._client_identities[expired] = _CHANNEL
+
+        result = await service._call(service.client.get_liked_songs)
+
+        assert result == {"tracks": []}
+        auth_manager.try_auto_refresh.assert_called_once_with(_CHANNEL)
 
 
 class TestClientThreadSafety:
@@ -167,13 +235,13 @@ class TestMutationMethodsReturnTypedResult:
         result = await ytmusic_service.rate_song("abc123", "LIKE")
         assert result == "network"
 
-    async def test_rate_song_returns_network_on_timeout(self, ytmusic_service, monkeypatch):
+    async def test_rate_song_returns_timeout_on_timeout(self, ytmusic_service, monkeypatch):
         async def fake_call(func, *_args, **_kwargs):
             raise asyncio.TimeoutError("api timed out")
 
         monkeypatch.setattr(ytmusic_service, "_call", fake_call)
         result = await ytmusic_service.rate_song("abc123", "LIKE")
-        assert result == "network"
+        assert result == "timeout"
 
     async def test_rate_song_returns_auth_expired_on_http_401(self, ytmusic_service, monkeypatch):
         from ytmusicapi.exceptions import YTMusicServerError
@@ -346,8 +414,9 @@ class TestMutationMethodsReturnTypedResult:
         assert result == "auth_expired"
 
     async def test_remove_playlist_items_returns_success_on_ok(self, ytmusic_service, monkeypatch):
+        # ytmusicapi hands back the response's status string.
         async def fake_call(func, *_args, **_kwargs):
-            return None
+            return "STATUS_SUCCEEDED"
 
         monkeypatch.setattr(ytmusic_service, "_call", fake_call)
         result = await ytmusic_service.remove_playlist_items(
@@ -355,7 +424,56 @@ class TestMutationMethodsReturnTypedResult:
         )
         assert result == "success"
 
-    async def test_remove_playlist_items_returns_network_on_timeout(
+    async def test_remove_playlist_items_returns_rejected_on_failed_status(
+        self, ytmusic_service, monkeypatch
+    ):
+        """A refused removal is HTTP 200 + ``STATUS_FAILED``, no exception:
+        the row is no longer in the playlist, or the account can't edit it.
+        """
+        from ytm_player.services.ytmusic import mutation_failure_suffix
+
+        async def fake_call(func, *_args, **_kwargs):
+            return "STATUS_FAILED"
+
+        monkeypatch.setattr(ytmusic_service, "_call", fake_call)
+        result = await ytmusic_service.remove_playlist_items(
+            "PL_test", [{"videoId": "v1", "setVideoId": "s1"}]
+        )
+        assert result == "rejected"
+        assert "reload" in mutation_failure_suffix(result)
+
+    async def test_remove_playlist_items_returns_server_error_on_missing_status(
+        self, ytmusic_service, monkeypatch
+    ):
+        """No status at all (ytmusicapi returns the whole response then, or
+        nothing) is a malformed answer, not a success."""
+        for answer in ({"responseContext": {}}, None):
+
+            async def fake_call(func, *_args, _answer=answer, **_kwargs):
+                return _answer
+
+            monkeypatch.setattr(ytmusic_service, "_call", fake_call)
+            result = await ytmusic_service.remove_playlist_items(
+                "PL_test", [{"videoId": "v1", "setVideoId": "s1"}]
+            )
+            assert result == "server_error", answer
+
+    async def test_remove_playlist_items_only_recognises_the_exact_failed_status(
+        self, ytmusic_service, monkeypatch
+    ):
+        """Only ``STATUS_FAILED`` is the server's refusal; any other string
+        is an answer we don't understand."""
+
+        async def fake_call(func, *_args, **_kwargs):
+            return "SOMETHING_FAILED"
+
+        monkeypatch.setattr(ytmusic_service, "_call", fake_call)
+        result = await ytmusic_service.remove_playlist_items(
+            "PL_test", [{"videoId": "v1", "setVideoId": "s1"}]
+        )
+        assert result == "server_error"
+
+    async def test_remove_playlist_items_returns_timeout_on_timeout(
         self, ytmusic_service, monkeypatch
     ):
         async def fake_call(func, *_args, **_kwargs):
@@ -365,7 +483,7 @@ class TestMutationMethodsReturnTypedResult:
         result = await ytmusic_service.remove_playlist_items(
             "PL_test", [{"videoId": "v1", "setVideoId": "s1"}]
         )
-        assert result == "network"
+        assert result == "timeout"
 
     async def test_remove_playlist_items_returns_server_error_on_http_503(
         self, ytmusic_service, monkeypatch
@@ -409,13 +527,13 @@ class TestMutationMethodsReturnTypedResult:
         result = await ytmusic_service.edit_playlist("PL_test", privacy_status="PUBLIC")
         assert result == "server_error"
 
-    async def test_edit_playlist_returns_network_on_timeout(self, ytmusic_service, monkeypatch):
+    async def test_edit_playlist_returns_timeout_on_timeout(self, ytmusic_service, monkeypatch):
         async def fake_call(func, *_args, **_kwargs):
             raise asyncio.TimeoutError("timed out")
 
         monkeypatch.setattr(ytmusic_service, "_call", fake_call)
         result = await ytmusic_service.edit_playlist("PL_test", title="Name")
-        assert result == "network"
+        assert result == "timeout"
 
     async def test_edit_playlist_returns_auth_expired_on_http_401(
         self, ytmusic_service, monkeypatch
@@ -486,13 +604,13 @@ class TestMutationMethodsReturnTypedResult:
         result = await ytmusic_service.create_playlist("My Playlist")
         assert result == ("server_error", "")
 
-    async def test_create_playlist_returns_network_on_timeout(self, ytmusic_service, monkeypatch):
+    async def test_create_playlist_returns_timeout_on_timeout(self, ytmusic_service, monkeypatch):
         async def fake_call(func, *_args, **_kwargs):
             raise asyncio.TimeoutError("timed out")
 
         monkeypatch.setattr(ytmusic_service, "_call", fake_call)
         result = await ytmusic_service.create_playlist("My Playlist")
-        assert result == ("network", "")
+        assert result == ("timeout", "")
 
     async def test_create_playlist_returns_auth_expired_on_http_401(
         self, ytmusic_service, monkeypatch
@@ -517,6 +635,50 @@ class TestMutationMethodsReturnTypedResult:
             await ytmusic_service.create_playlist("My Playlist")
 
 
+class TestClassifyMutationFailure:
+    """A mutation that got no answer in time is not a connectivity failure.
+
+    ``_run`` is ``wait_for(to_thread(...))``: on timeout the thread is not
+    cancelled and the server may still apply the change, so a timeout is
+    its own kind with its own guidance. Only a read timeout (the request
+    may have gone out) counts; failing to connect at all stays "network".
+    """
+
+    def test_wait_for_timeout_is_a_timeout(self):
+        from ytm_player.services.ytmusic import _classify_mutation_failure
+
+        assert _classify_mutation_failure(asyncio.TimeoutError()) == "timeout"
+
+    def test_read_timeout_is_a_timeout(self):
+        from ytm_player.services.ytmusic import _classify_mutation_failure
+
+        assert _classify_mutation_failure(requests.exceptions.ReadTimeout()) == "timeout"
+
+    def test_connect_timeout_and_connection_error_stay_network(self):
+        from ytm_player.services.ytmusic import _classify_mutation_failure
+
+        assert _classify_mutation_failure(requests.exceptions.ConnectTimeout()) == "network"
+        assert _classify_mutation_failure(requests.exceptions.ConnectionError()) == "network"
+
+    async def test_the_write_can_land_after_the_timeout_was_reported(self, ytmusic_service):
+        """The mechanism behind the kind: the thread finishes the write."""
+        gate = threading.Event()
+        finished = threading.Event()
+        mutations: list[str] = []
+
+        def mutation():
+            gate.wait(2)
+            mutations.append("accepted")
+            finished.set()
+
+        with pytest.raises(asyncio.TimeoutError):
+            await ytmusic_service._call(mutation, timeout=0.02)
+        assert mutations == []
+        gate.set()
+        await asyncio.to_thread(finished.wait, 2)
+        assert mutations == ["accepted"]
+
+
 class TestMutationFailureSuffix:
     """Task 4.11: cascade sites compose toast text via mutation_failure_suffix."""
 
@@ -531,7 +693,7 @@ class TestMutationFailureSuffix:
         """
         from ytm_player.services.ytmusic import mutation_failure_suffix
 
-        kinds = ("auth_required", "auth_expired", "network", "server_error")
+        kinds = ("auth_required", "auth_expired", "network", "timeout", "rejected", "server_error")
         suffixes = [mutation_failure_suffix(k) for k in kinds]  # type: ignore[arg-type]
         assert all(s for s in suffixes), "every non-success kind needs text"
         assert len(set(suffixes)) == len(kinds), "suffixes must be distinct"
@@ -544,6 +706,23 @@ class TestMutationFailureSuffix:
 
         assert "setup" in mutation_failure_suffix("auth_required").lower()
         assert "setup" in mutation_failure_suffix("auth_expired").lower()
+
+    def test_timeout_suffix_says_the_change_may_have_gone_through(self):
+        """The agreed wording: no claim that the request reached the server,
+        no claim that it didn't."""
+        from ytm_player.services.ytmusic import mutation_failure_suffix
+
+        assert mutation_failure_suffix("timeout") == (
+            "No confirmation in time; the change may have gone through. "
+            "Reload to check before retrying."
+        )
+
+    def test_rejected_suffix_says_to_reload_and_check_access(self):
+        from ytm_player.services.ytmusic import mutation_failure_suffix
+
+        suffix = mutation_failure_suffix("rejected")
+        assert "reload" in suffix
+        assert "edit" in suffix
 
 
 class TestHistory:
@@ -625,3 +804,26 @@ class TestAddHistoryItem:
         ytmusic_service._ytm.add_history_item = MagicMock(side_effect=RuntimeError("boom"))
 
         assert await ytmusic_service.add_history_item("vid123") is False
+
+
+class TestGetArtistAlbums:
+    async def test_passes_limit_none_and_returns_list(self):
+        service = make_ytmusic_service()
+        service._ytm.get_artist_albums = MagicMock(return_value=[{"title": "A"}])
+
+        result = await service.get_artist_albums("MPAD_x", "params")
+
+        assert result == [{"title": "A"}]
+        service._ytm.get_artist_albums.assert_called_once_with("MPAD_x", "params", limit=None)
+
+    async def test_non_list_result_becomes_empty(self):
+        service = make_ytmusic_service()
+        service._ytm.get_artist_albums = MagicMock(return_value=None)
+
+        assert await service.get_artist_albums("MPAD_x", "params") == []
+
+    async def test_failure_returns_empty(self):
+        service = make_ytmusic_service()
+        service._ytm.get_artist_albums = MagicMock(side_effect=RuntimeError("boom"))
+
+        assert await service.get_artist_albums("MPAD_x", "params") == []

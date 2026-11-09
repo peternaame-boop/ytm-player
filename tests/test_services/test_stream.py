@@ -1,12 +1,39 @@
 """Tests for StreamResolver cache and expiry logic."""
 
 import asyncio
+import logging
+import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from ytm_player.services.stream import StreamInfo, StreamResolver
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cookie_detection(monkeypatch, tmp_path):
+    """_build_ydl_opts() calls _detect_stream_cookies() for real whenever
+    cookiefile isn't already configured (the default — see
+    YtDlpSettings.cookies_file) — and that function checks whether
+    AuthManager has already written a stream cookiejar file to disk.
+    TestResolveSync/TestResolveAsync below exercise resolve_sync()/
+    resolve() through the real _build_ydl_opts() path with only
+    yt_dlp.YoutubeDL mocked, so without stubbing this out, a routine test
+    run could pick up a real cookiejar file from the developer's actual
+    ~/.config/ytm-player/ — the side effect this project's test suite is
+    built to avoid. The sign-in files a jar would be checked against are
+    pointed at a scratch pair for the same reason.
+    """
+    monkeypatch.setattr("ytm_player.services.stream._detect_stream_cookies", lambda: None)
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "auth.json").write_text('{"cookie": "SAPISID=x"}', encoding="utf-8")
+    monkeypatch.setattr(
+        "ytm_player.services.stream._detect_session_record",
+        lambda: (str(session_dir / "auth.json"), str(session_dir / "account.json")),
+    )
 
 
 def _make_info(video_id: str = "test123", ttl: float = 18000) -> StreamInfo:
@@ -207,6 +234,196 @@ class TestResolveSync:
         assert result is None
 
 
+class TestClearCacheMidResolve:
+    """A resolve that started before clear_cache() must not put its result
+    back into the cache that was just cleared — the result came from the
+    pre-reset resolver setup (old cookies, old quality)."""
+
+    def test_resolve_sync_result_not_cached_after_clear(self):
+        resolver = StreamResolver()
+        info = _make_info("mid01")
+
+        def _resolve_then_clear(video_id):
+            resolver.clear_cache()
+            return info
+
+        resolver._resolve_sync = _resolve_then_clear
+
+        assert resolver.resolve_sync("mid01") is info  # caller still gets the result
+        assert resolver._get_cached("mid01") is None
+
+    async def test_resolve_result_not_cached_after_clear(self):
+        resolver = StreamResolver()
+        info = _make_info("mid02")
+
+        def _resolve_then_clear(video_id):
+            resolver.clear_cache()
+            return info
+
+        resolver._resolve_sync = _resolve_then_clear
+
+        assert await resolver.resolve("mid02") is info
+        assert resolver._get_cached("mid02") is None
+
+    def test_result_cached_when_no_clear_happened(self):
+        resolver = StreamResolver()
+        info = _make_info("mid03")
+        resolver._resolve_sync = lambda video_id: info
+
+        resolver.resolve_sync("mid03")
+
+        assert resolver._get_cached("mid03") is info
+
+
+class TestPendingResolveAcrossClearCache:
+    """A resolve() that starts AFTER clear_cache() must not join a pending
+    resolve that started before it: that in-flight result comes from the old
+    resolver setup (old cookies, old quality). And when the old one finishes,
+    its cleanup must not remove the newer request's pending entry."""
+
+    @staticmethod
+    def _info(url: str) -> StreamInfo:
+        return StreamInfo(
+            url=url,
+            video_id="race",
+            format="opus",
+            bitrate=128,
+            duration=200,
+            expires_at=time.time() + 18000,
+        )
+
+    async def test_request_after_clear_does_not_join_stale_pending_resolve(self):
+        resolver = StreamResolver()
+        old_started = threading.Event()
+        release_old = threading.Event()
+        calls: list[int] = []
+
+        def fake_resolve_sync(video_id):
+            calls.append(len(calls) + 1)
+            if calls[-1] == 1:
+                old_started.set()
+                release_old.wait(timeout=5)
+                return self._info("https://old")
+            return self._info("https://new")
+
+        resolver._resolve_sync = fake_resolve_sync
+
+        first = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.to_thread(old_started.wait, 5)
+        resolver.clear_cache()
+        second = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.sleep(0.05)
+        release_old.set()
+
+        old, new = await asyncio.gather(first, second)
+
+        assert old.url == "https://old"
+        assert new.url == "https://new"
+        assert resolver._get_cached("race") is new
+        assert calls == [1, 2]
+        assert "race" not in resolver._pending
+
+    async def test_old_resolve_finishing_does_not_drop_newer_pending_entry(self):
+        resolver = StreamResolver()
+        old_started = threading.Event()
+        release_old = threading.Event()
+        new_started = threading.Event()
+        release_new = threading.Event()
+        calls: list[int] = []
+
+        def fake_resolve_sync(video_id):
+            calls.append(len(calls) + 1)
+            if calls[-1] == 1:
+                old_started.set()
+                release_old.wait(timeout=5)
+                return self._info("https://old")
+            new_started.set()
+            release_new.wait(timeout=5)
+            return self._info("https://new")
+
+        resolver._resolve_sync = fake_resolve_sync
+
+        first = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.to_thread(old_started.wait, 5)
+        resolver.clear_cache()
+        second = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.to_thread(new_started.wait, 5)
+
+        release_old.set()
+        await first
+        # The newer request is still in flight: its dedup entry must survive
+        # the older request's cleanup, so a third caller joins IT.
+        assert "race" in resolver._pending
+        third = asyncio.create_task(resolver.resolve("race"))
+        await asyncio.sleep(0.05)
+        release_new.set()
+
+        new, joined = await asyncio.gather(second, third)
+        assert new.url == "https://new"
+        assert joined is new
+        assert calls == [1, 2]
+        assert "race" not in resolver._pending
+
+
+class TestStaleCookieDiagnosticHint:
+    """_try_resolve()'s DownloadError handler appends a diagnostic hint when
+    the session cookiejar is in use and the error text looks auth-related.
+    These tests call _try_resolve() directly (bypassing resolve_sync()'s
+    retry loop and its real time.sleep() delays) and patch
+    _session_cookiejar_signature() to model "jar in use" vs not."""
+
+    def _resolver_raising(self, message: str) -> StreamResolver:
+        import yt_dlp
+
+        resolver = StreamResolver()
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.side_effect = yt_dlp.utils.DownloadError(message)
+        resolver._get_ydl = MagicMock(return_value=mock_ydl)
+        return resolver
+
+    _JAR = ("/fake/config/stream_cookies.txt", 1, 1)
+
+    def test_hint_present_when_session_jar_in_use_and_error_is_auth_related(self, caplog):
+        resolver = self._resolver_raising("Sign in to confirm you are not a bot")
+
+        with (
+            patch(
+                "ytm_player.services.stream._session_cookiejar_signature", return_value=self._JAR
+            ),
+            caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
+        ):
+            result = resolver._try_resolve("https://example.com/watch", "vid1", 0)
+
+        assert result is None
+        assert "stream cookiejar may be stale/revoked" in caplog.text
+
+    def test_hint_absent_when_streaming_anonymously(self, caplog):
+        resolver = self._resolver_raising("Sign in to confirm you are not a bot")
+
+        with (
+            patch("ytm_player.services.stream._session_cookiejar_signature", return_value=None),
+            caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
+        ):
+            result = resolver._try_resolve("https://example.com/watch", "vid2", 0)
+
+        assert result is None
+        assert "stream cookiejar may be stale/revoked" not in caplog.text
+
+    def test_hint_absent_when_error_is_unrelated_to_auth(self, caplog):
+        resolver = self._resolver_raising("video unavailable")
+
+        with (
+            patch(
+                "ytm_player.services.stream._session_cookiejar_signature", return_value=self._JAR
+            ),
+            caplog.at_level(logging.WARNING, logger="ytm_player.services.stream"),
+        ):
+            result = resolver._try_resolve("https://example.com/watch", "vid3", 0)
+
+        assert result is None
+        assert "stream cookiejar may be stale/revoked" not in caplog.text
+
+
 class TestResolveAsync:
     """Test the async resolve() path with mocked yt-dlp."""
 
@@ -320,3 +537,188 @@ class TestResolveAsync:
         assert info is not None
         assert info.video_id == "shieldVid1"
         assert waiter.cancelled()
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    """Freeze stream.py's clock at 1000 and record its sleeps instead of
+    sleeping. Only stream.py's own ``time`` and ``asyncio`` names are
+    replaced, so the event loop, the executor and the test's own awaits keep
+    the real modules."""
+    from ytm_player.services import stream
+
+    clock = SimpleNamespace(now=1000.0, sleeps=[], async_sleeps=[])
+
+    async def fake_async_sleep(delay):
+        clock.async_sleeps.append(delay)
+
+    fake_asyncio = SimpleNamespace(**vars(asyncio))
+    fake_asyncio.sleep = fake_async_sleep
+    monkeypatch.setattr(stream, "asyncio", fake_asyncio)
+    monkeypatch.setattr(
+        stream, "time", SimpleNamespace(time=lambda: clock.now, sleep=clock.sleeps.append)
+    )
+    return clock
+
+
+class TestAvailableAtWait:
+    """Streams behind a pre-roll ad answer 403 until ``available_at``.
+    resolve() waits for it on the event loop, so the wait holds no worker
+    thread and can be cancelled; prefetch() caches without waiting."""
+
+    @staticmethod
+    def _info(video_id: str, available_at: float) -> StreamInfo:
+        return StreamInfo(
+            url=f"https://stream.example.com/{video_id}",
+            video_id=video_id,
+            format="opus",
+            bitrate=128,
+            duration=200,
+            expires_at=time.time() + 18000,
+            available_at=available_at,
+        )
+
+    @staticmethod
+    def _gate_async_sleep(monkeypatch) -> asyncio.Event:
+        """Make stream.py's asyncio.sleep block until cancelled; the returned
+        event is set once the wait has started."""
+        from ytm_player.services import stream
+
+        started = asyncio.Event()
+
+        async def blocking_sleep(delay):
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(stream.asyncio, "sleep", blocking_sleep)
+        return started
+
+    def test_wait_seconds(self, frozen_clock):
+        assert self._info("ws01", 1030).wait_seconds() == 30
+        assert self._info("ws02", 995).wait_seconds() == 0
+        assert _make_info("ws03").wait_seconds() == 0  # available_at defaults to 0
+
+    async def test_resolve_waits_until_available_at(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1006)  # type: ignore[method-assign]
+
+        assert await resolver.resolve("wait01") is not None
+
+        assert frozen_clock.async_sleeps == [6]
+
+    async def test_resolve_does_not_wait_when_available(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1000)  # type: ignore[method-assign]
+
+        assert await resolver.resolve("wait02") is not None
+
+        assert frozen_clock.async_sleeps == []
+
+    async def test_prefetch_caches_without_waiting(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1030)  # type: ignore[method-assign]
+
+        await resolver.prefetch("pre01")
+
+        assert resolver._get_cached("pre01") is not None
+        assert frozen_clock.async_sleeps == []
+
+    async def test_play_after_prefetch_waits_only_the_remainder(self, frozen_clock):
+        resolver = StreamResolver()
+        calls: list[str] = []
+
+        def fake_resolve_sync(video_id: str) -> StreamInfo:
+            calls.append(video_id)
+            return self._info(video_id, 1006)
+
+        resolver._resolve_sync = fake_resolve_sync  # type: ignore[method-assign]
+
+        await resolver.prefetch("pre02")
+        frozen_clock.now = 1004
+        assert await resolver.resolve("pre02") is not None
+
+        assert calls == ["pre02"]
+        assert frozen_clock.async_sleeps == [2]
+
+    async def test_joiner_of_a_pending_resolve_waits_too(self, frozen_clock):
+        resolver = StreamResolver()
+        release = threading.Event()
+        calls: list[str] = []
+
+        def blocking_resolve(video_id: str) -> StreamInfo:
+            calls.append(video_id)
+            release.wait(timeout=5)
+            return self._info(video_id, 1006)
+
+        resolver._resolve_sync = blocking_resolve  # type: ignore[method-assign]
+
+        # Set when the joiner finds the owner's in-flight resolve, so extraction
+        # is released only once the pending-future path is really taken.
+        joined = asyncio.Event()
+        current_pending = resolver._current_pending
+
+        def spy_current_pending(video_id, generation):
+            pending = current_pending(video_id, generation)
+            if pending is not None:
+                joined.set()
+            return pending
+
+        resolver._current_pending = spy_current_pending  # type: ignore[method-assign]
+
+        owner = asyncio.create_task(resolver.resolve("join01"))
+        await asyncio.sleep(0)  # owner registers its pending future
+        joiner = asyncio.create_task(resolver.resolve("join01"))
+        await asyncio.wait_for(joined.wait(), timeout=5)
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(owner, joiner), timeout=5)
+
+        assert all(info is not None for info in results)
+        assert calls == ["join01"]
+        assert frozen_clock.async_sleeps == [6, 6]
+
+    async def test_cancelled_wait_keeps_the_result_cached(self, frozen_clock, monkeypatch):
+        started = self._gate_async_sleep(monkeypatch)
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1030)  # type: ignore[method-assign]
+
+        task = asyncio.create_task(resolver.resolve("cancel01"))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert resolver._get_cached("cancel01") is not None
+
+    async def test_clear_cache_during_the_wait(self, frozen_clock, monkeypatch):
+        """Same contract as a clear mid-resolve: the caller still gets its
+        result, and the cache stays cleared."""
+        from ytm_player.services import stream
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def gated_sleep(delay):
+            started.set()
+            await release.wait()
+
+        monkeypatch.setattr(stream.asyncio, "sleep", gated_sleep)
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1030)  # type: ignore[method-assign]
+
+        task = asyncio.create_task(resolver.resolve("clear01"))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        resolver.clear_cache()
+        release.set()
+
+        assert await asyncio.wait_for(task, timeout=5) is not None
+        assert resolver._get_cached("clear01") is None
+
+    def test_resolve_sync_waits_on_resolve_and_on_cache_hit(self, frozen_clock):
+        resolver = StreamResolver()
+        resolver._resolve_sync = lambda video_id: self._info(video_id, 1006)  # type: ignore[method-assign]
+
+        assert resolver.resolve_sync("sync01") is not None
+        frozen_clock.now = 1004
+        assert resolver.resolve_sync("sync01") is not None  # cache hit
+
+        assert frozen_clock.sleeps == [6, 2]

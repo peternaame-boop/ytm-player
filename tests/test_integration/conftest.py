@@ -73,5 +73,6 @@ def mock_mpv(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """
     fake = MagicMock(name="fake_mpv_module")
     fake.MPV.return_value = MagicMock(name="fake_MPV_instance")
+    fake.MPV.return_value.command.return_value = {"playlist_entry_id": 1}
     monkeypatch.setattr("ytm_player.services.player.mpv", fake)
     return fake

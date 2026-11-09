@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, ClassVar, cast
+
+from rich.text import Text
 
 if TYPE_CHECKING:
     from ytm_player.app._base import YTMHostBase
@@ -65,7 +69,9 @@ class _ArtistAlbumList(DataTable):
         for album in self._albums:
             title = album.get("title", "Unknown")
             year = str(album.get("year", ""))
-            self.add_row(title, year, key=album.get("browseId", title))
+            # Feed entries can repeat IDs/titles. Generated keys identify rows;
+            # cursor position still selects the corresponding source album.
+            self.add_row(Text(str(title)), Text(year))
 
     @property
     def selected_album(self) -> dict | None:
@@ -174,6 +180,11 @@ class ContextPage(TrackFilterHost, Widget):
     error_message: reactive[str] = reactive("")
     _load_failed: bool
 
+    # Group of the page's data load and the follow-up fetches it starts (a
+    # playlist's tail, an artist's full song list): a new load supersedes
+    # them; the header buttons' workers run in groups of their own.
+    LOAD_GROUP: ClassVar[str] = "context-load"
+
     def __init__(
         self,
         context_type: str,
@@ -211,10 +222,35 @@ class ContextPage(TrackFilterHost, Widget):
         """Start an async worker to fetch context data."""
         self.loading = True
         self.error_message = ""
-        self.run_worker(self._fetch_data(), name="fetch_context", exclusive=True)
+        self.run_worker(
+            self._fetch_data(), name="fetch_context", group=self.LOAD_GROUP, exclusive=True
+        )
 
     # First batch size for progressive playlist loading.
     _FIRST_BATCH = 300
+
+    @staticmethod
+    async def _expand_artist_discography(ytmusic: Any, data: dict[str, Any]) -> None:
+        """Swap get_artist's 10-item albums/singles previews for the full lists.
+
+        get_artist returns only the first page of each section; a section
+        that carries ``browseId`` + ``params`` has a "see all" page (#138).
+        Sections without them, and fetches that come back empty, keep the
+        preview.
+        """
+        sections = [
+            s
+            for s in (data.get("albums"), data.get("singles"))
+            if isinstance(s, dict) and s.get("browseId") and s.get("params")
+        ]
+        if not sections:
+            return
+        full_lists = await asyncio.gather(
+            *(ytmusic.get_artist_albums(s["browseId"], s["params"]) for s in sections)
+        )
+        for section, full in zip(sections, full_lists):
+            if full:
+                section["results"] = full
 
     async def _fetch_data(self) -> dict[str, Any]:
         """Fetch data from ytmusic based on context_type.
@@ -233,6 +269,7 @@ class ContextPage(TrackFilterHost, Widget):
                     result = await ytmusic.get_album(self.context_id)
                 case "artist":
                     result = await ytmusic.get_artist(self.context_id)
+                    await self._expand_artist_discography(ytmusic, result)
                 case "playlist":
                     result = await ytmusic.get_playlist(self.context_id, limit=self._FIRST_BATCH)
                 case _:
@@ -390,6 +427,7 @@ class ContextPage(TrackFilterHost, Widget):
             self.run_worker(
                 self._fetch_remaining_tracks(len(raw_tracks)),
                 name="fetch_remaining",
+                group=self.LOAD_GROUP,
             )
 
     async def _fetch_remaining_tracks(self, already_have: int) -> list[dict]:
@@ -483,6 +521,7 @@ class ContextPage(TrackFilterHost, Widget):
             self.run_worker(
                 self._fetch_full_artist_songs(songs_browse_id, top_tracks_table),
                 name="fetch-artist-songs",
+                group=self.LOAD_GROUP,
                 exclusive=True,
             )
 
@@ -531,10 +570,14 @@ class ContextPage(TrackFilterHost, Widget):
             return
         if widget.id == "add-to-library-btn":
             event.stop()
-            self.run_worker(self._add_to_library(), name="add_to_lib", exclusive=True)
+            self.run_worker(
+                self._add_to_library(), name="add_to_lib", group="add-to-library", exclusive=True
+            )
         elif widget.id == "start-radio-btn":
             event.stop()
-            self.run_worker(self._start_radio(), name="start_radio", exclusive=True)
+            self.run_worker(
+                self._start_radio(), name="start_radio", group="start-radio", exclusive=True
+            )
 
     async def _add_to_library(self) -> None:
         """Add the current album or playlist to the user's library."""
@@ -574,10 +617,10 @@ class ContextPage(TrackFilterHost, Widget):
             suffix = mutation_failure_suffix(result)
             self.app.notify(f"Failed to add to library — {suffix}", severity="error", timeout=4)
 
-    async def _start_radio(self) -> None:
+    def _start_radio(self) -> Coroutine[Any, Any, None]:
         """Start radio seeded from the current playlist."""
         item = {**self._data, "playlistId": self._data.get("playlistId") or self.context_id}
-        await cast("YTMHostBase", self.app)._start_playlist_radio(item)
+        return cast("YTMHostBase", self.app)._start_playlist_radio(item)
 
     async def on_track_table_track_selected(self, event: TrackTable.TrackSelected) -> None:
         """Play the selected track and enqueue remaining tracks."""

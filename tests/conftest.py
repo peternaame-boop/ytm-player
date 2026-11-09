@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+import weakref
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,9 +23,12 @@ def make_ytmusic_service(**overrides):
     svc._auth_path = MagicMock()
     svc._auth_manager = None
     svc._user = None
+    svc._on_auth_refresh = None
     svc._ytm = MagicMock(name="fake-ytm-client")
     svc._consecutive_api_failures = 0
     svc._client_init_lock = threading.Lock()
+    svc._auth_refresh_lock = asyncio.Lock()
+    svc._renewal_retry_after = 0.0
     svc._order_lock = asyncio.Lock()
     svc._no_patch = asyncio.Event()
     svc._no_patch.set()
@@ -34,6 +38,7 @@ def make_ytmusic_service(**overrides):
     svc._last_discovery_source = 0
     svc._last_chart_shelf = 0
     svc.last_added_set_video_ids = {}
+    svc._client_identities = weakref.WeakKeyDictionary()
     for name, value in overrides.items():
         setattr(svc, name, value)
     return svc
