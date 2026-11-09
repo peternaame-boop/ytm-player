@@ -61,6 +61,10 @@ class PlaybackSettings:
 class YtDlpSettings:
     cookies_file: str = ""
     use_session_cookies: bool = False
+    # Browser to read YouTube cookies from for `ytm setup` and automatic
+    # session renewal (chrome, chromium, brave, firefox, zen, helium, ...).
+    # Empty = auto-detect the first browser that has a signed-in session.
+    cookie_browser: str = ""
     ca_bundle: str = ""
     remote_components: str | list[str] = ""
     js_runtimes: str | list[str] = ""

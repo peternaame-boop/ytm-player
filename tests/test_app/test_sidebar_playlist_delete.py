@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from ytm_player.app._sidebar import SidebarMixin
 from ytm_player.ui.sidebars.playlist_sidebar import LibraryPanel, PlaylistSidebar
 
@@ -48,6 +50,8 @@ class FakeSidebarHost(SidebarMixin):
         self.call_order: list[str] = []
         self._active_library_playlist_id: str | None = None
         self.active_id_at_navigate: str | None = "UNSET"
+        self._nav_idle = asyncio.Event()
+        self._nav_idle.set()
 
     def notify(self, message: str, **kwargs: object) -> None:
         self.notifications.append(message)
