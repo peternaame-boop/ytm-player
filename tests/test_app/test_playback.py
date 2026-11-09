@@ -537,6 +537,9 @@ class TestFetchAndPlayRadioSeedFirst:
         assert tracks[0]["video_id"] == "existing"
         assert tracks[1]["video_id"] == "r1"
         host.play_track.assert_not_called()
+        # Append is the autoplay refill: its tracks are marked as autoplay picks.
+        (autoplay_id,) = host.queue.autoplay_entry_ids
+        assert host.queue.entries[1][0] == autoplay_id
 
 
 class TestFetchAndPlayRadioNotifyOrder:

@@ -189,6 +189,7 @@ class QueuePage(TrackFilterHost, Widget):
             header.display = False
 
         table = self.query_one("#queue-table", TrackTable)
+        table.autoplay_keys = queue.autoplay_entry_ids
 
         if not tracks:
             table.load_tracks([])
@@ -230,6 +231,9 @@ class QueuePage(TrackFilterHost, Widget):
         queue = self.app.queue  # type: ignore[attr-defined]
         count = queue.length
         footer_text = f"Tracks: {count}"
+        autoplay_count = len(queue.autoplay_entry_ids)
+        if autoplay_count:
+            footer_text += f"  ·  ↻ {autoplay_count} added by autoplay"
 
         try:
             footer = self.query_one("#queue-footer", Static)

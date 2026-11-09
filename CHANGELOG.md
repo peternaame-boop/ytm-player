@@ -12,6 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Choose the browser used for cookie extraction**: `[yt_dlp] cookie_browser` selects the browser used by setup and automatic session renewal, with configured cookies files tried first. `ytm setup --browser` overrides the sources for one setup run without changing the setting. Thanks to @londospark (#193, #194).
 - **Jump to a queue position from the CLI**: `ytm play-index <n>` selects and plays the track at zero-based position `<n>` in the current queue, including shuffle order. Invalid positions return an error. Thanks to @Caetanoag for the report and the fix (#197, #198).
+- **Autoplay picks are marked in the queue**: tracks autoplay adds are marked ↻ on the Queue page and counted in its footer. Removing one keeps autoplay from adding it again until the queue is cleared or the app exits. Thanks to @VedantAnand17 for the request and the change (#144, #199).
 
 **Fixes**
 
