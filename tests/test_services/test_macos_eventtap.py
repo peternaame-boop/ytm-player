@@ -6,6 +6,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from ytm_player.services.macos_eventtap import MacOSEventTapService, _event_action
 
 
@@ -97,6 +99,29 @@ class TestTapCallback:
 
         assert result is source_event
         assert enabled_calls == [(svc._tap, True)]
+
+    @pytest.mark.parametrize("event_type", [0xFFFFFFFE, 0xFFFFFFFF])
+    async def test_does_not_reenable_tap_once_stopping(self, event_type: int) -> None:
+        # stop() clears _running before it disables the tap; a disable
+        # notice that arrives after that must not switch the tap back on.
+        svc = MacOSEventTapService()
+        svc._running = False
+        svc._tap = object()
+
+        enabled_calls = []
+        fake_quartz = SimpleNamespace(
+            NSSystemDefined=14,
+            kCGEventTapDisabledByTimeout=0xFFFFFFFE,
+            kCGEventTapDisabledByUserInput=0xFFFFFFFF,
+            CGEventTapEnable=lambda tap, enabled: enabled_calls.append((tap, enabled)),
+        )
+        source_event = object()
+
+        with patch("ytm_player.services.macos_eventtap.Quartz", fake_quartz):
+            result = svc._tap_callback(None, event_type, source_event, None)
+
+        assert result is source_event
+        assert enabled_calls == []
 
     async def test_passthrough_when_not_mapped(self) -> None:
         svc = MacOSEventTapService()
