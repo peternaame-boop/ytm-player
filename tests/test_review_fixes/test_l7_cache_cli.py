@@ -3,8 +3,8 @@
 Both commands must use ``[cache] location`` (``settings.cache_dir``) like the
 cache and download services do. ``clear`` must refuse while a TUI is running,
 must empty the index through SQLite instead of deleting ``cache.db``, must only
-delete indexed files from a user-chosen location, and must fail cleanly on an
-unreadable index.
+delete indexed files from a user-chosen location, must remove a damaged index
+(the TUI cannot start with one), and must leave an index it cannot access alone.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from click.testing import CliRunner
 
 from ytm_player.cli import main
 from ytm_player.config.settings import Settings
-from ytm_player.services.cache import CacheManager
+from ytm_player.services.cache import CacheError, CacheManager
 
 _VIDEO_A = "abcdefghijk"
 _VIDEO_B = "bcdefghijkl"
@@ -157,23 +157,119 @@ def test_clear_default_directory_removes_indexed_files_and_orphans(cache_env):
     assert _index_rows(cache_env.db_path) == 0
 
 
-def test_clear_with_a_corrupt_index_fails_cleanly_and_closes_the_manager(cache_env, monkeypatch):
-    cache_env.db_path.write_bytes(b"x" * 4096)
-    closed: list[bool] = []
+def _sidecars(db_path) -> list:
+    return [db_path, db_path.with_name("cache.db-wal"), db_path.with_name("cache.db-shm")]
+
+
+def _spy_close(monkeypatch, db_path) -> list[tuple[bool, bool]]:
+    """Record (manager closed, cache.db still on disk) for every close()."""
+    calls: list[tuple[bool, bool]] = []
     real_close = CacheManager.close
 
     async def spy_close(self: CacheManager) -> None:
         await real_close(self)
-        closed.append(self._db is None)
+        calls.append((self._db is None, db_path.exists()))
 
     monkeypatch.setattr(CacheManager, "close", spy_close)
+    return calls
+
+
+def test_clear_removes_a_damaged_index_in_the_default_layout(cache_env, monkeypatch):
+    cache_env.settings.cache.location = ""
+    for path in _sidecars(cache_env.db_path):
+        path.write_bytes(b"x" * 4096)
+    (cache_env.default_dir / "aaaaaaaaaaa.opus").write_bytes(b"audio")
+    (cache_env.default_dir / "orphan00000.opus").write_bytes(b"orphan")
+    closes = _spy_close(monkeypatch, cache_env.db_path)
+
+    result = CliRunner().invoke(main, ["cache", "clear", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stderr.splitlines() == [
+        "Warning: the cache index was damaged and has been removed."
+    ]
+    assert "Cleared 2 cached file(s)." in result.stdout
+    # The manager was closed while the damaged file was still there.
+    assert closes == [(True, True)]
+    assert [p for p in _sidecars(cache_env.db_path) if p.exists()] == []
+    assert _files(cache_env.default_dir) == []
+
+    async def reopen() -> dict:
+        manager = CacheManager(db_path=cache_env.db_path)
+        await manager.init()
+        try:
+            return await manager.get_status()
+        finally:
+            await manager.close()
+
+    assert asyncio.run(reopen())["file_count"] == 0
+
+
+def test_clear_removes_a_damaged_index_but_keeps_custom_location_files(cache_env):
+    cache_env.db_path.write_bytes(b"x" * 4096)
+    (cache_env.custom_dir / "aaaaaaaaaaa.opus").write_bytes(b"audio")
+    (cache_env.custom_dir / "holiday.jpg").write_bytes(b"not a cache file")
+
+    result = CliRunner().invoke(main, ["cache", "clear", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "damaged" in result.stderr
+    assert "Cleared 0 cached file(s)." in result.stdout
+    assert not cache_env.db_path.exists()
+    assert _files(cache_env.custom_dir) == ["aaaaaaaaaaa.opus", "holiday.jpg"]
+
+
+def test_clear_removes_an_index_damaged_while_clearing(cache_env, monkeypatch):
+    """CacheManager.clear() wraps the sqlite3 error in CacheError; the cause decides."""
+    _seed(cache_env.custom_dir, cache_env.db_path, _VIDEO_A)
+
+    async def damaged_clear(self: CacheManager) -> None:
+        err = CacheError("Failed to clear cache: database disk image is malformed")
+        err.__cause__ = sqlite3.DatabaseError("database disk image is malformed")
+        raise err
+
+    monkeypatch.setattr(CacheManager, "clear", damaged_clear)
+
+    result = CliRunner().invoke(main, ["cache", "clear", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "damaged" in result.stderr
+    assert not cache_env.db_path.exists()
+
+
+def _locked_cache_error() -> CacheError:
+    err = CacheError("Failed to clear cache: database is locked")
+    err.__cause__ = sqlite3.OperationalError("database is locked")
+    return err
+
+
+@pytest.mark.parametrize(
+    ("method", "make_error"),
+    [
+        ("init", lambda: sqlite3.OperationalError("database is locked")),
+        ("clear", _locked_cache_error),
+        ("init", lambda: PermissionError(13, "Permission denied")),
+    ],
+    ids=["init-locked", "clear-locked", "init-permission"],
+)
+def test_clear_keeps_an_index_it_cannot_access(cache_env, monkeypatch, method, make_error):
+    cache_env.settings.cache.location = ""
+    _seed(cache_env.default_dir, cache_env.db_path, _VIDEO_A)
+    (cache_env.default_dir / "orphan00000.opus").write_bytes(b"orphan")
+
+    async def fail(self: CacheManager) -> None:
+        raise make_error()
+
+    monkeypatch.setattr(CacheManager, method, fail)
 
     result = CliRunner().invoke(main, ["cache", "clear", "--yes"])
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)  # not an escaped exception
-    assert "Traceback" not in result.output
     lines = result.stderr.splitlines()
     assert len(lines) == 1
-    assert lines[0].startswith("Error: ")
-    assert closed == [True]
+    assert lines[0].startswith("Error: Could not clear the cache index: ")
+    assert "damaged" not in result.output
+    assert cache_env.db_path.exists()
+    assert _index_rows(cache_env.db_path) == 1
+    assert _files(cache_env.default_dir) == [f"{_VIDEO_A}.opus", "orphan00000.opus"]

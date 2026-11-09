@@ -614,7 +614,22 @@ def cache_clear() -> None:
         try:
             removed += asyncio.run(_clear_index())
         except (sqlite3.Error, OSError) as exc:
-            _error(f"Could not clear the cache index: {exc}")
+            # CacheError (an OSError) wraps the sqlite3 error that caused it.
+            cause = exc.__cause__ if isinstance(exc, OSError) else exc
+            # Plain DatabaseError is SQLite's "corrupt" / "not a database". Its
+            # subclasses (OperationalError: locked, busy, no permission, I/O)
+            # mean the index could not be used, not that it is damaged.
+            if type(cause) is not sqlite3.DatabaseError:
+                _error(f"Could not clear the cache index: {exc}")
+            # The TUI cannot start with a damaged index, so remove it (the
+            # manager is closed by now). Sidecars go first: a stale WAL next
+            # to a new database of the same name could be replayed into it.
+            try:
+                for suffix in ("-wal", "-shm", ""):
+                    Path(f"{CACHE_DB}{suffix}").unlink(missing_ok=True)
+            except OSError as unlink_exc:
+                _error(f"Could not remove the damaged cache index: {unlink_exc}")
+            click.echo("Warning: the cache index was damaged and has been removed.", err=True)
 
     # Files the index does not list are swept only from the app-owned default
     # directory, never from a user-chosen [cache] location.
