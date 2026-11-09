@@ -521,6 +521,9 @@ class PlaybackMixin(YTMHostBase):
             self.queue.set_radio_tracks(tracks)
             self.queue.radio_seeds = seeds
             self._refresh_queue_page()
+            # The track change that asked for this refill had nothing to
+            # prefetch. Not exclusive: a play may be awaiting a running prefetch.
+            self._prefetch_next_track(exclusive=False)
             return
 
         self.queue.clear()
@@ -705,7 +708,7 @@ class PlaybackMixin(YTMHostBase):
         except Exception:
             logger.debug("Failed to prefetch next track", exc_info=True)
 
-    def _prefetch_next_track(self) -> None:
+    def _prefetch_next_track(self, *, exclusive: bool = True) -> None:
         """Prefetch the next track's stream URL in the background.
 
         Called after a new track starts playing so that hitting "next"
@@ -720,7 +723,7 @@ class PlaybackMixin(YTMHostBase):
                 self.run_worker(
                     self.stream_resolver.prefetch(next_id),
                     group="prefetch",
-                    exclusive=True,
+                    exclusive=exclusive,
                 )
 
     def _refill_queue(self) -> None:
@@ -731,9 +734,13 @@ class PlaybackMixin(YTMHostBase):
             return
         if self.queue.remaining_tracks > 3:
             return
-        for worker in self.workers:
-            if worker.group == "queue_extend" and worker.is_running:
-                return
+        # A refill started for an earlier queue or before a Stop has its result
+        # dropped, so it must not hold this one back; run_worker cancels it.
+        owner = (self.queue.generation, getattr(self, "_queue_stop_generation", 0))
+        if getattr(self, "_refill_owner", None) == owner and any(
+            worker.group == "queue_extend" and worker.is_running for worker in self.workers
+        ):
+            return
 
         all_tracks = self.queue.tracks
         current_idx = self.queue.real_index
@@ -746,6 +753,7 @@ class PlaybackMixin(YTMHostBase):
         if not seeds:
             return
 
+        self._refill_owner = owner
         self.run_worker(
             self._fetch_and_play_radio(seeds, append=True),
             group="queue_extend",

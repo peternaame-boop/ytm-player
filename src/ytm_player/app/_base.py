@@ -113,6 +113,7 @@ if TYPE_CHECKING:
         _play_request: int
         _active_stop_generation: int
         _queue_stop_generation: int
+        _refill_owner: tuple[int, int] | None
         _handled_end_attempt: int
         _recovery_generation: int | None
         _handled_error_attempt: int
