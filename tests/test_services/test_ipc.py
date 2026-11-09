@@ -18,6 +18,7 @@ from ytm_player.ipc import (
     get_running_pid,
     is_tui_running,
     remove_pid,
+    reply_now,
     try_claim_pid,
 )
 
@@ -750,3 +751,62 @@ def test_whitelist_matches_handler_cases():
     text = src_path.read_text(encoding="utf-8")
     cases = set(re.findall(r'case "(\w+)":', text))
     assert cases == set(_VALID_COMMANDS)
+
+
+class TestIPCEarlyReply:
+    """A handler can reply before its work finishes (#201); all platforms via TCP."""
+
+    @pytest.fixture
+    async def tcp_server(self, monkeypatch):
+        tmp_dir = Path(tempfile.mkdtemp(prefix="ytm-ipc-"))
+        port_file = tmp_dir / "ipc_port"
+        release = asyncio.Event()
+        finished: list[str] = []
+
+        async def handler(command: str, args: dict) -> dict:
+            reply_now({"ok": True, "early": True})
+            await release.wait()
+            finished.append(command)
+            return {"ok": True, "late": True}
+
+        server = IPCServer(handler)
+        import ytm_player.config.paths as paths_mod
+
+        monkeypatch.setattr(paths_mod, "IPC_PORT_FILE", port_file)
+        await server._start_tcp()
+        port = int(port_file.read_text(encoding="utf-8").strip())
+        token = port_file.with_name("ipc_token").read_text(encoding="utf-8").strip()
+        try:
+            yield port, token, release, finished
+        finally:
+            release.set()
+            if server._server is not None:
+                server._server.close()
+                await server._server.wait_closed()
+            port_file.unlink(missing_ok=True)
+            port_file.with_name("ipc_token").unlink(missing_ok=True)
+            try:
+                tmp_dir.rmdir()
+            except OSError:
+                pass
+
+    async def test_reply_arrives_while_the_handler_is_still_working(self, tcp_server):
+        port, token, release, finished = tcp_server
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write((json.dumps({"command": "next", "args": {}, "token": token}) + "\n").encode())
+        await writer.drain()
+
+        first = json.loads(await asyncio.wait_for(reader.readline(), timeout=5))
+        assert first == {"ok": True, "early": True}
+        assert finished == []
+
+        # Once the handler finishes, its own return value is not sent as a second line.
+        release.set()
+        rest = await asyncio.wait_for(reader.read(), timeout=5)
+        assert rest == b""
+        assert finished == ["next"]
+        writer.close()
+        await writer.wait_closed()
+
+    def test_reply_now_outside_a_request_does_nothing(self):
+        reply_now({"ok": True})

@@ -17,6 +17,7 @@ import os
 import secrets
 import socket
 import sys
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -382,6 +383,22 @@ def _read_token() -> str | None:
 # Handler signature: async (command: str, args: dict) -> dict
 IPCHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
+# Set by IPCServer while it awaits its handler: sends that request's reply.
+_reply_hook: ContextVar[Callable[[dict[str, Any]], None] | None] = ContextVar(
+    "ipc_reply_hook", default=None
+)
+
+
+def reply_now(payload: dict[str, Any]) -> None:
+    """Send the current IPC request's reply before its handler finishes.
+
+    For commands whose work can outlast the CLI's timeout. The server then
+    drops the handler's own return value. A no-op outside an IPC request.
+    """
+    hook = _reply_hook.get()
+    if hook is not None:
+        hook(payload)
+
 
 class IPCServer:
     """Async IPC server for CLI commands.
@@ -473,6 +490,16 @@ class IPCServer:
     async def _client_connected(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        replied = False
+
+        def reply(payload: dict[str, Any]) -> None:
+            nonlocal replied
+            if replied:
+                return
+            replied = True
+            # No await: the handler goes on with its work in the same step.
+            writer.write((json.dumps(payload) + "\n").encode("utf-8"))
+
         try:
             # Newline-delimited framing: read exactly one JSON line. readline()
             # loops until it sees "\n" (or EOF), so fragmented writes are
@@ -519,16 +546,22 @@ class IPCServer:
             if not isinstance(args, dict):
                 args = {}
 
-            response = await self._handler(command, args)
-            await self._respond(writer, response)
+            hook = _reply_hook.set(reply)
+            try:
+                response = await self._handler(command, args)
+            finally:
+                _reply_hook.reset(hook)
+            if not replied:
+                await self._respond(writer, response)
         except asyncio.TimeoutError:
             logger.debug("IPC client timed out")
         except Exception:
             logger.debug("IPC client error", exc_info=True)
-            try:
-                await self._respond(writer, {"ok": False, "error": "internal error"})
-            except Exception:
-                pass
+            if not replied:
+                try:
+                    await self._respond(writer, {"ok": False, "error": "internal error"})
+                except Exception:
+                    pass
         finally:
             writer.close()
             try:
