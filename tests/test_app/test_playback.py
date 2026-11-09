@@ -803,6 +803,46 @@ class TestTrackEndFinalize:
         host._play_next.assert_awaited_once()
 
 
+class TestQueueExhausted:
+    """#176: the media integrations must not keep reporting Playing at end of queue."""
+
+    def _host(self, *, autoplay: bool = False):
+        host = _fresh_playback_host()
+        host.settings.playback.autoplay = autoplay
+        host.mpris = MagicMock()
+        host.mpris.update_playback_status = AsyncMock()
+        host.mac_media = MagicMock()
+        host.mac_media.update_playback_status = AsyncMock()
+        return host
+
+    async def test_natural_end_reports_stopped(self):
+        host = self._host()
+
+        await host._play_next(ended_track={"video_id": "last"})
+
+        host.mpris.update_playback_status.assert_awaited_once_with("Stopped")
+        host.mac_media.update_playback_status.assert_awaited_once_with("Stopped")
+
+    async def test_natural_end_with_no_autoplay_tracks_reports_stopped(self):
+        host = self._host(autoplay=True)
+        host.ytmusic = MagicMock()
+        host.ytmusic.get_radio = AsyncMock(return_value=[])
+
+        await host._play_next(ended_track={"video_id": "last"})
+
+        host.mpris.update_playback_status.assert_awaited_once_with("Stopped")
+
+    async def test_skip_on_last_track_keeps_status(self):
+        """Pressing next on the last track reaches the same branch with audio still playing."""
+        host = self._host()
+        host.player.current_track = {"video_id": "last"}
+
+        await host._play_next()
+
+        host.mpris.update_playback_status.assert_not_awaited()
+        host.mac_media.update_playback_status.assert_not_awaited()
+
+
 class TestHistoryArming:
     def _stream_info(self):
         from ytm_player.services.stream import StreamInfo

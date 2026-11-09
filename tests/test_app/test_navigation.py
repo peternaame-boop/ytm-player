@@ -9,6 +9,7 @@ The two bugs we're guarding against:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from ytm_player.app._navigation import PAGE_NAMES, NavigationMixin
@@ -43,6 +44,9 @@ def _fresh_nav_host() -> NavigationMixin:
     nav._sidebar_per_page = {}
     nav._sidebar_default = True
     nav._lyrics_sidebar_open = False
+    nav._nav_idle = asyncio.Event()
+    nav._nav_idle.set()
+    nav._nav_pending = None
 
     # Stub the methods navigate_to calls on self.
     container = MagicMock()
