@@ -256,6 +256,11 @@ class YTMPlayerApp(
 
         # Monotonic counter making each context page's widget id unique.
         self._context_seq: int = 0
+        # Page-swap guard (#145): cleared while navigate_to swaps pages; the
+        # latest request that arrives meanwhile waits in _nav_pending.
+        self._nav_idle = asyncio.Event()
+        self._nav_idle.set()
+        self._nav_pending: tuple[str, dict[str, Any]] | None = None
 
         # Track position tracking for history logging.
         self._track_start_position: float = 0.0
