@@ -137,7 +137,7 @@ class _ActionItem(ListItem):
         self._label = label
 
     def compose(self) -> ComposeResult:
-        yield Label(self._label)
+        yield Label(self._label, markup=False)
 
 
 class ActionsPopup(BasePopup[str | None]):
@@ -217,7 +217,7 @@ class ActionsPopup(BasePopup[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(self._title_text, id="actions-title")
+            yield Static(self._title_text, id="actions-title", markup=False)
             yield ListView(
                 *[_ActionItem(aid, label) for aid, label in self._actions],
                 id="actions-list",

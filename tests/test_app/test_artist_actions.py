@@ -141,7 +141,7 @@ class TestPlayArtistTopSongs:
         host._replace_queue_and_play.assert_awaited_once()
         call_kwargs = host._replace_queue_and_play.call_args[1]
         assert call_kwargs.get("shuffle") is None
-        host.notify.assert_any_call("Playing top songs from Artist X", timeout=4)
+        host.notify.assert_any_call("Playing top songs from Artist X", timeout=4, markup=False)
 
     async def test_background_fetch_triggered(self):
         """When songs.browseId present, triggers background fetch."""
@@ -437,6 +437,7 @@ class TestPlayPlaylist:
         host.ytmusic = MagicMock()
         host.ytmusic.get_playlist = AsyncMock(return_value=get_playlist_return or {})
         host._replace_queue_and_play = AsyncMock()
+        host.play_track = AsyncMock()
         host.queue.shuffle_enabled = False
         host.notify = MagicMock()
         host.run_worker = MagicMock()
@@ -456,7 +457,7 @@ class TestPlayPlaylist:
         host._replace_queue_and_play.assert_awaited_once()
         kwargs = host._replace_queue_and_play.call_args[1]
         assert kwargs["entity_id"] == "PL1"
-        host.notify.assert_any_call("Playing: My Playlist", timeout=4)
+        host.notify.assert_any_call("Playing: My Playlist", timeout=4, markup=False)
 
     async def test_empty_playlist_warns(self):
         host = self._make_host(get_playlist_return={"tracks": [], "trackCount": 0})

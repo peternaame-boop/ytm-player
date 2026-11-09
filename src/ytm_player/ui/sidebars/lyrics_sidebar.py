@@ -55,7 +55,7 @@ class _LyricLine(Static):
     """
 
     def __init__(self, text: str, timestamp: float | None = None, **kwargs: Any) -> None:
-        super().__init__(text, **kwargs)
+        super().__init__(text, markup=False, **kwargs)
         self._text = text
         self._timestamp = timestamp
 
@@ -144,7 +144,7 @@ class LyricsSidebar(Widget):
         self._transliteration_enabled: bool = False
 
     def compose(self) -> ComposeResult:
-        yield Label("", id="ls-title", classes="ls-header")
+        yield Label("", id="ls-title", classes="ls-header", markup=False)
         yield Label("No track playing", id="ls-status", classes="ls-status")
         yield VerticalScroll(id="ls-scroll", classes="ls-scroll")
 
@@ -367,7 +367,7 @@ class LyricsSidebar(Widget):
             self._lyric_widgets.append(widget)
             children.append(widget)
             if self._transliteration_enabled and text and has_non_ascii(text):
-                tl = Static(transliterate_line(text))
+                tl = Static(transliterate_line(text), markup=False)
                 tl.add_class("lyrics-transliterated")
                 children.append(tl)
         scroll.mount(*children)
@@ -387,7 +387,7 @@ class LyricsSidebar(Widget):
             self._lyric_widgets.append(widget)
             children.append(widget)
             if self._transliteration_enabled and line and has_non_ascii(line):
-                tl = Static(transliterate_line(line))
+                tl = Static(transliterate_line(line), markup=False)
                 tl.add_class("lyrics-transliterated")
                 children.append(tl)
         scroll.mount(*children)

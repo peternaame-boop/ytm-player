@@ -178,7 +178,7 @@ class LibraryPanel(Widget):
         self._items.insert(0, item)
         self._filtered_items.insert(0, item)
         full_text = self._format_item(item)
-        lbl = Static(self._render_text(full_text))
+        lbl = Static(self._render_text(full_text), markup=False)
         list_view = self.query_one(ListView)
         list_view.insert(0, [ListItem(lbl)])
         count_label = self.query_one(".panel-count", Static)
@@ -240,7 +240,7 @@ class LibraryPanel(Widget):
         list_view.clear()
         for item in items:
             full_text = self._format_item(item)
-            lbl = Static(self._render_text(full_text))
+            lbl = Static(self._render_text(full_text), markup=False)
             list_view.append(ListItem(lbl))
         count_label = self.query_one(".panel-count", Static)
         total = len(self._items)
@@ -650,4 +650,4 @@ class PlaylistSidebar(Widget):
         if copy_to_clipboard(link):
             self.app.notify("Link copied", timeout=2)
         else:
-            self.app.notify(link, timeout=5)
+            self.app.notify(link, timeout=5, markup=False)

@@ -95,7 +95,7 @@ class CountryPickerModal(BasePopup[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Pick a region", id="picker-title")
-            yield Static(f"Current: {self._current_code}", id="picker-status")
+            yield Static(f"Current: {self._current_code}", id="picker-status", markup=False)
             yield Input(placeholder="Filter by code or name…", id="filter-input")
             yield ListView(id="region-list")
 

@@ -358,6 +358,8 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     if not _HAS_SPOTIFY_DEPS:
         click.echo("Spotify import requires extra dependencies: pip install ytm-player[spotify]")
         return
+    from rich.text import Text
+
     console = Console()  # type: ignore[possibly-unbound]
 
     # Validate URL.
@@ -371,14 +373,18 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
         try:
             playlist_name, spotify_tracks = extract_spotify_tracks(spotify_url)
         except Exception as exc:
-            console.print(f"[red]Failed to fetch Spotify playlist:[/red] {exc}")
+            console.print(Text.assemble(("Failed to fetch Spotify playlist:", "red"), f" {exc}"))
             return
 
     if not spotify_tracks:
         console.print("[yellow]No tracks found in the playlist.[/yellow]")
         return
 
-    console.print(f'Fetched [bold]"{playlist_name}"[/bold] ({len(spotify_tracks)} tracks)')
+    console.print(
+        Text.assemble(
+            "Fetched ", (f'"{playlist_name}"', "bold"), f" ({len(spotify_tracks)} tracks)"
+        )
+    )
     console.print()
 
     # Step 2: Initialize YTM client.
@@ -388,7 +394,9 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
         brand_account = get_settings().general.brand_account_id or None
         ytmusic = YTMusic(str(auth_file), user=brand_account)
     except Exception as exc:
-        console.print(f"[red]Failed to initialize YouTube Music client:[/red] {exc}")
+        console.print(
+            Text.assemble(("Failed to initialize YouTube Music client:", "red"), f" {exc}")
+        )
         return
 
     # Step 3: Search & match.
@@ -410,10 +418,10 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     # Step 4: Resolve ambiguous matches interactively.
     for result in multiple:
         sp = result.spotify_track
-        console.print(f'── [bold]"{sp["name"]}"[/bold] by {sp["artist"]} ──')
+        console.print(Text.assemble("── ", (f'"{sp["name"]}"', "bold"), f" by {sp['artist']} ──"))
         console.print("Multiple matches:")
         for i, candidate in enumerate(result.candidates[:5], 1):
-            console.print(_display_candidate(i, candidate))
+            console.print(Text(_display_candidate(i, candidate)))
         skip_idx = len(result.candidates[:5]) + 1
         console.print(f"  {skip_idx}. Skip")
 
@@ -435,7 +443,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
     still_none = [r for r in results if r.match_type == MatchType.NONE]
     for result in still_none:
         sp = result.spotify_track
-        console.print(f'── [bold]"{sp["name"]}"[/bold] by {sp["artist"]} ──')
+        console.print(Text.assemble("── ", (f'"{sp["name"]}"', "bold"), f" by {sp['artist']} ──"))
         console.print("[red]No match found.[/red]")
         console.print("  1. Search with different query")
         console.print("  2. Enter video ID manually")
@@ -452,7 +460,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
 
             if custom_results:
                 for i, candidate in enumerate(custom_results, 1):
-                    console.print(_display_candidate(i, candidate))
+                    console.print(Text(_display_candidate(i, candidate)))
                 skip_idx = len(custom_results) + 1
                 console.print(f"  {skip_idx}. Skip")
                 pick = click.prompt("Choice", type=int, default=1, show_default=True)
@@ -488,7 +496,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
 
     # Step 8: Create the YTM playlist and add tracks.
     console.print()
-    with console.status(f'Creating playlist "{final_name}" on YouTube Music...'):
+    with console.status(Text(f'Creating playlist "{final_name}" on YouTube Music...')):
         try:
             playlist_id = ytmusic.create_playlist(
                 final_name,
@@ -502,7 +510,7 @@ def run_import(spotify_url: str, auth_file: Path) -> None:
                 return
 
         except Exception as exc:
-            console.print(f"[red]Failed to create playlist:[/red] {exc}")
+            console.print(Text.assemble(("Failed to create playlist:", "red"), f" {exc}"))
             return
 
     console.print(

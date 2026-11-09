@@ -50,7 +50,8 @@ class SelectionInfoBar(Widget):
         self._inner: Static | None = None
 
     def compose(self) -> ComposeResult:
-        self._inner = Static("", id="selection-info-text")
+        # markup=False: the bar shows outside text (track and playlist names).
+        self._inner = Static("", id="selection-info-text", markup=False)
         yield self._inner
 
     def watch_text(self, old: str, new: str) -> None:

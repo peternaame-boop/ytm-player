@@ -147,7 +147,7 @@ class PlaylistPicker(BasePopup[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Add to Playlist", id="picker-title")
-            yield Static("Loading playlists...", id="picker-status")
+            yield Static("Loading playlists...", id="picker-status", markup=False)
             yield Input(placeholder="Filter playlists...", id="filter-input")
             yield ListView(id="playlist-list")
 
@@ -281,7 +281,10 @@ class PlaylistPicker(BasePopup[str | None]):
         from ytm_player.services.ytmusic import mutation_failure_suffix
 
         self.notify(
-            f"{prefix} — {mutation_failure_suffix('timeout')}", severity="warning", timeout=8
+            f"{prefix} — {mutation_failure_suffix('timeout')}",
+            severity="warning",
+            timeout=8,
+            markup=False,
         )
         status.update(f"Unconfirmed — close this, reload {check} and check before retrying")
 
@@ -400,6 +403,7 @@ class PlaylistPicker(BasePopup[str | None]):
                 self.notify(
                     f"Created '{name}' but couldn't add tracks — {mutation_failure_suffix(result)}",
                     severity="warning",
+                    markup=False,
                 )
                 status.update("Add failed")
                 self._release()
@@ -409,7 +413,7 @@ class PlaylistPicker(BasePopup[str | None]):
 
         except Exception:
             logger.exception("Failed to add tracks to the created playlist %r", playlist_id)
-            self.notify(f"Created '{name}' but couldn't add tracks", severity="error")
+            self.notify(f"Created '{name}' but couldn't add tracks", severity="error", markup=False)
             status.update("Error")
             self._release()
 
@@ -431,7 +435,7 @@ class PlaylistPicker(BasePopup[str | None]):
         caller keeps its marks).
         """
         await self._refresh_sidebar()
-        self.notify(f"Created '{name}' with nothing added", severity="information")
+        self.notify(f"Created '{name}' with nothing added", severity="information", markup=False)
         self.dismiss(None)
 
     async def _finish_created(self, playlist_id: str, name: str) -> None:
@@ -459,12 +463,17 @@ class PlaylistPicker(BasePopup[str | None]):
             self.notify(
                 f"Added {len(self.video_ids)} {track_word} to '{name}'",
                 severity="information",
+                markup=False,
             )
             self.dismiss(playlist_id)
 
         except Exception:
             logger.exception("Failed to finish adding tracks to the created playlist")
-            self.notify(f"Created '{name}' but couldn't finish adding tracks", severity="error")
+            self.notify(
+                f"Created '{name}' but couldn't finish adding tracks",
+                severity="error",
+                markup=False,
+            )
             self.query_one("#picker-status", Static).update("Error")
 
     def _tracks_for_append(self, set_video_ids: dict[str, str]) -> list[dict[str, Any]]:
@@ -556,6 +565,7 @@ class PlaylistPicker(BasePopup[str | None]):
                 self.notify(
                     f"Couldn't add to '{title}' — {mutation_failure_suffix(result)}",
                     severity="error",
+                    markup=False,
                 )
                 status.update("Error")
                 self._release()
@@ -605,11 +615,12 @@ class PlaylistPicker(BasePopup[str | None]):
             self.notify(
                 f"Added {len(self.video_ids)} {track_word} to '{title}'",
                 severity="information",
+                markup=False,
             )
             self.dismiss(playlist_id)
 
         except Exception:
             logger.exception("Failed to add tracks to playlist %r", playlist_id)
-            self.notify(f"Failed to add to '{title}'", severity="error")
+            self.notify(f"Failed to add to '{title}'", severity="error", markup=False)
             status.update("Error")
             self._release()

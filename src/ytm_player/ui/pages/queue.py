@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.reactive import reactive
@@ -83,7 +84,7 @@ class QueuePage(TrackFilterHost, Widget):
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="queue-header", classes="queue-now-playing")
-        yield Static("", id="queue-source", classes="queue-source")
+        yield Static("", id="queue-source", classes="queue-source", markup=False)
         yield Label("Queue is empty.", id="queue-empty", classes="queue-empty")
         yield TrackTable(show_album=False, id="queue-table", queue_entry_keys=True)
         yield Static("", id="queue-footer", classes="queue-footer")
@@ -146,8 +147,10 @@ class QueuePage(TrackFilterHost, Widget):
         if current_track:
             title = current_track.get("title", "Unknown")
             artist = current_track.get("artist", "Unknown")
-            header.mount(Label(f"Now Playing: {title}", classes="queue-now-playing-title"))
-            header.mount(Label(artist, classes="queue-now-playing-artist"))
+            header.mount(
+                Label(f"Now Playing: {title}", classes="queue-now-playing-title", markup=False)
+            )
+            header.mount(Label(artist, classes="queue-now-playing-artist", markup=False))
             header.display = True
         else:
             header.display = False
@@ -182,8 +185,10 @@ class QueuePage(TrackFilterHost, Widget):
         if current_track:
             title = current_track.get("title", "Unknown")
             artist = current_track.get("artist", "Unknown")
-            header.mount(Label(f"Now Playing: {title}", classes="queue-now-playing-title"))
-            header.mount(Label(artist, classes="queue-now-playing-artist"))
+            header.mount(
+                Label(f"Now Playing: {title}", classes="queue-now-playing-title", markup=False)
+            )
+            header.mount(Label(artist, classes="queue-now-playing-artist", markup=False))
             header.display = True
         else:
             header.display = False
@@ -219,7 +224,7 @@ class QueuePage(TrackFilterHost, Widget):
             else:
                 summary = f"{titles[0]}, {titles[1]} + {len(titles) - 2} more"
             source.update(f"Generated from: {summary}")
-            source.tooltip = "Generated from:\n" + "\n".join(f"  • {t}" for t in titles)
+            source.tooltip = Text("Generated from:\n" + "\n".join(f"  • {t}" for t in titles))
             source.display = True
         else:
             source.update("")

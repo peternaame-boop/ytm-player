@@ -28,7 +28,7 @@ If you need to skip hooks for a WIP commit, use `git commit --no-verify` — but
 pytest                                           # full suite
 pytest --cov=ytm_player --cov-report=term-missing  # with coverage
 pytest tests/test_services/test_queue.py         # one file
-pytest tests/test_services/test_queue.py::test_add_track -v  # one test
+pytest tests/test_services/test_queue.py::TestOperations::test_add_at_position -v  # one test
 ```
 
 UI code (`src/ytm_player/ui/*`) is excluded from coverage; services and
@@ -135,16 +135,16 @@ border-bottom: solid $border;
 color: $primary;
 ```
 
-Hardcoded hex colors break theme switching and make custom `theme.toml` files inconsistent. The exception is `theme.py:ThemeColors` itself, which defines the defaults. Lyrics-current color is themed via `lyrics_current` (default `#2ecc71`) — even that goes through the theme system, never hardcoded in widget CSS.
+Hardcoded hex colors break theme switching and make custom `theme.toml` files inconsistent. The exception is `theme.py:ThemeColors` itself, which defines the defaults. Lyrics-current color is themed via `lyrics_current` (defaults to the active theme's accent, then primary, then `#ff4e45`) — even that goes through the theme system, never hardcoded in widget CSS.
 
 When adding a new UI element with a color requirement that doesn't fit existing variables, propose adding a new variable to `ThemeColors` (with a sensible default) rather than hardcoding.
 
 ## Architecture pointers
 
 - `app/` — main app split into mixins (lifecycle, playback, navigation, etc.)
-- `services/` — backend singletons (Player, QueueManager, YTMusicService, etc.)
+- `services/` — backend services (Player, QueueManager, YTMusicService, etc.)
 - `ui/` — Textual widgets (pages, sidebars, popups, widgets)
-- `config/` — settings, keymap, theme, paths
+- `config/` — settings, keymap, paths (theme lives in `ui/theme.py`)
 
 For deeper context, read `CLAUDE.md` in the repo root — it's the
 project's living architecture doc.

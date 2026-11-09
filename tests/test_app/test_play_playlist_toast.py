@@ -43,4 +43,4 @@ async def test_play_playlist_toast_reflects_shuffle_state(saved_pref, expected_m
 
     await TrackActionsMixin._play_playlist(host, "PL1", "Pangaea")
 
-    host.notify.assert_called_once_with(expected_message, timeout=4)
+    host.notify.assert_called_once_with(expected_message, timeout=4, markup=False)

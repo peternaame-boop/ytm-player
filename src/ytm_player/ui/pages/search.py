@@ -124,7 +124,7 @@ class SearchResultPanel(Widget):
 
         for item in self._items:
             label = self._format_item(item)
-            list_view.append(ListItem(Label(label)))
+            list_view.append(ListItem(Label(label, markup=False)))
 
         count_label = self.query_one(".panel-count", Static)
         count_label.update(f"{len(self._items)} result{'s' if len(self._items) != 1 else ''}")
@@ -244,7 +244,7 @@ class SuggestionList(Widget):
             return
 
         for text in suggestions:
-            list_view.append(ListItem(Label(text)))
+            list_view.append(ListItem(Label(text, markup=False)))
         self.add_class("visible")
 
     def hide(self) -> None:
@@ -987,7 +987,7 @@ class SearchPage(Widget):
                     if copy_to_clipboard(link):
                         host.notify("Link copied", timeout=2)
                     else:
-                        host.notify(link, timeout=5)
+                        host.notify(link, timeout=5, markup=False)
                 return
 
             host.run_worker(host._dispatch_entity_action(action_id, item, item_type))

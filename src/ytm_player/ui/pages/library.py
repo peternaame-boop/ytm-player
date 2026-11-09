@@ -241,7 +241,7 @@ class LibraryPage(TrackFilterHost, Widget):
             header.display = True
             title_row = Horizontal(classes="content-title-row")
             await header.mount(title_row)
-            await title_row.mount(Label(title, classes="content-title"))
+            await title_row.mount(Label(title, classes="content-title", markup=False))
             await title_row.mount(Static("[▶ Start Radio]", id="start-radio-btn", markup=True))
             await title_row.mount(Static(classes="content-title-spacer"))
             host = cast("YTMHostBase", self.app)
@@ -251,11 +251,11 @@ class LibraryPage(TrackFilterHost, Widget):
             await title_row.mount(Static(lock_label, id="shuffle-lock-btn", classes=lock_classes))
             description = (data.get("description") or "").strip()
             if description:
-                await header.mount(Label(description, classes="content-description"))
+                await header.mount(Label(description, classes="content-description", markup=False))
             subtitle = build_playlist_subtitle(owner, privacy, year, track_count)
             if total_count > track_count:
                 subtitle += f" (loading {total_count} total\u2026)"
-            self._subtitle_label = Label(subtitle, classes="content-subtitle")
+            self._subtitle_label = Label(subtitle, classes="content-subtitle", markup=False)
             await header.mount(self._subtitle_label)
             unavailable = len(raw_tracks) - track_count
             if unavailable:
@@ -302,7 +302,7 @@ class LibraryPage(TrackFilterHost, Widget):
             await header.remove_children()
             title_row = Horizontal(classes="content-title-row")
             await header.mount(title_row)
-            await title_row.mount(Label(title, classes="content-title"))
+            await title_row.mount(Label(title, classes="content-title", markup=False))
             await title_row.mount(Static("[▶ Start Radio]", id="start-radio-btn", markup=True))
             await title_row.mount(Static(classes="content-title-spacer"))
             host = cast("YTMHostBase", self.app)
@@ -312,12 +312,12 @@ class LibraryPage(TrackFilterHost, Widget):
             lock_classes = "locked" if locked else ""
             await title_row.mount(Static(lock_label, id="shuffle-lock-btn", classes=lock_classes))
             if description:
-                await header.mount(Label(description, classes="content-description"))
+                await header.mount(Label(description, classes="content-description", markup=False))
             self._cached_privacy = privacy
             subtitle = build_playlist_subtitle(
                 self._cached_owner, privacy, self._cached_year, track_count
             )
-            self._subtitle_label = Label(subtitle, classes="content-subtitle")
+            self._subtitle_label = Label(subtitle, classes="content-subtitle", markup=False)
             await header.mount(self._subtitle_label)
         except Exception:
             logger.exception("Failed to refresh library header after edit")

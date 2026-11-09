@@ -1,4 +1,4 @@
-"""Spotify playlist import popup — Single (≤100) and Multi (100+) modes.
+"""Spotify playlist import popup with Single and Multi modes.
 
 Single mode: paste one Spotify URL → match → create YTM playlist.
 Multi mode: enter combined name + number of parts → paste N URLs →
@@ -13,6 +13,7 @@ import re
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.events import Click
 from textual.message import Message
 from textual.widgets import (
@@ -53,7 +54,11 @@ class _ResultItem(ListItem):
         self._text = text
 
     def compose(self) -> ComposeResult:
-        yield Label(f"[{self._style}]{self._symbol}[/{self._style}] {self._text}")
+        yield Label(
+            Content.from_markup(
+                f"[{self._style}]{self._symbol}[/{self._style}] $text", text=self._text
+            )
+        )
 
 
 class _CandidateItem(ListItem):
@@ -72,7 +77,7 @@ class _CandidateItem(ListItem):
             dur_sec = self.candidate.get("duration_seconds", 0)
             dur = f"{dur_sec // 60}:{dur_sec % 60:02d}" if dur_sec else ""
         dur_part = f" ({dur})" if dur else ""
-        yield Label(f"  {self._index}. {title} — {artist_str}{dur_part}")
+        yield Label(f"  {self._index}. {title} — {artist_str}{dur_part}", markup=False)
 
 
 class _SkipItem(ListItem):
@@ -123,7 +128,7 @@ class _TabLabel(Static):
 
 
 class SpotifyImportPopup(BasePopup[str | None]):
-    """Two-tab Spotify import: Single (≤100 tracks) and Multi (100+ tracks)."""
+    """Two-tab Spotify import: Single (one playlist) and Multi (several combined into one)."""
 
     DEFAULT_CSS = """
     SpotifyImportPopup > Vertical {
@@ -274,9 +279,9 @@ class SpotifyImportPopup(BasePopup[str | None]):
         with Vertical():
             yield Static("Import Spotify Playlist", id="si-title")
             with Horizontal(id="si-tab-bar"):
-                yield _TabLabel("Single (≤100)", "single")
+                yield _TabLabel("Single", "single")
                 yield _TabLabel("  |  ", "separator")
-                yield _TabLabel("Multi (100+)", "multi")
+                yield _TabLabel("Multi", "multi")
             yield Static("Paste a Spotify playlist URL and press Enter", id="si-status")
 
             # ── Single mode content ──
@@ -354,8 +359,8 @@ class SpotifyImportPopup(BasePopup[str | None]):
             single_content.display = False
             multi_content.display = True
             status.update(
-                "Split your 100+ track playlist into chunks of ≤100 on Spotify,\n"
-                "then enter the combined name and number of parts below"
+                "Combine several Spotify playlists (parts) into one playlist.\n"
+                "Enter the combined name and number of parts below"
             )
             # Reset multi URL container.
             self.query_one("#si-multi-urls", VerticalScroll).remove_children()
@@ -425,6 +430,7 @@ class SpotifyImportPopup(BasePopup[str | None]):
             "Get free credentials at [bold]developer.spotify.com/dashboard[/bold]\n"
             "Enter Client ID and Client Secret below:"
         )
+        self.query_one("#si-single-content").display = True
         self.query_one("#si-url-input", Input).display = False
         self.query_one("#si-progress", ProgressBar).display = False
 
@@ -475,7 +481,6 @@ class SpotifyImportPopup(BasePopup[str | None]):
             _fuzzy_score,
             extract_spotify_tracks,
             get_video_id,
-            has_spotify_creds,
         )
 
         status = self.query_one("#si-status", Static)
@@ -487,7 +492,11 @@ class SpotifyImportPopup(BasePopup[str | None]):
             playlist_name, spotify_tracks = await asyncio.to_thread(extract_spotify_tracks, url)
         except Exception as exc:
             color = get_theme().error
-            status.update(f"[{color}]Failed to fetch playlist:[/{color}] {exc}")
+            status.update(
+                Content.from_markup(
+                    f"[{color}]Failed to fetch playlist:[/{color}] $error", error=str(exc)
+                )
+            )
             return
 
         if not spotify_tracks:
@@ -496,11 +505,6 @@ class SpotifyImportPopup(BasePopup[str | None]):
             return
 
         self._playlist_name = playlist_name
-
-        # Detect truncation.
-        if len(spotify_tracks) == 100 and not has_spotify_creds():
-            self.call_later(self._show_creds_prompt)
-            return
 
         total = len(spotify_tracks)
         progress_bar.update(total=total, progress=0)
@@ -659,7 +663,12 @@ class SpotifyImportPopup(BasePopup[str | None]):
                 part_name, spotify_tracks = await asyncio.to_thread(extract_spotify_tracks, url)
             except Exception as exc:
                 color = get_theme().error
-                status.update(f"[{color}]Failed to fetch part {part_num}:[/{color}] {exc}")
+                status.update(
+                    Content.from_markup(
+                        f"[{color}]Failed to fetch part {part_num}:[/{color}] $error",
+                        error=str(exc),
+                    )
+                )
                 return
 
             if not spotify_tracks:
@@ -778,9 +787,13 @@ class SpotifyImportPopup(BasePopup[str | None]):
 
         status = self.query_one("#si-status", Static)
         status.update(
-            f"[bold]Uncertain match ({current}/{total_uncertain}):[/bold] "
-            f'"{sp["name"]}" by {sp["artist"]}\n'
-            f"Select the correct match or skip:"
+            Content.from_markup(
+                f"[bold]Uncertain match ({current}/{total_uncertain}):[/bold] "
+                '"$name" by $artist\n'
+                "Select the correct match or skip:",
+                name=sp["name"],
+                artist=sp["artist"],
+            )
         )
 
         results_list = self.query_one("#si-results", ListView)
@@ -873,7 +886,7 @@ class SpotifyImportPopup(BasePopup[str | None]):
 
         try:
             desc = f"Imported from Spotify: {self._playlist_name}"
-            status.update(f"Creating '{name}' on YouTube Music...")
+            status.update(Content(f"Creating '{name}' on YouTube Music..."))
             create_status, playlist_id = await ytmusic_svc.create_playlist(name, desc)
             if create_status != "success" or not playlist_id:
                 color = get_theme().error
@@ -924,6 +937,7 @@ class SpotifyImportPopup(BasePopup[str | None]):
                     self.notify(
                         f"Created '{name}' with {total_ids} tracks",
                         severity="information",
+                        markup=False,
                     )
                 elif failed_batches == len(batches):
                     # All batches failed. If they all failed for the same
@@ -935,12 +949,14 @@ class SpotifyImportPopup(BasePopup[str | None]):
                         self.notify(
                             f"Created '{name}' but couldn't add any tracks — {suffix}",
                             severity="error",
+                            markup=False,
                         )
                     else:
                         self.notify(
                             f"Created '{name}' but failed to add any tracks "
                             f"({len(batches)} batch(es) rejected)",
                             severity="error",
+                            markup=False,
                         )
                 else:
                     self.notify(
@@ -948,13 +964,14 @@ class SpotifyImportPopup(BasePopup[str | None]):
                         f"{added_total}/{total_ids} added "
                         f"({failed_batches} batch(es) failed)",
                         severity="warning",
+                        markup=False,
                     )
             self.dismiss(playlist_id)
 
         except Exception as exc:
             logger.exception("Failed to create playlist")
             color = get_theme().error
-            status.update(f"[{color}]Error:[/{color}] {exc}")
+            status.update(Content.from_markup(f"[{color}]Error:[/{color}] $error", error=str(exc)))
 
     # ── Cancel ───────────────────────────────────────────────────────
 
@@ -964,6 +981,5 @@ class SpotifyImportPopup(BasePopup[str | None]):
         Overrides ``BasePopup.action_cancel`` so both Escape and a backdrop
         click cancel in-flight import workers before dismissing.
         """
-        for worker in self.workers:
-            worker.cancel()
+        self.workers.cancel_node(self)
         self.dismiss(self._CANCEL_RESULT)

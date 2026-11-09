@@ -20,7 +20,7 @@ disclosure.
 
 In scope:
 - The `ytm-player` Python package
-- The CLI entry points (`ytm`, `ytm-player`)
+- The CLI entry points (`ytm`, `python -m ytm_player`)
 - IPC protocol (Unix socket / TCP fallback on Windows)
 - Auth file handling (cookies, OAuth tokens)
 

@@ -98,6 +98,7 @@ class PlaybackMixin(YTMHostBase):
                 f'Skipping "{title}" — no video ID (AI-generated streams are not supported).',
                 severity="warning",
                 timeout=3,
+                markup=False,
             )
             self._handle_play_failure(
                 exhausted_message="Multiple tracks unplayable — check if your account has access.",
@@ -179,6 +180,7 @@ class PlaybackMixin(YTMHostBase):
                 f"Playback failed.",
                 severity="error",
                 timeout=4,
+                markup=False,
             )
             self._handle_play_failure(
                 exhausted_message="Multiple tracks failed — stream resolver reset. Try playing again.",
@@ -225,11 +227,13 @@ class PlaybackMixin(YTMHostBase):
             if self._pending_resume_position > 0:
                 resume_position = self._pending_resume_position
                 try:
-                    await self.player.seek_absolute(resume_position)
+                    resumed = await self.player.seek_absolute(resume_position)
                 except Exception:
                     logger.debug("Failed to seek to resume position", exc_info=True)
                 else:
-                    if generation == self._play_generation and owns_request(self):
+                    # A seek the player dropped (stream still opening) did
+                    # not move the start position.
+                    if resumed and generation == self._play_generation and owns_request(self):
                         self._track_start_position = resume_position
                 if generation != self._play_generation or not owns_request(self):
                     return
@@ -398,6 +402,7 @@ class PlaybackMixin(YTMHostBase):
                 f'Couldn\'t play "{title}" — stream failed twice.',
                 severity="error",
                 timeout=4,
+                markup=False,
             )
             self._handle_play_failure(
                 exhausted_message="Multiple tracks failed — stream resolver reset. Try playing again.",
@@ -546,7 +551,7 @@ class PlaybackMixin(YTMHostBase):
         # already flowing. play_track() awaits the full stream resolve, so
         # placing this after it delayed the confirmation by however long
         # that took, instead of confirming as soon as it was actually true.
-        self.notify(f"Playing: {label}", timeout=4)
+        self.notify(f"Playing: {label}", timeout=4, markup=False)
         first = self.queue.next_track()
         if first:
             await self.play_track(first)
@@ -698,7 +703,7 @@ class PlaybackMixin(YTMHostBase):
                     msg = fmt.format(title=title, artist=artist, album=track.get("album", ""))
                 except (KeyError, ValueError):
                     msg = f"{title} — {artist}"
-                self.notify(msg, timeout=self.settings.notifications.timeout_seconds)
+                self.notify(msg, timeout=self.settings.notifications.timeout_seconds, markup=False)
         except Exception:
             logger.debug("Failed to show track change notification", exc_info=True)
 
@@ -1202,12 +1207,12 @@ class PlaybackMixin(YTMHostBase):
         title = track.get("title", video_id)
         if self.downloader.is_downloading(video_id):
             # The running writer keeps ownership; this press just reports it.
-            self.notify(f"Already downloading: {title}", timeout=3)
+            self.notify(f"Already downloading: {title}", timeout=3, markup=False)
             return
 
         already_downloaded = self.downloader.is_downloaded(video_id)
         if not already_downloaded:
-            self.notify(f"Downloading: {title}", timeout=3)
+            self.notify(f"Downloading: {title}", timeout=3, markup=False)
 
         result = await self.downloader.download(video_id)
         if result.success:
@@ -1235,10 +1240,11 @@ class PlaybackMixin(YTMHostBase):
                         f"Not retained in cache: {title} doesn't fit within the cache size limit.",
                         severity="warning",
                         timeout=6,
+                        markup=False,
                     )
                     return
             message = "Already downloaded." if already_downloaded else f"Downloaded: {title}"
-            self.notify(message, timeout=3)
+            self.notify(message, timeout=3, markup=False)
         else:
             error = result.error or "Unknown error"
-            self.notify(f"Download failed: {error}", severity="error", timeout=4)
+            self.notify(f"Download failed: {error}", severity="error", timeout=4, markup=False)

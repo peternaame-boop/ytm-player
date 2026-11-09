@@ -11,6 +11,7 @@ from textual.widget import Widget
 from textual.widgets import Static
 
 from ytm_player.app._base import YTMHostBase
+from ytm_player.app._ownership import unowned_scope
 from ytm_player.config import Action
 from ytm_player.ui.playback_bar import FooterBar
 
@@ -196,8 +197,12 @@ class NavigationMixin(YTMHostBase):
 
         # remove_children and mount are async; must await them.
         await container.remove_children()
-        page_widget = self._create_page(page_name, **kwargs)
-        await container.mount(page_widget)
+        # Mounting starts the page's message loop, which copies the current
+        # context: clear any playback request around it so the page's own
+        # plays are fresh requests, not stale nested calls of this one.
+        with unowned_scope():
+            page_widget = self._create_page(page_name, **kwargs)
+            await container.mount(page_widget)
         self._current_page = page_name
         self._current_page_kwargs = dict(kwargs)
         # A page swap moves the user back into the content pane; reset the

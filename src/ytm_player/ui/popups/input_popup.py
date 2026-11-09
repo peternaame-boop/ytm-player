@@ -41,7 +41,7 @@ class InputPopup(BasePopup[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(self._title, id="input-title")
+            yield Static(self._title, id="input-title", markup=False)
             yield Input(placeholder=self._placeholder, id="input-field")
 
     def on_mount(self) -> None:

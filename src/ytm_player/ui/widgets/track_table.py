@@ -562,15 +562,17 @@ class TrackTable(DataTable):
 
         from ytm_player.utils.bidi import isolate_bidi, reorder_rtl_line
 
-        cells: list[str | int] = [self._mark_glyph(track.get("_original_index", index))]
+        cells: list[Text | str | int] = [self._mark_glyph(track.get("_original_index", index))]
         if self._show_index:
             # Always show original playlist position, not current row number.
             orig = track.get("_original_index", index)
             cells.append(str(orig + 1))
-        cells.append(isolate_bidi(reorder_rtl_line(title)))
-        cells.append(isolate_bidi(reorder_rtl_line(artist)))
+        # Text, not str: DataTable parses a str cell as markup, and this is
+        # outside text ("[live]" would vanish, "[/x]" would raise).
+        cells.append(Text(isolate_bidi(reorder_rtl_line(title or ""))))
+        cells.append(Text(isolate_bidi(reorder_rtl_line(artist))))
         if self._show_album:
-            cells.append(isolate_bidi(reorder_rtl_line(album)))
+            cells.append(Text(isolate_bidi(reorder_rtl_line(album))))
         cells.append(format_duration(duration) if duration else "--:--")
 
         video_id = track.get("video_id", f"row_{index}")
@@ -665,10 +667,11 @@ class TrackTable(DataTable):
             cells: dict[str, Any] = {}
             cells["mark"] = self._mark_glyph(track.get("_original_index", row_index))
             cells["index"] = str(track.get("_original_index", row_index) + 1)
-            cells["title"] = isolate_bidi(reorder_rtl_line(title))
-            cells["artist"] = isolate_bidi(reorder_rtl_line(artist))
+            # Text, not str: a str cell would be parsed as markup.
+            cells["title"] = Text(isolate_bidi(reorder_rtl_line(title or "")))
+            cells["artist"] = Text(isolate_bidi(reorder_rtl_line(artist)))
             if self._show_album:
-                cells["album"] = isolate_bidi(reorder_rtl_line(album))
+                cells["album"] = Text(isolate_bidi(reorder_rtl_line(album)))
             cells["duration"] = _format_duration(duration) if duration else "--:--"
             return cells
 
@@ -680,7 +683,7 @@ class TrackTable(DataTable):
             column (left of #). The # column keeps its original number.
             """
             plain = _plain_cells(track, row_index)
-            return {key: Text(value, style=style) for key, value in plain.items()}
+            return {key: Text(str(value), style=style) for key, value in plain.items()}
 
         def _set_row_label(row_key: RowKey, label_text: Text) -> None:
             """Mutate Textual's per-row label slot. Internal access
@@ -1100,11 +1103,13 @@ class TrackTable(DataTable):
         if event.button == 3:
             event.stop()
             event.prevent_default()
-            self._right_clicked = True
-            self._popup_pending = True
             meta = event.style.meta
             row_idx = meta.get("row") if meta else None
             if row_idx is not None and 0 <= row_idx < len(self._tracks):
+                # Armed only here: a right-click on the header or on empty
+                # space opens no menu, so it must not eat the next selection.
+                self._right_clicked = True
+                self._popup_pending = True
                 track = self._tracks[row_idx]
                 col = self._column_at_x(int(event.x + self.scroll_x))
                 col_key = col.key.value if col and col.key else ""
