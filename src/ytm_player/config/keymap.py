@@ -190,7 +190,14 @@ DEFAULT_BINDINGS: dict[str, list[str]] = {
 
 
 def parse_key_sequence(raw: str) -> tuple[str, ...]:
-    return tuple(raw.strip().split())
+    return tuple(_canonical_key(key) for key in raw.strip().split())
+
+
+def _canonical_key(key: str) -> str:
+    """Spell Shift+letter the way the app reads it: "S-l" binds "L" (#178)."""
+    if len(key) == 3 and key.startswith("S-") and key[2].isascii() and key[2].isalpha():
+        return key[2].upper()
+    return key
 
 
 def _is_valid_binding(keys: object) -> bool:

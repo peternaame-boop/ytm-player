@@ -112,7 +112,12 @@ class KeyHandlingMixin(YTMHostBase):
         if key.startswith("ctrl+"):
             return f"C-{key[5:]}"
         if key.startswith("shift+"):
-            return f"S-{key[6:]}"
+            name = key[6:]
+            # Terminals speaking the kitty keyboard protocol send Shift+l as
+            # "shift+l" with no character, but the keymap binds "L" (#178).
+            if len(name) == 1 and name.isascii() and name.isalpha():
+                return name.upper()
+            return f"S-{name}"
         if key.startswith("alt+"):
             return f"M-{key[4:]}"
 

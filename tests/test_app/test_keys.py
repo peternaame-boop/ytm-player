@@ -9,12 +9,13 @@ These cover:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from textual.events import Key
 
 from ytm_player.app._keys import _MAX_KEY_COUNT, KeyHandlingMixin
 from ytm_player.config import Action
+from ytm_player.config.keymap import KeyMap
 from ytm_player.services.queue import QueueManager
 
 
@@ -64,6 +65,34 @@ class TestNormalizeKey:
 
     def test_arrow_keys_passthrough(self):
         assert KeyHandlingMixin._normalize_key(_make_event("up")) == "up"
+
+    def test_shift_letter_without_character_is_the_capital(self):
+        """Regression for #178: the kitty keyboard protocol sends Shift+l this way."""
+        assert KeyHandlingMixin._normalize_key(Key("shift+l", None)) == "L"
+
+    def test_shift_on_other_keys_keeps_the_modifier(self):
+        assert KeyHandlingMixin._normalize_key(Key("shift+tab", None)) == "S-tab"
+        assert KeyHandlingMixin._normalize_key(Key("shift+up", None)) == "S-up"
+        assert KeyHandlingMixin._normalize_key(Key("shift+1", None)) == "S-1"
+
+
+class TestShiftLetterSequence:
+    async def test_g_then_shift_l_opens_the_lyrics(self):
+        """Regression for #178: "g L" typed in kitty did nothing."""
+        host = MagicMock()
+        host.screen.is_modal = False
+        host.focused = None
+        host.keymap = KeyMap()
+        host.keymap._load_defaults()
+        host._key_buffer = []
+        host._count_buffer = ""
+        host._normalize_key = KeyHandlingMixin._normalize_key
+        host._handle_action = AsyncMock()
+
+        await KeyHandlingMixin.on_key(host, Key("g", "g"))
+        await KeyHandlingMixin.on_key(host, Key("shift+l", None))
+
+        host._handle_action.assert_awaited_once_with(Action.LYRICS, 1)
 
 
 class TestKeyCountCap:
