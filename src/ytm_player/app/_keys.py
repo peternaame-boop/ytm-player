@@ -44,6 +44,28 @@ _LYRICS_PANE_ACTIONS = frozenset(
     }
 )
 
+# A modifier pressed on its own. Textual asks kitty-protocol terminals to
+# report all keys, and they then send one of these when Shift, Ctrl, Alt etc.
+# goes down; it is never part of a binding (#178).
+_MODIFIER_ONLY_KEYS = frozenset(
+    {
+        "left_shift",
+        "left_control",
+        "left_alt",
+        "left_super",
+        "left_hyper",
+        "left_meta",
+        "right_shift",
+        "right_control",
+        "right_alt",
+        "right_super",
+        "right_hyper",
+        "right_meta",
+        "iso_level3_shift",
+        "iso_level5_shift",
+    }
+)
+
 
 class KeyHandlingMixin(YTMHostBase):
     """Keyboard input processing and action dispatch."""
@@ -65,6 +87,11 @@ class KeyHandlingMixin(YTMHostBase):
 
         focused = self.focused
         if isinstance(focused, (Input, TextArea)):
+            return
+
+        # Skip a bare modifier press: in the buffer it ended "g" before the
+        # Shift+L of "g L" arrived, so no sequence with a capital matched.
+        if event.key in _MODIFIER_ONLY_KEYS:
             return
 
         key = self._normalize_key(event)
@@ -112,12 +139,7 @@ class KeyHandlingMixin(YTMHostBase):
         if key.startswith("ctrl+"):
             return f"C-{key[5:]}"
         if key.startswith("shift+"):
-            name = key[6:]
-            # Terminals speaking the kitty keyboard protocol send Shift+l as
-            # "shift+l" with no character, but the keymap binds "L" (#178).
-            if len(name) == 1 and name.isascii() and name.isalpha():
-                return name.upper()
-            return f"S-{name}"
+            return f"S-{key[6:]}"
         if key.startswith("alt+"):
             return f"M-{key[4:]}"
 

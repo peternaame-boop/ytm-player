@@ -101,20 +101,3 @@ def test_removed_actions_are_gone():
     assert km.match(("C-space",)) == (MatchResult.NO_MATCH, None)
     # Escape is bound again — to clearing marks, not to the retired CLOSE_POPUP.
     assert km.match(("escape",)) == (MatchResult.EXACT, Action.MARK_CLEAR)
-
-
-def test_custom_s_letter_binding_matches_shift_letter(tmp_path):
-    """A user's "S-x" binding keeps working now that Shift+x reads as "X"."""
-    path = tmp_path / "keymap.toml"
-    path.write_text('[pages]\nlibrary = "g S-x"\n', encoding="utf-8")
-
-    km = KeyMap.load(path)
-
-    assert km.match(("g", "X")) == (MatchResult.EXACT, Action.LIBRARY)
-
-
-def test_s_modifier_on_other_keys_is_kept():
-    km = KeyMap()
-    km._load_defaults()
-    assert km.match(("S-tab",)) == (MatchResult.EXACT, Action.FOCUS_PREV)
-    assert km.match(("S-backspace",)) == (MatchResult.EXACT, Action.GO_FORWARD)

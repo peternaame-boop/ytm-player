@@ -66,33 +66,39 @@ class TestNormalizeKey:
     def test_arrow_keys_passthrough(self):
         assert KeyHandlingMixin._normalize_key(_make_event("up")) == "up"
 
-    def test_shift_letter_without_character_is_the_capital(self):
-        """Regression for #178: the kitty keyboard protocol sends Shift+l this way."""
-        assert KeyHandlingMixin._normalize_key(Key("shift+l", None)) == "L"
 
-    def test_shift_on_other_keys_keeps_the_modifier(self):
-        assert KeyHandlingMixin._normalize_key(Key("shift+tab", None)) == "S-tab"
-        assert KeyHandlingMixin._normalize_key(Key("shift+up", None)) == "S-up"
-        assert KeyHandlingMixin._normalize_key(Key("shift+1", None)) == "S-1"
+def _key_host() -> MagicMock:
+    """A host running the real on_key over the default keymap."""
+    host = MagicMock()
+    host.screen.is_modal = False
+    host.focused = None
+    host.keymap = KeyMap()
+    host.keymap._load_defaults()
+    host._key_buffer = []
+    host._count_buffer = ""
+    host._normalize_key = KeyHandlingMixin._normalize_key
+    host._handle_action = AsyncMock()
+    return host
 
 
-class TestShiftLetterSequence:
-    async def test_g_then_shift_l_opens_the_lyrics(self):
-        """Regression for #178: "g L" typed in kitty did nothing."""
-        host = MagicMock()
-        host.screen.is_modal = False
-        host.focused = None
-        host.keymap = KeyMap()
-        host.keymap._load_defaults()
-        host._key_buffer = []
-        host._count_buffer = ""
-        host._normalize_key = KeyHandlingMixin._normalize_key
-        host._handle_action = AsyncMock()
+class TestModifierOnlyKeys:
+    """Regression for #178: kitty also sends a key event for the Shift press."""
 
-        await KeyHandlingMixin.on_key(host, Key("g", "g"))
-        await KeyHandlingMixin.on_key(host, Key("shift+l", None))
+    async def test_g_shift_l_opens_the_lyrics(self):
+        host = _key_host()
+
+        for event in (Key("g", "g"), Key("left_shift", None), Key("L", "L")):
+            await KeyHandlingMixin.on_key(host, event)
 
         host._handle_action.assert_awaited_once_with(Action.LYRICS, 1)
+
+    async def test_count_survives_a_shift_press(self):
+        host = _key_host()
+
+        for event in (Key("1", "1"), Key("5", "5"), Key("right_shift", None), Key("J", "J")):
+            await KeyHandlingMixin.on_key(host, event)
+
+        host._handle_action.assert_awaited_once_with(Action.REORDER_DOWN, 15)
 
 
 class TestKeyCountCap:
