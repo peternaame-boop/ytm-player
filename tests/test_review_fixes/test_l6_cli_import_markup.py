@@ -65,6 +65,7 @@ def _recording_console(monkeypatch) -> Console:
         file=io.StringIO(),
         force_terminal=True,
         color_system="standard",
+        _environ={},
         width=400,
         legacy_windows=False,
     )
