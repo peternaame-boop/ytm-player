@@ -846,12 +846,14 @@ class TestDockPolicyDispatch:
         player.set_event_loop(asyncio.get_running_loop())
         calls = {"n": 0}
 
-        def flaky_play(url):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise _mpv.ShutdownError("simulated crash")
+        def flaky_loadfile(*args):
+            if args[:1] == ("loadfile",):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise _mpv.ShutdownError("simulated crash")
+            return {"playlist_entry_id": 10}
 
-        player._mpv.play.side_effect = flaky_play
+        player._mpv.command.side_effect = flaky_loadfile
         with patch(
             "ytm_player.services.player.hide_dock_icon",
             side_effect=lambda: seen.append(threading.current_thread()) or True,
