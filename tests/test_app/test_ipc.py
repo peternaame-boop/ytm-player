@@ -176,7 +176,7 @@ class TestTransportRepliesBeforeTheTrackStarts:
         assert order == ["reply", "back"]
         assert result == {"ok": True}
 
-    @pytest.mark.parametrize("command", ["next", "prev"])
+    @pytest.mark.parametrize("command", ["next", "prev", "play_index"])
     async def test_no_player_still_reports_the_error(self, command):
         h = _fresh_ipc_host()
         h.player = None
@@ -185,19 +185,21 @@ class TestTransportRepliesBeforeTheTrackStarts:
         early.assert_not_called()
         assert result == {"ok": False, "error": "player not ready"}
 
-    @pytest.mark.parametrize("command", ["next", "prev"])
+    @pytest.mark.parametrize("command", ["next", "prev", "play_index"])
     async def test_cli_gets_ok_while_the_stream_is_still_resolving(self, command, monkeypatch):
         # Real server and the app's handler; the skip is held until the end.
         h = _fresh_ipc_host()
         resolving = asyncio.Event()
         release = asyncio.Event()
 
-        async def held() -> None:
+        async def held(*_track) -> None:
             resolving.set()
             await release.wait()
 
         h._play_next = AsyncMock(side_effect=held)
         h._play_previous = AsyncMock(side_effect=held)
+        h.queue.jump_to.return_value = {"video_id": "v1"}
+        h.play_track = AsyncMock(side_effect=held)
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="ytm-ipc-"))
         port_file = tmp_dir / "ipc_port"
@@ -210,7 +212,7 @@ class TestTransportRepliesBeforeTheTrackStarts:
             port = int(port_file.read_text(encoding="utf-8").strip())
             token = port_file.with_name("ipc_token").read_text(encoding="utf-8").strip()
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
-            request = {"command": command, "args": {}, "token": token}
+            request = {"command": command, "args": {"index": 0}, "token": token}
             writer.write((json.dumps(request) + "\n").encode())
             await writer.drain()
             reply = json.loads(await asyncio.wait_for(reader.readline(), timeout=5))
@@ -231,3 +233,74 @@ class TestTransportRepliesBeforeTheTrackStarts:
                 tmp_dir.rmdir()
             except OSError:
                 pass
+
+
+class TestPlayIndex:
+    @pytest.mark.parametrize("shuffled", [False, True])
+    @pytest.mark.parametrize("index", [0, 2, 5])
+    async def test_selects_visible_occurrence(self, shuffled, index, queue_manager, sample_tracks):
+        h = _fresh_ipc_host()
+        h.queue = queue_manager
+        h.queue.add_multiple([*sample_tracks, sample_tracks[2]])
+        if shuffled:
+            with patch(
+                "ytm_player.services.queue.random.shuffle",
+                side_effect=lambda items: items.reverse(),
+            ):
+                h.queue.toggle_shuffle()
+        visible = h.queue.tracks
+        h.queue.jump_to(1)
+        order = []
+        h.play_track = AsyncMock(side_effect=lambda track: order.append("play"))
+
+        with patch(
+            "ytm_player.app._ipc.reply_now",
+            side_effect=lambda payload: order.append("reply"),
+        ) as early:
+            result = await h._handle_ipc_command("play_index", {"index": index})
+
+        assert result == {"ok": True}
+        early.assert_called_once_with({"ok": True})
+        assert order == ["reply", "play"]
+        h.play_track.assert_awaited_once_with(visible[index])
+        assert h.queue.current_index == index
+        assert h.queue.current_track is visible[index]
+        expected_next = visible[index + 1] if index < len(visible) - 1 else None
+        assert h.queue.next_track() is expected_next
+        h.queue.jump_to(index)
+        expected_previous = visible[index - 1] if index > 0 else None
+        assert h.queue.previous_track() is expected_previous
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            {},
+            *({"index": value} for value in (-1, 5, 10**30, None, True, False, 1.0, "1", [], {})),
+        ],
+    )
+    async def test_invalid_index_preserves_position(self, args, queue_manager, sample_tracks):
+        h = _fresh_ipc_host()
+        h.queue = queue_manager
+        h.queue.add_multiple(sample_tracks)
+        h.queue.jump_to(1)
+        h.play_track = AsyncMock()
+
+        with patch("ytm_player.app._ipc.reply_now") as early:
+            result = await h._handle_ipc_command("play_index", args)
+
+        assert result == {"ok": False, "error": f"invalid index: {args.get('index')}"}
+        assert h.queue.current_index == 1
+        h.play_track.assert_not_awaited()
+        early.assert_not_called()
+
+    async def test_empty_queue_returns_error(self, queue_manager):
+        h = _fresh_ipc_host()
+        h.queue = queue_manager
+        h.play_track = AsyncMock()
+
+        with patch("ytm_player.app._ipc.reply_now") as early:
+            result = await h._handle_ipc_command("play_index", {"index": 0})
+
+        assert result == {"ok": False, "error": "invalid index: 0"}
+        h.play_track.assert_not_awaited()
+        early.assert_not_called()
