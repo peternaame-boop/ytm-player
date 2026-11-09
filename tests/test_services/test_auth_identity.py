@@ -373,6 +373,70 @@ class TestSilentRenewal:
         recorded = auth._load_recorded_identity()
         assert recorded is not None and (recorded.slot, recorded.channel_id) == (0, ME_ID)
 
+    def test_reordered_slot_recovers_at_higher_slot_within_default_probe_limit(
+        self, tmp_path, browser, monkeypatch
+    ):
+        """Account recorded at slot 2 moving to slot 7 recovers within default 10 slots."""
+        auth = _auth(tmp_path, "2")
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({2: OTHER, 7: ME}))
+
+        assert auth.try_auto_refresh() is True
+        assert _saved_slot(auth) == "7"
+        recorded = auth._load_recorded_identity()
+        assert recorded is not None and (recorded.slot, recorded.channel_id) == (7, ME_ID)
+
+    def test_reordered_slot_recovers_at_high_slot_beyond_default_probe_limit(
+        self, tmp_path, browser, monkeypatch
+    ):
+        """Account recorded at slot 12 moving to slot 11 recovers because
+        probe_limit = max(slots, recorded.slot + 1).
+        """
+        auth = _auth(tmp_path, "12")
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({12: OTHER, 11: ME}))
+
+        assert auth.try_auto_refresh() is True
+        assert _saved_slot(auth) == "11"
+        recorded = auth._load_recorded_identity()
+        assert recorded is not None and (recorded.slot, recorded.channel_id) == (11, ME_ID)
+
+    def test_account_set_up_past_the_default_range_recovers_when_it_moves_up(
+        self, tmp_path, browser, monkeypatch
+    ):
+        """Set up at slot 12 with `--slots 15`, then moved to slot 14: still found."""
+        auth = _auth(tmp_path, "12")
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", _fake_ytmusic({12: OTHER, 14: ME}))
+
+        assert auth.try_auto_refresh() is True
+        assert _saved_slot(auth) == "14"
+
+    @pytest.mark.parametrize(
+        ("recorded", "scanned"),
+        [
+            ("2", [s for s in range(10) if s != 2]),
+            ("12", [s for s in range(30) if s != 12]),
+            ("100", list(range(30))),
+        ],
+    )
+    def test_renewal_scan_is_bounded(self, tmp_path, browser, monkeypatch, recorded, scanned):
+        """The fallback scan covers the default range, or the maximum past it, never more."""
+        auth = _auth(tmp_path, recorded)
+        fake = _fake_ytmusic({int(recorded): OTHER})
+        probed: list[int] = []
+
+        def factory(auth_arg, user=None):
+            headers = (
+                auth_arg
+                if isinstance(auth_arg, dict)
+                else json.loads(Path(auth_arg).read_text("utf-8"))
+            )
+            probed.append(int(headers["x-goog-authuser"]))
+            return fake(auth_arg, user)
+
+        monkeypatch.setattr("ytm_player.services.auth.YTMusic", factory)
+
+        assert auth.try_auto_refresh() is False
+        assert probed == [int(recorded), *scanned]
+
     def test_ambiguous_identity_match_refuses(self, tmp_path, browser, monkeypatch):
         auth = _auth(tmp_path, "2")
         monkeypatch.setattr(
