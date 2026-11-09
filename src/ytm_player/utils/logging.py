@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import threading
 import traceback
@@ -211,10 +212,22 @@ def install_excepthooks(*, crash_dir: Path, keep: int = 10) -> None:
     sys.unraisablehook = _unraisable_hook
 
 
+# The [LEVEL] token our log format writes on a record's first line:
+# "%(asctime)s [%(levelname)s] [%(threadName)s] %(name)s: %(message)s"
+_LEVEL_TOKEN = re.compile(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]")
+# Lines kept under one filtered record (a logger.exception traceback): the
+# last ones, which end in the exception itself.
+_MAX_CONTINUATION_LINES = 40
+
+
 def get_recent_log_lines(log_file: Path, n: int = 50, *, min_level: str | None = None) -> str:
-    """Return the last *n* lines of *log_file*, optionally filtered to lines
-    at or above *min_level* (case-insensitive: DEBUG / INFO / WARNING /
-    ERROR / CRITICAL). Unknown level → no filter applied."""
+    """Return the last *n* lines of *log_file*.
+
+    With *min_level* (case-insensitive: DEBUG / INFO / WARNING / ERROR /
+    CRITICAL) it returns the last *n* records at or above that level
+    instead, each with the lines logged under it, such as the traceback
+    of a logger.exception call (#181), capped at the last
+    _MAX_CONTINUATION_LINES. Unknown level → no filter applied."""
     if not log_file.exists():
         return ""
     try:
@@ -228,10 +241,27 @@ def get_recent_log_lines(log_file: Path, n: int = 50, *, min_level: str | None =
             threshold = order.index(min_level.upper())
         except ValueError:
             return "".join(lines[-n:])
-        wanted = order[threshold:]
-        # Match the [LEVEL] token written by our log format:
-        # "%(asctime)s [%(levelname)s] [%(threadName)s] %(name)s: %(message)s"
-        lines = [ln for ln in lines if any(f"[{w}]" in ln for w in wanted)]
+        wanted = set(order[threshold:])
+        # A line without a [LEVEL] token continues the record above it.
+        records: list[list[str]] = []
+        keep = False
+        for ln in lines:
+            token = _LEVEL_TOKEN.search(ln)
+            if token is not None:
+                keep = token.group(1) in wanted
+                if keep:
+                    records.append([ln])
+            elif keep:
+                records[-1].append(ln)
+        out: list[str] = []
+        for first, *rest in records[-n:]:
+            out.append(first)
+            if len(rest) > _MAX_CONTINUATION_LINES:
+                hidden = len(rest) - _MAX_CONTINUATION_LINES
+                out.append(f"    ... ({hidden} earlier lines not shown)\n")
+                rest = rest[-_MAX_CONTINUATION_LINES:]
+            out.extend(rest)
+        return "".join(out)
     return "".join(lines[-n:])
 
 

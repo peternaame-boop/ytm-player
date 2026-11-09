@@ -491,6 +491,74 @@ class TestGetRecentLogLinesFilter:
         assert "info 1" not in out
         assert "warn 1" in out
 
+    def test_keeps_the_traceback_under_a_kept_record(self, tmp_path: Path):
+        """#181: doctor dropped the traceback of a logger.exception call."""
+        from ytm_player.utils.logging import get_recent_log_lines
+
+        log = tmp_path / "ytm.log"
+        log.write_text(
+            "2026-04-30 01:00:00 [ERROR] [MainThread] ytm_player.app._app: Failed to initialize services\n"
+            "Traceback (most recent call last):\n"
+            '  File "auth.py", line 10, in load\n'
+            "    raise ValueError(...)\n"
+            "ValueError: bad cookie file\n"
+            "2026-04-30 01:00:01 [INFO] [MainThread] foo: info 1\n"
+        )
+        out = get_recent_log_lines(log, n=10, min_level="WARNING")
+        assert out.splitlines() == [
+            "2026-04-30 01:00:00 [ERROR] [MainThread] ytm_player.app._app: Failed to initialize services",
+            "Traceback (most recent call last):",
+            '  File "auth.py", line 10, in load',
+            "    raise ValueError(...)",
+            "ValueError: bad cookie file",
+        ]
+
+    def test_drops_the_traceback_under_a_filtered_record(self, tmp_path: Path):
+        from ytm_player.utils.logging import get_recent_log_lines
+
+        log = tmp_path / "ytm.log"
+        log.write_text(
+            "2026-04-30 01:00:00 [DEBUG] [MainThread] foo: debug with exc_info\n"
+            "Traceback (most recent call last):\n"
+            "KeyError: 'x'\n"
+            "2026-04-30 01:00:01 [WARNING] [MainThread] foo: warn 1\n"
+        )
+        out = get_recent_log_lines(log, n=10, min_level="WARNING")
+        assert out == "2026-04-30 01:00:01 [WARNING] [MainThread] foo: warn 1\n"
+
+    def test_a_long_traceback_keeps_its_end(self, tmp_path: Path):
+        from ytm_player.utils.logging import _MAX_CONTINUATION_LINES, get_recent_log_lines
+
+        frames = [f'  File "f{i}.py", line {i}, in f{i}\n' for i in range(100)]
+        log = tmp_path / "ytm.log"
+        log.write_text(
+            "2026-04-30 01:00:00 [ERROR] [MainThread] foo: boom\n"
+            "Traceback (most recent call last):\n" + "".join(frames) + "RuntimeError: the end\n"
+        )
+        lines = get_recent_log_lines(log, n=10, min_level="ERROR").splitlines()
+        assert lines[0] == "2026-04-30 01:00:00 [ERROR] [MainThread] foo: boom"
+        assert lines[1] == f"    ... ({102 - _MAX_CONTINUATION_LINES} earlier lines not shown)"
+        assert len(lines) == 2 + _MAX_CONTINUATION_LINES
+        assert lines[-1] == "RuntimeError: the end"
+
+    def test_n_counts_records_when_filtering(self, tmp_path: Path):
+        from ytm_player.utils.logging import get_recent_log_lines
+
+        log = tmp_path / "ytm.log"
+        log.write_text(
+            "2026-04-30 01:00:00 [ERROR] [MainThread] foo: err 1\nValueError: one\n"
+            "2026-04-30 01:00:01 [ERROR] [MainThread] foo: err 2\nValueError: two\n"
+            "2026-04-30 01:00:02 [ERROR] [MainThread] foo: err 3\nValueError: three\n"
+        )
+        out = get_recent_log_lines(log, n=2, min_level="ERROR")
+        assert "err 1" not in out and "one" not in out
+        assert out.splitlines() == [
+            "2026-04-30 01:00:01 [ERROR] [MainThread] foo: err 2",
+            "ValueError: two",
+            "2026-04-30 01:00:02 [ERROR] [MainThread] foo: err 3",
+            "ValueError: three",
+        ]
+
 
 class TestListActiveHooks:
     def test_reports_all_four_hook_categories(self):

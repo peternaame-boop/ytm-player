@@ -80,6 +80,32 @@ class TestDiagnosticUrlRedaction:
             assert private not in report
         assert {p: p.read_bytes() for p in before} == before
 
+    def test_report_keeps_and_redacts_an_error_traceback(self, monkeypatch, tmp_path):
+        """#181: the traceback under an ERROR entry reaches the report, redacted."""
+        from ytm_player.config import paths
+        from ytm_player.utils import doctor
+
+        for name in ("CONFIG_FILE", "THEME_FILE", "SESSION_STATE_FILE", "LOG_FILE"):
+            monkeypatch.setattr(paths, name, tmp_path / name)
+        monkeypatch.setattr(paths, "CRASH_DIR", tmp_path / "crashes")
+        for name in ("_mpv_version", "_libmpv_status", "_running_status", "_mpris_status"):
+            monkeypatch.setattr(doctor, name, lambda: "synthetic collector")
+        paths.LOG_FILE.write_text(
+            "2026-04-30 01:00:00 [ERROR] [MainThread] ytm_player.app._app: "
+            "Failed to initialize services\n"
+            "Traceback (most recent call last):\n"
+            '  File "ytmusic.py", line 1, in connect\n'
+            "ConnectionError: https://media.invalid/x?sig=fake-signature refused\n",
+            encoding="utf-8",
+        )
+
+        report = doctor.gather_diagnostics()
+
+        assert "Failed to initialize services" in report
+        assert "Traceback (most recent call last):" in report
+        assert "ConnectionError: [URL REDACTED] refused" in report
+        assert "fake-signature" not in report
+
 
 class TestGatherDiagnosticsExisting:
     """v1 sections must still work."""
