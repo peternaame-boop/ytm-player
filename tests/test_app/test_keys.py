@@ -9,12 +9,13 @@ These cover:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from textual.events import Key
 
 from ytm_player.app._keys import _MAX_KEY_COUNT, KeyHandlingMixin
 from ytm_player.config import Action
+from ytm_player.config.keymap import KeyMap
 from ytm_player.services.queue import QueueManager
 
 
@@ -64,6 +65,40 @@ class TestNormalizeKey:
 
     def test_arrow_keys_passthrough(self):
         assert KeyHandlingMixin._normalize_key(_make_event("up")) == "up"
+
+
+def _key_host() -> MagicMock:
+    """A host running the real on_key over the default keymap."""
+    host = MagicMock()
+    host.screen.is_modal = False
+    host.focused = None
+    host.keymap = KeyMap()
+    host.keymap._load_defaults()
+    host._key_buffer = []
+    host._count_buffer = ""
+    host._normalize_key = KeyHandlingMixin._normalize_key
+    host._handle_action = AsyncMock()
+    return host
+
+
+class TestModifierOnlyKeys:
+    """Regression for #178: kitty also sends a key event for the Shift press."""
+
+    async def test_g_shift_l_opens_the_lyrics(self):
+        host = _key_host()
+
+        for event in (Key("g", "g"), Key("left_shift", None), Key("L", "L")):
+            await KeyHandlingMixin.on_key(host, event)
+
+        host._handle_action.assert_awaited_once_with(Action.LYRICS, 1)
+
+    async def test_count_survives_a_shift_press(self):
+        host = _key_host()
+
+        for event in (Key("1", "1"), Key("5", "5"), Key("right_shift", None), Key("J", "J")):
+            await KeyHandlingMixin.on_key(host, event)
+
+        host._handle_action.assert_awaited_once_with(Action.REORDER_DOWN, 15)
 
 
 class TestKeyCountCap:
