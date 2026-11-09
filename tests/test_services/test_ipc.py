@@ -14,6 +14,7 @@ from ytm_player.ipc import (
     IPCServer,
     _ipc_request_tcp,
     _ipc_request_unix,
+    _try_create_pid_file,
     get_running_pid,
     is_tui_running,
     remove_pid,
@@ -119,6 +120,34 @@ class TestTryClaimPid:
         monkeypatch.setattr("ytm_player.ipc._is_pid_alive", lambda pid: False)
         assert try_claim_pid() is None
         assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+
+    def test_claim_without_os_link_falls_back(self, pid_file, monkeypatch):
+        """Termux's Python is built without os.link (#204)."""
+        import os
+
+        monkeypatch.delattr(os, "link")
+        assert try_claim_pid() is None
+        assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+        assert [p.name for p in pid_file.parent.iterdir()] == [pid_file.name]
+
+    def test_claim_falls_back_when_hard_links_are_unsupported(self, pid_file, monkeypatch):
+        import errno
+        import os
+
+        def no_hard_links(src, dst):
+            raise OSError(errno.EPERM, "Operation not permitted")
+
+        monkeypatch.setattr(os, "link", no_hard_links)
+        assert try_claim_pid() is None
+        assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+
+    def test_fallback_create_refuses_an_existing_file(self, pid_file, monkeypatch):
+        import os
+
+        monkeypatch.delattr(os, "link")
+        pid_file.write_text("424242", encoding="utf-8")
+        assert _try_create_pid_file() is False
+        assert pid_file.read_text(encoding="utf-8") == "424242"
 
     def test_remove_pid_only_removes_own_claim(self, pid_file, monkeypatch):
         # Another instance's claim must survive our cleanup.
