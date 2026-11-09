@@ -90,8 +90,12 @@
             # dbus-fast powers Linux MPRIS (playerctl / media keys / now-playing).
             # Core dep on Linux so MPRIS works out of the box; Linux-only because
             # it can't import on darwin (socket.CMSG_LEN), matching the pyproject
-            # sys_platform marker.
-            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ python.pkgs.dbus-fast ];
+            # sys_platform marker. secretstorage lets yt-dlp read the Chromium
+            # cookie key from the GNOME keyring in `ytm setup` (Linux-only too).
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              python.pkgs.dbus-fast
+              python.pkgs.secretstorage
+            ];
 
           optional-dependencies = with python.pkgs; {
             mpris = [ ];  # dbus-fast moved to core deps (Linux-only); kept for compat
@@ -176,9 +180,12 @@
               thefuzz
               anyascii
             ])
-            # dbus-fast is Linux-only (socket.CMSG_LEN); guard it so `nix develop`
-            # still works on darwin.
-            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ python.pkgs.dbus-fast ]
+            # dbus-fast is Linux-only (socket.CMSG_LEN) and so is secretstorage;
+            # guard them so `nix develop` still works on darwin.
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              python.pkgs.dbus-fast
+              python.pkgs.secretstorage
+            ]
             ++ [
               pkgs.mpv
             ];

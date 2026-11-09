@@ -81,6 +81,9 @@ Tracks saved with **Download for Offline** live in this cache and count toward `
 [yt_dlp]
 cookies_file = ""            # Optional: path to yt-dlp Netscape cookies.txt
 use_session_cookies = false  # Stream with the session from `ytm setup` (see below)
+cookie_browser = ""          # Optional: browser to read cookies from for `ytm setup` and
+                             # automatic renewal (brave, chrome, chromium, firefox, zen, ...).
+                             # Empty = auto-detect.
 ca_bundle = ""               # Optional: path to a custom CA cert bundle for SSL-inspecting
                              # corporate proxies (Zscaler, Netskope, etc.)
 remote_components = ""       # Optional: ejs:npm/ejs:github (enables remote JS component downloads)
@@ -101,6 +104,21 @@ supported JavaScript runtime installed (`deno` is used automatically; for `node`
 `use_session_cookies` is on; anonymous streaming is unaffected. yt-dlp never writes
 `stream_cookies.txt` back; re-run `ytm setup` to refresh it. An explicit `cookies_file` takes
 precedence and is used the way yt-dlp normally uses it.
+
+Set `cookie_browser = "brave"` to choose the browser used for cookie extraction during setup and
+automatic session renewal. Supported names are `helium`, `chrome`, `chromium`, `brave`,
+`firefox`, `zen`, `edge`, `vivaldi`, and `opera`. Names are case-insensitive and surrounding
+whitespace is ignored. An empty value uses automatic browser detection; an unknown name logs a
+warning and also uses automatic detection.
+
+Ordinary setup and automatic renewal try `cookies_file` first when configured, then the chosen
+browser or automatic detection. A configured browser that cannot supply usable credentials does
+not cause another browser to be tried.
+
+`ytm setup --browser firefox` bypasses the configured cookies file and browser preference for that
+setup run only. It does not update `cookie_browser`; future renewal uses the configured preference
+and still verifies the recorded account. Restart a running TUI after changing the setting.
+`ytm setup --manual` bypasses cookie extraction.
 
 ### `[search]`
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ytm_player.app._base import YTMHostBase
+from ytm_player.ipc import reply_now
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,16 @@ class IPCMixin(YTMHostBase):
                 case "next":
                     if not self.player:
                         return {"ok": False, "error": "player not ready"}
+                    # Starting the next track can outlast the CLI's timeout while
+                    # its stream resolves, so reply first, then skip (#201).
+                    reply_now({"ok": True})
                     await self._play_next()
                     return {"ok": True}
 
                 case "prev":
                     if not self.player:
                         return {"ok": False, "error": "player not ready"}
+                    reply_now({"ok": True})
                     await self._play_previous()
                     return {"ok": True}
 

@@ -81,7 +81,29 @@ class NavigationMixin(YTMHostBase):
         Pass ``page_name="back"`` to pop from the back stack (and push the
         current page onto the forward stack), or ``page_name="forward"``
         to do the reverse.
+
+        Page swaps never overlap: two at once mount the same page id twice
+        (#145). A request that arrives during a swap is kept, and the running
+        swap carries out the latest one when it finishes. The caller does not
+        wait for it: removing a page waits for that page's running handler
+        to return, so a page handler that waited here would deadlock. App
+        workers that must act after a swap wait on ``_nav_idle`` instead.
         """
+        self._nav_pending = (page_name, kwargs)
+        if not self._nav_idle.is_set():
+            return
+        self._nav_idle.clear()
+        try:
+            while self._nav_pending is not None:
+                page_name, kwargs = self._nav_pending
+                self._nav_pending = None
+                await self._swap_page(page_name, **kwargs)
+        finally:
+            self._nav_pending = None
+            self._nav_idle.set()
+
+    async def _swap_page(self, page_name: str, **kwargs: Any) -> None:
+        """Carry out one navigation request; see ``navigate_to``."""
         # Refresh the current page's nav state into the cache FIRST — the
         # back/forward stack snapshots below read from this cache, so a
         # stale entry here would restore a previous visit's cursor.
