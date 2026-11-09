@@ -1,13 +1,4 @@
-"""The actions menu must not replay a row when it closes, nor eat the next one.
-
-Selecting an action in the ActionsPopup (or cancelling it) hands focus back
-to the TrackTable underneath, and the dismissal's stray key/click arrives
-there as a RowSelected — which TrackActionsMixin replays as an immediate
-jump-and-play (the reported "Play Next skips to the song" bug). The
-right-click path armed a one-shot suppression against this; the keyboard
-menu ('c') and the playback-bar menu never did, and a menu closed with
-Escape left the armed flags eating the next genuine selection.
-"""
+"""Actions menus preserve the next table selection after dismissal."""
 
 from __future__ import annotations
 
@@ -40,11 +31,11 @@ _TRACKS = [_track("1", "One"), _track("2", "Two"), _track("3", "Three")]
 
 
 class _Host(TrackActionsMixin, App[None]):
-    """Real app + real mixin, so the popup/refocus mechanics are genuine.
+    """Minimal host for ``RowSelected`` handling: the real mixin, no keymap.
 
-    ``play_track`` is an AsyncMock: TrackActionsMixin's own
-    ``on_track_table_track_selected`` jumps the queue and plays the row, so
-    any stray selection the popup dismissal delivers shows up there.
+    Enter on the table reaches DataTable's own binding and arrives as
+    ``RowSelected``. ``play_track`` is an AsyncMock, so a selection that
+    gets through shows up as a play.
     """
 
     def __init__(self) -> None:
@@ -105,11 +96,25 @@ async def _choose_play_next_with_click(pilot) -> None:
     await pilot.pause()
 
 
-# ── The reported bug: activate Play Next, row must not replay ────────
+async def _assert_next_selection_plays(pilot, app: _Host) -> None:
+    """A genuine selection after the menu closes must jump to "Three" and play it."""
+    table = app.query_one(TrackTable)
+    table.focus()
+    table.move_cursor(row=2)
+    await pilot.pause()
+    await pilot.press("enter")
+    await pilot.pause()
+    await pilot.pause()
+    app.play_track.assert_awaited_once()
+    assert app.play_track.await_args[0][0]["video_id"] == "3"
 
 
+# ── Activating an action: no replay, and the next selection still works ──
+
+
+@pytest.mark.parametrize("via_click", [False, True], ids=["enter", "click"])
 @pytest.mark.parametrize("via_right_click", [False, True], ids=["keyboard", "right-click"])
-async def test_play_next_from_menu_never_replays_the_row(via_right_click):
+async def test_play_next_from_menu_never_replays_the_row(via_right_click, via_click):
     app = _Host()
     async with app.run_test(size=(120, 40)) as pilot:
         _seed_queue(app)
@@ -121,7 +126,7 @@ async def test_play_next_from_menu_never_replays_the_row(via_right_click):
         else:
             await _open_via_keyboard(pilot, app)
 
-        if via_right_click:
+        if via_click:
             await _choose_play_next_with_click(pilot)
         else:
             await _choose_play_next_with_enter(pilot)
@@ -132,12 +137,15 @@ async def test_play_next_from_menu_never_replays_the_row(via_right_click):
         ids = [t["video_id"] for t in app.queue.tracks]
         assert ids == ["1", "2", "2", "3"] and ids[1] == "2"
 
+        await _assert_next_selection_plays(pilot, app)
+
 
 # ── Cancelling must not eat the next genuine selection ───────────────
 
 
+@pytest.mark.parametrize("cancel_with_click", [False, True], ids=["escape", "backdrop"])
 @pytest.mark.parametrize("via_right_click", [False, True], ids=["keyboard", "right-click"])
-async def test_menu_escape_then_genuine_selection_still_works(via_right_click):
+async def test_menu_cancel_then_genuine_selection_still_works(via_right_click, cancel_with_click):
     app = _Host()
     async with app.run_test(size=(120, 40)) as pilot:
         _seed_queue(app)
@@ -149,20 +157,13 @@ async def test_menu_escape_then_genuine_selection_still_works(via_right_click):
         else:
             await _open_via_keyboard(pilot, app)
 
-        await pilot.press("escape")
+        if cancel_with_click:
+            await pilot.click(offset=(0, 0))
+        else:
+            await pilot.press("escape")
         await pilot.pause()
         await pilot.pause()
         assert not isinstance(app.screen, ActionsPopup)
         app.play_track.assert_not_awaited()
 
-        # A genuine selection right after the cancel must go through: jump
-        # to "Three" and play it.
-        table = app.query_one(TrackTable)
-        table.focus()
-        table.move_cursor(row=2)
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-        await pilot.pause()
-        app.play_track.assert_awaited_once()
-        assert app.play_track.await_args[0][0]["video_id"] == "3"
+        await _assert_next_selection_plays(pilot, app)
