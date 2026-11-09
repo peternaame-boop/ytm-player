@@ -88,7 +88,7 @@ ruff check src/ tests/
 - Coverage floor: 47%
 - Heavy mocking of mpv, ytmusicapi, yt-dlp, D-Bus — tests never hit real APIs or require mpv installed
 - Test fixtures in `tests/conftest.py`: `sample_track`/`sample_tracks` use `_make_track()` helper to create standardized track dicts; `queue_manager` provides a fresh `QueueManager` instance
-- CI runs on GitHub Actions (Ubuntu + macOS + Windows, Python 3.10 and 3.14): ruff lint + format check, then pytest with coverage
+- CI runs on GitHub Actions (Ubuntu + macOS + Windows, Python 3.10 and 3.15): ruff lint + format check, then pytest with coverage
 
 ## Logging
 
@@ -119,7 +119,7 @@ The codebase uses ~263 `except Exception:` blocks as a deliberate graceful-degra
 
 Three GitHub Actions workflows live in `.github/workflows/`:
 
-- `ci.yml` — runs ruff lint + format check, then pytest on the matrix `[3.10, 3.14]` × `[ubuntu, macos, windows]` (6 jobs total).
+- `ci.yml` — runs ruff lint + format check, then pytest on the matrix `[3.10, 3.15]` × `[ubuntu, macos, windows]` (6 jobs total).
 - `check-python-versions.yml` — runs monthly (1st of each month, 09:00 UTC) and opens a maintenance issue when CPython releases a new stable major.minor version newer than our matrix ceiling. Idempotent — won't reopen if an issue is already open. Uses pyyaml to parse the matrix robustly.
 - `publish.yml` — tag-triggered (`v*`) and `workflow_dispatch`. Builds wheel + sdist, smoke-tests the wheel against `ytm --version` in a fresh venv, uploads to PyPI via OIDC trusted publishing (no API tokens), then creates a GitHub Release with the matching CHANGELOG section attached. Manual dispatch can target TestPyPI for dry-runs.
 
