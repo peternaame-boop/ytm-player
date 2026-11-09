@@ -494,6 +494,18 @@ class _FooterButton(Widget):
             case "next":
                 await app._play_next()
             case "spotify_import":
+                from ytm_player.services.spotify_import import _HAS_SPOTIFY_DEPS
+
+                if not _HAS_SPOTIFY_DEPS:
+                    # markup=False keeps "[spotify]" from being read as a style tag.
+                    app.notify(
+                        "Spotify import needs the thefuzz package. Install it "
+                        "(pip install 'ytm-player[spotify]', or python-thefuzz from the AUR) "
+                        "and restart ytm.",
+                        severity="error",
+                        markup=False,
+                    )
+                    return
                 from ytm_player.ui.popups.spotify_import import SpotifyImportPopup
 
                 app.push_screen(SpotifyImportPopup())

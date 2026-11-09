@@ -98,6 +98,29 @@ def _reset_fake_media_player() -> None:
     _FakeMediaPlayerModule._now = _FakeNowPlayingInfoCenter()
 
 
+class _FakeRunLoop:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def runMode_beforeDate_(self, _mode, _date) -> None:
+        self.calls += 1
+
+
+class _FakeFoundationModule:
+    NSDefaultRunLoopMode = "default"
+    _run_loop = _FakeRunLoop()
+
+    class NSRunLoop:
+        @staticmethod
+        def mainRunLoop():
+            return _FakeFoundationModule._run_loop
+
+    class NSDate:
+        @staticmethod
+        def date():
+            return object()
+
+
 class TestStart:
     async def test_noop_when_framework_missing(self, caplog) -> None:
         svc = MacOSMediaService()
@@ -155,6 +178,31 @@ class TestStart:
         finally:
             svc.stop()
             _dispatch._dispatch_context = None
+
+    async def test_pumps_cocoa_run_loop_until_stopped(self) -> None:
+        _reset_fake_media_player()
+        _FakeFoundationModule._run_loop = _FakeRunLoop()
+        svc = MacOSMediaService()
+
+        with (
+            patch("ytm_player.services.macos_media._MEDIA_PLAYER_AVAILABLE", True),
+            patch("ytm_player.services.macos_media._MP", _FakeMediaPlayerModule),
+            patch("ytm_player.services.macos_media._FOUNDATION", _FakeFoundationModule),
+        ):
+            await svc.start({}, asyncio.get_running_loop())
+            await asyncio.sleep(0)
+            task = svc._run_loop_task
+            assert task is not None
+            assert _FakeFoundationModule._run_loop.calls == 1
+
+            await svc.start({}, asyncio.get_running_loop())
+            assert svc._run_loop_task is task
+
+            calls_before_stop = _FakeFoundationModule._run_loop.calls
+            svc.stop()
+            await asyncio.sleep(0)
+            assert task.done()
+            assert _FakeFoundationModule._run_loop.calls == calls_before_stop
 
 
 class TestNowPlayingUpdates:

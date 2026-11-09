@@ -175,6 +175,7 @@ class TrackTable(DataTable):
         # once the table actually blurs (a modal took focus). Right-clicks
         # whose handler early-returns without opening a popup never blur, so
         # they no longer leave the suppress flag stale.
+        self._refill_pending: bool = False
         self._popup_pending: bool = False
         self._suppress_select_on_refocus: bool = False
         self._sort_column: str | None = None
@@ -858,18 +859,35 @@ class TrackTable(DataTable):
         except Exception:
             pass
         self.refresh()
+        # Row-label width, auto column widths and scrollbar visibility are only
+        # correct once the layout has settled, so re-fill once after the refresh.
+        if not self._refill_pending:
+            self._refill_pending = True
+            self.call_after_refresh(self._refill_after_layout)
+
+    def _refill_after_layout(self) -> None:
+        """Re-run the title fill against the settled layout (see above).
+
+        ``_refill_pending`` stays set across the ``_invalidate_table`` call so
+        the pass doesn't re-arm itself into a refresh loop.
+        """
+        self._fill_title_column()
+        self._invalidate_table()
+        self._refill_pending = False
 
     def _fill_title_column(self) -> None:
         """Expand the Title column to fill any remaining table width."""
         if self._resize_col is not None or self._title_manual_width:
             return
-        if self.size.width == 0:
+        # Not self.size.width: that still counts the vertical scrollbar's cells.
+        width = self.scrollable_content_region.width
+        if width == 0:
             return
         title_col = next((c for c in self.ordered_columns if c.key == "title"), None)
         if title_col is None:
             return
 
-        available = self.size.width - self._row_label_column_width
+        available = width - self._row_label_column_width
         used = sum(col.get_render_width(self) for col in self.ordered_columns if col.key != "title")
         remaining = available - used - 2 * self.cell_padding
         if remaining > 10:
