@@ -168,7 +168,8 @@ class MacOSEventTapService:
             # macOS disables the tap if the callback doesn't return quickly enough
             # (or on certain user-input floods). Without re-arming here, media keys
             # silently fall through to Apple Music for the rest of the process's life.
-            if self._tap is not None:
+            # Once stop() has begun, leave the tap disabled.
+            if self._running and self._tap is not None:
                 try:
                     Quartz.CGEventTapEnable(self._tap, True)
                     logger.info("macOS disabled the media key event tap; re-enabled it")
