@@ -527,6 +527,12 @@ class SidebarMixin(YTMHostBase):
                 # id from app._active_library_playlist_id in on_mount.
                 if self._active_library_playlist_id in dead_ids:
                     self._active_library_playlist_id = None
+                # Let page switches already running finish first (#145), so
+                # the checks below see the page that is really open and the
+                # purge comes after them. Loop: another switch can start
+                # before this worker resumes. Safe to wait: this is a worker.
+                while not self._nav_idle.is_set():
+                    await self._nav_idle.wait()
                 # If the deleted playlist is currently open — as a library page
                 # or as a playlist context page — navigate to plain library.
                 active_pid = self._current_page_kwargs.get("playlist_id", "")
