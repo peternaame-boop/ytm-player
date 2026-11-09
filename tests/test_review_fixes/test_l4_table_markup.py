@@ -123,11 +123,28 @@ def _cell(table: TrackTable, row: int, key: str) -> object:
 # ── TrackTable cells ─────────────────────────────────────────────────
 
 
+async def _settle(pilot, table: TrackTable) -> None:
+    """Wait until the table has done its post-layout column refit.
+
+    The table refits its columns once more after a refresh. On a slow machine
+    an idle message queue is not enough: the screen can still show the
+    pre-refit widths, with the last column cut off and columns at other x
+    offsets.
+    """
+    for _ in range(200):
+        await pilot.pause()
+        if not table._refill_pending:
+            break
+    else:
+        raise AssertionError("the table never finished its column refit")
+    await pilot.pause()
+
+
 async def test_bracket_text_in_title_artist_and_album_is_shown_as_typed():
     app = _Host()
     async with app.run_test(size=(140, 12)) as pilot:
         app.table.load_tracks([_track("a", "Song [live]", "Band [official]", "Hits [deluxe]")])
-        await pilot.pause()
+        await _settle(pilot, app.table)
 
         line = _line_with(app, "Song")
         assert "Song [live]" in line
@@ -139,7 +156,7 @@ async def test_metadata_cells_are_literal_text_objects():
     app = _Host()
     async with app.run_test(size=(140, 12)) as pilot:
         app.table.load_tracks([_track("a", "Song [live]", "Band [official]", "Hits [deluxe]")])
-        await pilot.pause()
+        await _settle(pilot, app.table)
 
         for key, expected in (
             ("title", "Song [live]"),
@@ -156,7 +173,7 @@ async def test_malformed_closing_tags_do_not_raise_and_are_shown_as_typed():
     app = _Host()
     async with app.run_test(size=(140, 12)) as pilot:
         app.table.load_tracks([_track("a", "Song [/x]", "a [/] b", "Mix [/r/music]")])
-        await pilot.pause()
+        await _settle(pilot, app.table)
 
         line = _line_with(app, "Song")
         assert "Song [/x]" in line
@@ -172,19 +189,19 @@ async def test_click_action_payload_is_plain_text_and_runs_nothing(field):
     async with app.run_test(size=(140, 12)) as pilot:
         table = app.table
         table.load_tracks([track, _track("b", "Other")])
-        await pilot.pause()
+        await _settle(pilot, app.table)
 
         assert CLICK_PAYLOAD in _line_with(app, "@click")
         assert _click_actions(app) == []
 
         # Click the cell twice: on a non-highlighted row and on the highlighted one.
         table.move_cursor(row=1)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         x = _x_of(table, field)
         await pilot.click(TrackTable, offset=(x, 1))
-        await pilot.pause()
+        await _settle(pilot, app.table)
         await pilot.click(TrackTable, offset=(x, 1))
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.probe_runs == 0
 
 
@@ -200,11 +217,11 @@ async def test_playing_row_is_still_bold_and_the_row_it_left_is_restored_as_type
         table.load_tracks(tracks)
         # Park the highlight on "c": the cursor row is drawn bold too.
         table.move_cursor(row=2)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert not _is_bold(app, "Song [live]")
 
         table.set_playing("a")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         line = _line_with(app, "Song")
         assert "▶" in line
         assert "Song [live]" in line and "Band [official]" in line and "Hits [/x]" in line
@@ -214,7 +231,7 @@ async def test_playing_row_is_still_bold_and_the_row_it_left_is_restored_as_type
 
         # Playback moves on: row "a" goes back to plain cells, "b" turns bold.
         table.set_playing("b")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         line = _line_with(app, "Song")
         assert "▶" not in line
         assert "Song [live]" in line and "Band [official]" in line and "Hits [/x]" in line
@@ -231,10 +248,10 @@ async def test_mark_glyph_still_renders_beside_literal_cells():
     async with app.run_test(size=(140, 12)) as pilot:
         table = app.table
         table.load_tracks([_track("a", "Song [live]"), _track("b", "Other")])
-        await pilot.pause()
+        await _settle(pilot, app.table)
 
         await pilot.click(TrackTable, offset=(_x_of(table, "mark"), 1))
-        await pilot.pause()
+        await _settle(pilot, app.table)
         line = _line_with(app, "Song [live]")
         assert "✓" in line
         assert "✓" not in _line_with(app, "Other")
@@ -247,7 +264,7 @@ async def test_rtl_cells_keep_their_bidi_isolation(monkeypatch):
     app = _Host()
     async with app.run_test(size=(140, 12)) as pilot:
         app.table.load_tracks([_track("a", title, "Band", "Album")])
-        await pilot.pause()
+        await _settle(pilot, app.table)
 
         assert str(_cell(app.table, 0, "title")) == f"{FSI}{title}{PDI}"
         assert str(_cell(app.table, 0, "artist")) == "Band"
@@ -261,7 +278,7 @@ async def test_missing_title_and_album_still_render_an_empty_cell():
     app = _Host()
     async with app.run_test(size=(140, 12)) as pilot:
         app.table.load_tracks([track])
-        await pilot.pause()
+        await _settle(pilot, app.table)
 
         assert "Solo [live]" in _line_with(app, "Solo")
         assert str(_cell(app.table, 0, "title") or "") == ""

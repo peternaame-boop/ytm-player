@@ -78,22 +78,39 @@ def _x_of(table: TrackTable, key: str) -> int:
     raise AssertionError(f"no column {key!r}")
 
 
+async def _settle(pilot, table: TrackTable) -> None:
+    """Wait until the table has done its post-layout column refit.
+
+    The table refits its columns once more after a refresh. On a slow machine
+    an idle message queue is not enough: the screen can still show the
+    pre-refit widths, with the last column cut off and columns at other x
+    offsets.
+    """
+    for _ in range(200):
+        await pilot.pause()
+        if not table._refill_pending:
+            break
+    else:
+        raise AssertionError("the table never finished its column refit")
+    await pilot.pause()
+
+
 async def _start(pilot, app: _Host) -> TrackTable:
     """Load three rows, focus the table, highlight row 0 ("Alpha")."""
     table = app.table
     table.load_tracks(_tracks())
     table.focus()
-    await pilot.pause()
+    await _settle(pilot, app.table)
     assert table.cursor_row == 0
     return table
 
 
 async def _blur_and_refocus(pilot, app: _Host) -> None:
     app.query_one("#elsewhere").focus()
-    await pilot.pause()
+    await _settle(pilot, app.table)
     assert not app.table.has_focus
     app.table.focus()
-    await pilot.pause()
+    await _settle(pilot, app.table)
     assert app.table.has_focus
 
 
@@ -108,16 +125,16 @@ async def test_right_click_off_the_rows_does_not_eat_the_next_play_click(y):
         x = _x_of(table, "title")
         # A first click puts the highlight on the cell; it plays nothing.
         await pilot.click(TrackTable, offset=(x, 1))
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == []
 
         await pilot.click(TrackTable, offset=(x, y), button=3)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.right_clicked == []
 
         # One click on the highlighted row plays it.
         await pilot.click(TrackTable, offset=(x, 1))
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == ["Alpha"]
 
 
@@ -128,9 +145,9 @@ async def test_right_click_off_the_rows_does_not_eat_enter(y):
         table = await _start(pilot, app)
 
         await pilot.click(TrackTable, offset=(_x_of(table, "title"), y), button=3)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         await pilot.press("enter")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == ["Alpha"]
 
 
@@ -141,11 +158,11 @@ async def test_right_click_off_the_rows_then_a_focus_round_trip_does_not_eat_ent
         table = await _start(pilot, app)
 
         await pilot.click(TrackTable, offset=(_x_of(table, "title"), y), button=3)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         # Nothing opened; a later, unrelated blur must not arm suppression.
         await _blur_and_refocus(pilot, app)
         await pilot.press("enter")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == ["Alpha"]
 
 
@@ -155,7 +172,7 @@ async def test_right_click_on_the_header_does_not_sort():
         table = await _start(pilot, app)
 
         await pilot.click(TrackTable, offset=(_x_of(table, "title"), HEADER_Y), button=3)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert table._sort_column is None
         assert [t["title"] for t in table.tracks] == ["Alpha", "Bravo", "Charlie"]
 
@@ -173,16 +190,16 @@ async def test_right_click_on_a_row_posts_its_message_and_eats_one_selection(col
         table = await _start(pilot, app)
 
         await pilot.click(TrackTable, offset=(_x_of(table, column), 2), button=3)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.right_clicked == [(kind, "Bravo")]
 
         # The one selection that follows is the popup's stray one: eaten.
         await pilot.press("enter")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == []
         # Only one: the next selection is genuine.
         await pilot.press("enter")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == ["Alpha"]
 
 
@@ -193,14 +210,14 @@ async def test_right_click_on_a_row_then_a_focus_round_trip_eats_one_selection()
         table = await _start(pilot, app)
 
         await pilot.click(TrackTable, offset=(_x_of(table, "title"), 2), button=3)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         await _blur_and_refocus(pilot, app)
 
         await pilot.press("enter")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == []
         await pilot.press("enter")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == ["Alpha"]
 
 
@@ -210,10 +227,10 @@ async def test_clear_popup_suppression_lets_the_next_selection_through():
         table = await _start(pilot, app)
 
         await pilot.click(TrackTable, offset=(_x_of(table, "title"), 2), button=3)
-        await pilot.pause()
+        await _settle(pilot, app.table)
         await _blur_and_refocus(pilot, app)
         table.clear_popup_suppression()
 
         await pilot.press("enter")
-        await pilot.pause()
+        await _settle(pilot, app.table)
         assert app.selected == ["Alpha"]

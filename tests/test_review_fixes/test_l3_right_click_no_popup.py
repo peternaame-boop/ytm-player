@@ -72,6 +72,23 @@ def _column_x(table: TrackTable, column: str) -> int:
     raise AssertionError(f"no {column} column on screen")
 
 
+async def _settle(pilot, table: TrackTable) -> None:
+    """Wait until the table has done its post-layout column refit.
+
+    The table refits its columns once more after a refresh. On a slow machine
+    an idle message queue is not enough: the screen can still show the
+    pre-refit widths, with the last column cut off and columns at other x
+    offsets.
+    """
+    for _ in range(200):
+        await pilot.pause()
+        if not table._refill_pending:
+            break
+    else:
+        raise AssertionError("the table never finished its column refit")
+    await pilot.pause()
+
+
 @pytest.mark.parametrize(
     ("column", "artists", "toast"),
     [
@@ -93,21 +110,21 @@ async def test_right_click_that_opens_no_menu_does_not_eat_the_next_selection(
         table.load_tracks(tracks)
         # Focus starts somewhere else, as when the click comes from a sidebar.
         app.query_one("#elsewhere").focus()
-        await pilot.pause()
+        await _settle(pilot, table)
 
         # Row 1 (y=0 is the header), in the Artist / Album cell.
         await pilot.click(TrackTable, offset=(_column_x(table, column), 2), button=3)
-        await pilot.pause()
+        await _settle(pilot, table)
         app.notify.assert_called_once_with(toast, severity="warning", timeout=2)
         assert not isinstance(app.screen, ActionsPopup)
         app.play_track.assert_not_awaited()
 
         table.focus()
         table.move_cursor(row=2)
-        await pilot.pause()
+        await _settle(pilot, table)
         await pilot.press("enter")
-        await pilot.pause()
-        await pilot.pause()
+        await _settle(pilot, table)
+        await _settle(pilot, table)
 
         # Master swallowed this Enter; only a second one played the row.
         app.play_track.assert_awaited_once()
