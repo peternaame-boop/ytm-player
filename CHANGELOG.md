@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **New features**
 
-- **Pin the browser used for cookie extraction** — `[yt_dlp] cookie_browser = "brave"` makes `ytm setup` and automatic session renewal read that browser only, instead of whichever installed browser detection reaches first. With multiple browsers signed in, renewal now stays on the browser the session was set up with. `ytm setup --browser` still overrides the setting for a single run. (#193)
+- **Choose the browser used for cookie extraction**: `[yt_dlp] cookie_browser` selects the browser used by setup and automatic session renewal, with configured cookies files tried first. `ytm setup --browser` overrides the sources for one setup run without changing the setting. Thanks to @londospark (#193, #194).
 
 **Fixes**
 

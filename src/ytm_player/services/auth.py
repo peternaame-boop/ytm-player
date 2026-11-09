@@ -71,22 +71,6 @@ MAX_ACCOUNT_PROBE_SLOTS = 30
 _yt_dlp_patched = False
 
 
-def _configured_browser() -> str | None:
-    """Browser pinned in ``[yt_dlp] cookie_browser``, or None for auto-detect.
-
-    Pinning makes ``ytm setup`` and the automatic session renewal read that
-    browser only, instead of taking whichever browser happens to be found
-    first. An explicit ``ytm setup --browser`` still overrides it.
-    """
-    from ytm_player.config.settings import get_settings
-
-    value = get_settings().yt_dlp.cookie_browser
-    if not isinstance(value, str):
-        return None
-    value = value.strip().lower()
-    return value or None
-
-
 def _zen_profile_roots() -> list[Path]:
     """Return candidate Zen profile roots for the current platform."""
     if sys.platform == "win32":
@@ -902,10 +886,23 @@ class AuthManager:
         cookies_file: str | None = None,
         stream_cookies_file: Path = STREAM_COOKIES_FILE,
         account_file: Path | None = None,
+        *,
+        cookie_browser: str | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._auth_file = auth_file
         self._cookies_file = normalize_cookiefile(cookies_file)
+        # [yt_dlp] cookie_browser: the only browser setup and renewal read
+        # when set; empty or unknown means auto-detect.
+        browser = cookie_browser.strip().lower() if isinstance(cookie_browser, str) else ""
+        if browser and browser not in _BROWSERS:
+            logger.warning(
+                "Unknown cookie_browser %r; valid browsers: %s. Falling back to auto-detection.",
+                cookie_browser,
+                ", ".join(_BROWSERS),
+            )
+            browser = ""
+        self._cookie_browser = browser or None
         self._stream_cookies_file = stream_cookies_file
         # Identity of the session in auth.json (see _commit_session).
         # Lives next to auth.json (ACCOUNT_FILE for the default location) so
@@ -1060,11 +1057,6 @@ class AuthManager:
         if manual:
             return self._setup_manual()
 
-        # A browser pinned in [yt_dlp] cookie_browser is the default source;
-        # an explicit --browser argument still wins.
-        if browser is None:
-            browser = _configured_browser()
-
         # Try cookies file first (unless a specific browser was requested).
         if self._cookies_file and not browser:
             print(f"  Trying cookies file: {self._cookies_file}")
@@ -1075,8 +1067,12 @@ class AuthManager:
             print("  Cookies file extraction failed. Falling back to browser/manual setup.")
             print()
 
+        # After the cookies file, as in renewal; an explicit --browser still wins.
+        if browser is None:
+            browser = self._cookie_browser
+
         if browser:
-            # User specified a browser explicitly.
+            # Explicit or configured browser.
             print(f"  Trying browser: {browser}")
             print()
             if self._extract_and_save(browser, interactive=True, slots=slots):
@@ -1101,8 +1097,7 @@ class AuthManager:
 
     # ── Browser cookie extraction ────────────────────────────────────
 
-    @staticmethod
-    def _detect_browser() -> tuple[str, list, list] | None:
+    def _detect_browser(self) -> tuple[str, list, list] | None:
         """Find a browser that has YouTube cookies.
 
         Returns ``(browser, youtube_cookies, full_jar)`` — the full jar feeds
@@ -1110,8 +1105,7 @@ class AuthManager:
         """
         _patch_yt_dlp_browsers()
 
-        configured = _configured_browser()
-        candidates = (configured,) if configured else _BROWSERS
+        candidates = (self._cookie_browser,) if self._cookie_browser else _BROWSERS
         for browser in candidates:
             try:
                 jar = _extract_browser_jar(browser)

@@ -105,12 +105,20 @@ supported JavaScript runtime installed (`deno` is used automatically; for `node`
 `stream_cookies.txt` back; re-run `ytm setup` to refresh it. An explicit `cookies_file` takes
 precedence and is used the way yt-dlp normally uses it.
 
-Set `cookie_browser` to pin which browser `ytm setup` and the automatic session renewal read
-cookies from — for example `cookie_browser = "brave"` if Brave is your main browser. With it
-empty, the first browser that has a signed-in YouTube session is used. `ytm setup --browser`
-overrides the setting for a single run. Pinning keeps renewal deterministic when several
-browsers are installed: a session set up from Brave keeps renewing from Brave instead of
-whichever browser detection happens to reach first.
+Set `cookie_browser = "brave"` to choose the browser used for cookie extraction during setup and
+automatic session renewal. Supported names are `helium`, `chrome`, `chromium`, `brave`,
+`firefox`, `zen`, `edge`, `vivaldi`, and `opera`. Names are case-insensitive and surrounding
+whitespace is ignored. An empty value uses automatic browser detection; an unknown name logs a
+warning and also uses automatic detection.
+
+Ordinary setup and automatic renewal try `cookies_file` first when configured, then the chosen
+browser or automatic detection. A configured browser that cannot supply usable credentials does
+not cause another browser to be tried.
+
+`ytm setup --browser firefox` bypasses the configured cookies file and browser preference for that
+setup run only. It does not update `cookie_browser`; future renewal uses the configured preference
+and still verifies the recorded account. Restart a running TUI after changing the setting.
+`ytm setup --manual` bypasses cookie extraction.
 
 ### `[search]`
 
