@@ -36,6 +36,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Google accounts in browser slots 5–9 were not found**: `ytm setup` and the fallback scan used by automatic renewal now check slots 0–9 instead of 0–4. `ytm setup --slots N` checks the first N slots (up to 30) for an account further down the browser's list. For an account recorded past slot 9, renewal checks all 30 slots if its saved slot no longer matches. Thanks to @wgordon17 for the fix (#179).
 - **Clicking a track after a right-click menu did nothing**: once a track, artist or album menu opened with a right-click closed, by picking an action, pressing Escape or clicking outside it, the track list ignored the next click that should start a track. The list now clears that state whenever an actions menu closes. Thanks to @lhenriquez02 for the fix (#186).
 
+**Changes**
+
+- **Python 3.15**: CI tests on Python 3.10 and 3.15, and the package lists 3.15 as a supported version.
+
 ### v2.1.0 (2026-09-08)
 
 #### Upgrade notes
