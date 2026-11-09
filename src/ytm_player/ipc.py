@@ -284,8 +284,9 @@ def _try_create_pid_file() -> bool:
             return True
         except FileExistsError:
             return False
-        except OSError:
-            # Filesystem without hard-link support — fall back to plain
+        except (OSError, AttributeError):
+            # Filesystem without hard-link support, or a Python built
+            # without os.link at all (Termux on Android) — fall back to plain
             # exclusive create. This creates the file before its content
             # lands, so a concurrent get_running_pid() may garbage-collect
             # the momentarily-empty file and re-claim. The re-read below

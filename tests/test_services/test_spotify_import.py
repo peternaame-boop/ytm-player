@@ -48,6 +48,8 @@ def _fake_fuzz(monkeypatch):
             return int(round(SequenceMatcher(None, a, b).ratio() * 100))
 
     monkeypatch.setattr(si, "fuzz", _Fuzz, raising=False)
+    # _fuzzy_score refuses to run without the dependency flag (#180).
+    monkeypatch.setattr(si, "_HAS_SPOTIFY_DEPS", True)
 
 
 # ── helpers ───────────────────────────────────────────────────────────
