@@ -544,11 +544,12 @@ def cache_status(compact_json: bool) -> None:
     """Show cache size and statistics."""
     from ytm_player.utils.formatting import format_size
 
+    cache_dir = get_settings().cache_dir
     total_bytes = 0
     file_count = 0
 
-    if CACHE_DIR.exists():
-        for f in CACHE_DIR.iterdir():
+    if cache_dir.exists():
+        for f in cache_dir.iterdir():
             if f.is_file():
                 total_bytes += f.stat().st_size
                 file_count += 1
@@ -558,7 +559,7 @@ def cache_status(compact_json: bool) -> None:
         db_size = CACHE_DB.stat().st_size
 
     data: dict[str, Any] = {
-        "cache_dir": str(CACHE_DIR),
+        "cache_dir": str(cache_dir),
         "file_count": file_count,
         "total_bytes": total_bytes,
         "total_human": format_size(total_bytes),
@@ -569,7 +570,7 @@ def cache_status(compact_json: bool) -> None:
     if compact_json:
         _json_output(data, compact=True)
     else:
-        click.echo(f"Cache directory: {CACHE_DIR}")
+        click.echo(f"Cache directory: {cache_dir}")
         click.echo(f"Cached files:    {file_count}")
         click.echo(f"Total size:      {format_size(total_bytes)}")
         click.echo(f"Database size:   {format_size(db_size)}")
@@ -579,16 +580,49 @@ def cache_status(compact_json: bool) -> None:
 @click.confirmation_option(prompt="Are you sure you want to clear the audio cache?")
 def cache_clear() -> None:
     """Clear the audio cache."""
+    # A running TUI keeps the index open. This check does not stop a TUI
+    # that is launched while the clear is in progress.
+    if is_tui_running():
+        _error("ytm-player is running. Quit it before clearing the cache.")
+
+    cache_dir = get_settings().cache_dir
     removed = 0
 
-    if CACHE_DIR.exists():
-        for f in CACHE_DIR.iterdir():
+    if CACHE_DB.exists():
+        # Empty the index through SQLite rather than deleting the database,
+        # so its WAL/SHM files stay consistent with it. CacheManager.clear()
+        # also deletes every file the index lists, wherever it is.
+        import asyncio
+
+        from ytm_player.services.cache import CacheManager
+
+        async def _clear_index() -> int:
+            manager = CacheManager(db_path=CACHE_DB)
+            try:
+                await manager.init()
+                conn = sqlite3.connect(str(CACHE_DB))
+                try:
+                    rows = conn.execute("SELECT file_path FROM cache_index").fetchall()
+                finally:
+                    conn.close()
+                present = [Path(row[0]) for row in rows if Path(row[0]).exists()]
+                await manager.clear()
+            finally:
+                await manager.close()
+            return sum(1 for path in present if not path.exists())
+
+        try:
+            removed += asyncio.run(_clear_index())
+        except (sqlite3.Error, OSError) as exc:
+            _error(f"Could not clear the cache index: {exc}")
+
+    # Files the index does not list are swept only from the app-owned default
+    # directory, never from a user-chosen [cache] location.
+    if cache_dir == CACHE_DIR and cache_dir.exists():
+        for f in cache_dir.iterdir():
             if f.is_file():
                 f.unlink()
                 removed += 1
-
-    if CACHE_DB.exists():
-        CACHE_DB.unlink()
 
     click.echo(f"Cleared {removed} cached file(s).")
 

@@ -599,9 +599,10 @@ def ipc_request(
 def _ipc_exchange(sock: socket.socket, request: dict[str, Any]) -> dict[str, Any]:
     """Send one newline-framed request over *sock* and return the parsed reply.
 
-    The server writes exactly one newline-terminated JSON line then closes, so
-    reading to EOF yields that single reply line (json.loads ignores the
-    trailing newline).
+    The server writes exactly one newline-terminated JSON line, but after an
+    early ``reply_now`` it keeps the connection open until its handler
+    finishes. So stop at the first newline instead of waiting for EOF; the
+    line may arrive split over several receives.
     """
     sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
     sock.shutdown(socket.SHUT_WR)
@@ -612,8 +613,10 @@ def _ipc_exchange(sock: socket.socket, request: dict[str, Any]) -> dict[str, Any
         if not chunk:
             break
         chunks.append(chunk)
+        if b"\n" in chunk:
+            break
 
-    return json.loads(b"".join(chunks).decode("utf-8"))
+    return json.loads(b"".join(chunks).split(b"\n", 1)[0].decode("utf-8"))
 
 
 def _ipc_request_unix(
