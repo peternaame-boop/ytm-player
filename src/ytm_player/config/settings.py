@@ -199,8 +199,18 @@ class Settings:
             try:
                 path.rename(backup)
                 logger.warning("Backed up corrupted config to %s", backup)
-            except OSError:
-                pass
+            except OSError as backup_exc:
+                # No backup was made: writing defaults now would destroy the
+                # only copy of the user's settings (on Windows rename fails
+                # whenever an older .bak exists). Leave the file as it is.
+                logger.warning(
+                    "Could not back up corrupted config %s to %s (%s) — leaving it "
+                    "untouched and using defaults for this run.",
+                    path,
+                    backup,
+                    backup_exc,
+                )
+                return settings
             settings._create_default(path)
             return settings
 

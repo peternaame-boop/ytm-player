@@ -25,7 +25,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from http.cookiejar import Cookie, MozillaCookieJar
+from http.cookiejar import Cookie, LoadError, MozillaCookieJar
 from pathlib import Path
 from typing import IO, Any
 
@@ -1162,6 +1162,16 @@ class AuthManager:
         jar = MozillaCookieJar(str(cookies_file))
         try:
             jar.load(ignore_discard=True, ignore_expires=True)
+        except LoadError:
+            # Never log this exception's text: it quotes the whole offending
+            # line, cookie value included, and `ytm doctor` prints recent
+            # warnings for pasting into public issues.
+            logger.warning(
+                "Failed to load cookies file %s: not a valid Netscape cookies.txt (it needs "
+                "the '# Netscape HTTP Cookie File' header and 7 TAB-separated fields per cookie)",
+                cookies_file,
+            )
+            return False
         except (OSError, UnicodeDecodeError) as exc:
             logger.warning("Failed to load cookies file %s: %s", cookies_file, exc)
             return False

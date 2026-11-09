@@ -343,10 +343,23 @@ class MPRISService:
         self._root_iface = _MediaPlayer2Interface(player_callbacks)
         self._player_iface = _PlayerInterface(player_callbacks)
 
-        self._bus.export(OBJECT_PATH, self._root_iface)  # type: ignore[reportOptionalMemberAccess]
-        self._bus.export(OBJECT_PATH, self._player_iface)  # type: ignore[reportOptionalMemberAccess]
+        try:
+            self._bus.export(OBJECT_PATH, self._root_iface)  # type: ignore[reportOptionalMemberAccess]
+            self._bus.export(OBJECT_PATH, self._player_iface)  # type: ignore[reportOptionalMemberAccess]
 
-        await self._bus.request_name(BUS_NAME)  # type: ignore[reportOptionalMemberAccess]
+            await self._bus.request_name(BUS_NAME)  # type: ignore[reportOptionalMemberAccess]
+        except Exception:
+            # E.g. a sandboxed session bus that accepts the connection but
+            # refuses the name. The caller awaits start() unguarded in
+            # on_mount, so this must not raise: run without MPRIS instead.
+            logger.warning(
+                "Could not register the MPRIS service on D-Bus -- MPRIS disabled", exc_info=True
+            )
+            self._bus.disconnect()  # type: ignore[reportOptionalMemberAccess]
+            self._bus = None
+            self._root_iface = None
+            self._player_iface = None
+            return
         self._running = True
         logger.info("MPRIS service registered as %s", BUS_NAME)
 
