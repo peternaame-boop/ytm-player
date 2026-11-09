@@ -1,4 +1,4 @@
-"""Spotify playlist import popup — Single (≤100) and Multi (100+) modes.
+"""Spotify playlist import popup with Single and Multi modes.
 
 Single mode: paste one Spotify URL → match → create YTM playlist.
 Multi mode: enter combined name + number of parts → paste N URLs →
@@ -128,7 +128,7 @@ class _TabLabel(Static):
 
 
 class SpotifyImportPopup(BasePopup[str | None]):
-    """Two-tab Spotify import: Single (≤100 tracks) and Multi (100+ tracks)."""
+    """Two-tab Spotify import: Single (one playlist) and Multi (several combined into one)."""
 
     DEFAULT_CSS = """
     SpotifyImportPopup > Vertical {
@@ -279,9 +279,9 @@ class SpotifyImportPopup(BasePopup[str | None]):
         with Vertical():
             yield Static("Import Spotify Playlist", id="si-title")
             with Horizontal(id="si-tab-bar"):
-                yield _TabLabel("Single (≤100)", "single")
+                yield _TabLabel("Single", "single")
                 yield _TabLabel("  |  ", "separator")
-                yield _TabLabel("Multi (100+)", "multi")
+                yield _TabLabel("Multi", "multi")
             yield Static("Paste a Spotify playlist URL and press Enter", id="si-status")
 
             # ── Single mode content ──
@@ -359,8 +359,8 @@ class SpotifyImportPopup(BasePopup[str | None]):
             single_content.display = False
             multi_content.display = True
             status.update(
-                "Split your 100+ track playlist into chunks of ≤100 on Spotify,\n"
-                "then enter the combined name and number of parts below"
+                "Combine several Spotify playlists (parts) into one playlist.\n"
+                "Enter the combined name and number of parts below"
             )
             # Reset multi URL container.
             self.query_one("#si-multi-urls", VerticalScroll).remove_children()
