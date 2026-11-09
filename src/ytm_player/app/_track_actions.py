@@ -205,6 +205,12 @@ class TrackActionsMixin(YTMHostBase):
 
         self._open_actions_for_track(track, queue_entry_id=queue_entry_id, from_queue=from_queue)
 
+    def _clear_popup_refocus_suppression(self) -> None:
+        """Clear table suppression after an actions popup closes."""
+        table = self._focused_track_table()
+        if table is not None:
+            table.clear_popup_suppression()
+
     def _open_actions_for_track(
         self, track: dict, *, queue_entry_id: int | None = None, from_queue: bool = False
     ) -> None:
@@ -217,6 +223,7 @@ class TrackActionsMixin(YTMHostBase):
 
         def _handle_action_result(action_id: str | None) -> None:
             """Callback when the user picks an action from the popup."""
+            self._clear_popup_refocus_suppression()
             if action_id is None:
                 return
 
@@ -520,6 +527,7 @@ class TrackActionsMixin(YTMHostBase):
         picker_item = {"title": "Select Artist"}
 
         def _on_pick(action_id: str | None) -> None:
+            self._clear_popup_refocus_suppression()
             if action_id is None:
                 return
             self._show_artist_actions(artists[int(action_id)], back_to=(track, artists))
@@ -539,6 +547,7 @@ class TrackActionsMixin(YTMHostBase):
         }
 
         def _handle(action_id: str | None) -> None:
+            self._clear_popup_refocus_suppression()
             if action_id is None:
                 return
             if action_id == "_back" and back_to:
@@ -580,6 +589,7 @@ class TrackActionsMixin(YTMHostBase):
             item["artists"] = track["artists"]
 
         def _handle(action_id: str | None) -> None:
+            self._clear_popup_refocus_suppression()
             if action_id is None:
                 return
             if action_id == "copy_link":
