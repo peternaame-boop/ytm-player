@@ -442,11 +442,24 @@ class PlaybackMixin(YTMHostBase):
                 if first:
                     await self.play_track(first)
                 else:
-                    self.notify("End of queue.", timeout=2)
+                    await self._on_queue_exhausted()
             else:
-                self.notify("End of queue.", timeout=2)
+                await self._on_queue_exhausted()
         else:
-            self.notify("End of queue.", timeout=2)
+            await self._on_queue_exhausted()
+
+    async def _on_queue_exhausted(self) -> None:
+        """Report the end of the queue, and that playback stopped if it did."""
+        self.notify("End of queue.", timeout=2)
+        # Pressing next on the last track lands here with the audio still playing.
+        if self.player and self.player.current_track is not None:
+            return
+        for service in (self.mpris, self.mac_media):
+            if service:
+                try:
+                    await service.update_playback_status("Stopped")
+                except Exception:
+                    logger.exception("Playback status update failed at end of queue")
 
     @playback_request
     async def _play_previous(self) -> None:
