@@ -139,8 +139,9 @@ def test_extract_zen_reraises_when_all_roots_unusable(tmp_path, monkeypatch):
 def test_extract_non_zen_browser_unchanged(monkeypatch):
     auth_cookie = MagicMock()
     auth_cookie.domain = ".youtube.com"
-    auth_cookie.name = "SAPISID"
+    auth_cookie.name = "__Secure-3PAPISID"
     auth_cookie.value = "token"
+    auth_cookie.is_expired.return_value = False
     extractor = MagicMock(return_value=[auth_cookie])
     monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", extractor)
 

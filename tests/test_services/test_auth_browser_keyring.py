@@ -8,25 +8,42 @@ browser profile.
 """
 
 import sys
+import time
+from http.cookiejar import Cookie
 from unittest.mock import MagicMock
 
 from ytm_player.services.auth import _extract_browser_jar, _has_youtube_auth_cookies
 
 
-def _cookie(domain=".youtube.com", name="SAPISID", value="token"):
-    cookie = MagicMock()
-    cookie.domain = domain
-    cookie.name = name
-    cookie.value = value
-    return cookie
+def _cookie(domain=".youtube.com", name="__Secure-3PAPISID", value="token", expires=None):
+    return Cookie(
+        version=0,
+        name=name,
+        value=value,
+        port=None,
+        port_specified=False,
+        domain=domain,
+        domain_specified=True,
+        domain_initial_dot=True,
+        path="/",
+        path_specified=True,
+        secure=True,
+        expires=expires,
+        discard=False,
+        comment=None,
+        comment_url=None,
+        rest={},
+    )
 
 
 AUTH_COOKIES = [_cookie(name="SAPISID"), _cookie(name="__Secure-3PAPISID")]
 
 
-def test_accepts_sapisid_or_secure_3papisid():
-    assert _has_youtube_auth_cookies([_cookie(name="SAPISID")])
+def test_signed_in_needs_a_live_secure_3papisid():
     assert _has_youtube_auth_cookies([_cookie(name="__Secure-3PAPISID")])
+    assert not _has_youtube_auth_cookies([_cookie(name="SAPISID")])
+    assert not _has_youtube_auth_cookies([_cookie(value="")])
+    assert not _has_youtube_auth_cookies([_cookie(expires=int(time.time()) - 60)])
 
 
 def test_ignores_cookies_from_other_domains_or_other_names():
@@ -103,3 +120,15 @@ def test_no_keyring_retry_outside_linux(monkeypatch):
 
     assert jar == []
     extractor.assert_called_once_with("brave")
+
+
+def test_no_keyring_retry_for_firefox(monkeypatch):
+    # Firefox does not encrypt cookies with a keyring, so a retry cannot help.
+    monkeypatch.setattr(sys, "platform", "linux")
+    extractor = MagicMock(return_value=[])
+    monkeypatch.setattr("yt_dlp.cookies.extract_cookies_from_browser", extractor)
+
+    jar = _extract_browser_jar("firefox")
+
+    assert jar == []
+    extractor.assert_called_once_with("firefox")
