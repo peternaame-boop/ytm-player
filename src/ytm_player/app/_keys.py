@@ -97,7 +97,9 @@ class KeyHandlingMixin(YTMHostBase):
         key = self._normalize_key(event)
 
         # Digit handling: accumulate count prefix if no keys buffered yet.
-        if key.isdigit() and not self._key_buffer:
+        # ASCII only: str.isdigit() also accepts "²" and the like, which
+        # int() below rejects.
+        if key.isascii() and key.isdigit() and not self._key_buffer:
             self._count_buffer += key
             event.prevent_default()
             return

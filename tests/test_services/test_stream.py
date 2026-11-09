@@ -465,46 +465,68 @@ class TestResolveAsync:
 
     async def test_cancelled_owner_does_not_orphan_waiter(self):
         """If the owning resolve() is cancelled mid-flight, a concurrent waiter
-        on the same video must not hang on the orphaned pending future."""
-        import contextlib
+        on the same video must not hang on the orphaned pending future, and
+        must not be cancelled with it: it resolves the video itself."""
         import threading
 
         resolver = StreamResolver()
+        entered = threading.Event()
         release = threading.Event()
 
         def blocking_resolve(video_id: str) -> StreamInfo:
-            release.wait(timeout=5)
+            entered.set()
+            if not release.wait(timeout=30):
+                raise AssertionError("the test never released the extraction")
             return _make_info(video_id)
 
         resolver._resolve_sync = blocking_resolve  # type: ignore[method-assign]
 
+        # A resolve that is handed the in-flight future awaits it in the same
+        # step, so this marks the moment the waiter has joined the owner.
+        joined = asyncio.Event()
+        current_pending = resolver._current_pending
+
+        def joining(video_id: str, generation: int):
+            pending = current_pending(video_id, generation)
+            if pending is not None:
+                joined.set()
+            return pending
+
+        resolver._current_pending = joining  # type: ignore[method-assign]
+
         owner = asyncio.create_task(resolver.resolve("hangVid01"))
-        # Let the owner register the pending future and enter to_thread.
-        await asyncio.sleep(0.05)
-        assert "hangVid01" in resolver._pending
-
-        waiter = asyncio.create_task(resolver.resolve("hangVid01"))
-        await asyncio.sleep(0.05)
-
-        owner.cancel()
-
+        waiter = None
         try:
-            # Both tasks must settle promptly; a hang means the waiter was
-            # orphaned on a never-resolved future.
-            await asyncio.wait_for(
-                asyncio.gather(owner, waiter, return_exceptions=True),
-                timeout=2.0,
-            )
-        except asyncio.TimeoutError:
-            release.set()
-            pytest.fail("concurrent waiter hung on an orphaned pending future")
+            # The owner has registered the pending future and is extracting.
+            assert await asyncio.to_thread(entered.wait, 5), "extraction never started"
+            assert "hangVid01" in resolver._pending
 
-        release.set()
-        assert owner.cancelled()
-        # The waiter did not hang — it settled (cancelled/errored) instead.
-        assert waiter.done()
-        with contextlib.suppress(BaseException):
-            await waiter
+            waiter = asyncio.create_task(resolver.resolve("hangVid01"))
+            await asyncio.wait_for(joined.wait(), timeout=2.0)
+
+            owner.cancel()
+            await asyncio.wait({owner}, timeout=2.0)
+            assert owner.cancelled()
+
+            # The waiter retries on its own, so it settles once extraction can
+            # finish; a hang means it was orphaned on a never-resolved future.
+            release.set()
+            await asyncio.wait({waiter}, timeout=2.0)
+            if not waiter.done():
+                pytest.fail("concurrent waiter hung on an orphaned pending future")
+
+            # Nobody cancelled the waiter: it gets the stream, not the owner's
+            # cancellation or an error.
+            assert not waiter.cancelled()
+            result = waiter.result()
+            assert result is not None
+            assert result.video_id == "hangVid01"
+        finally:
+            release.set()
+            tasks = [owner] if waiter is None else [owner, waiter]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def test_cancelled_waiter_does_not_break_owner(self):
         """Cancelling a waiter must not cancel the shared pending future out

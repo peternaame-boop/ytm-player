@@ -675,15 +675,28 @@ class Player:
             self._dispatch(PlayerEvent.SEEK, target)
         except mpv.ShutdownError:
             pass
+        except SystemError:
+            # mpv rejects a seek while no file is loaded: idle, or a track
+            # whose stream is still opening. There is nothing to seek in.
+            logger.debug("Seek ignored: mpv has no file loaded")
 
-    async def seek_absolute(self, seconds: float) -> None:
-        """Seek to an absolute position in seconds."""
+    async def seek_absolute(self, seconds: float) -> bool:
+        """Seek to an absolute position in seconds.
+
+        Returns False when the seek was dropped (see ``seek``), so a caller
+        that depends on the new position does not take it as applied.
+        """
         try:
             target = self._clamp_seek_target(seconds)
             self._mpv.seek(seconds, reference="absolute")
             self._dispatch(PlayerEvent.SEEK, target)
         except mpv.ShutdownError:
-            pass
+            return False
+        except SystemError:
+            # Same as seek(): no file is loaded, so the seek is dropped.
+            logger.debug("Seek ignored: mpv has no file loaded")
+            return False
+        return True
 
     async def seek_start(self) -> None:
         """Seek to the beginning of the track."""

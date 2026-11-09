@@ -153,6 +153,17 @@ class StreamInfo:
         return max(0.0, self.available_at - time.time())
 
 
+class _OwnerCancelled:
+    """Outcome of a shared in-flight resolve whose owner was cancelled.
+
+    The owner's cancellation (a superseded prefetch, say) is not the
+    waiters' own: a waiter that receives this resolves again instead.
+    """
+
+
+_OWNER_CANCELLED = _OwnerCancelled()
+
+
 class StreamResolver:
     """Resolves YouTube Music video IDs to direct audio stream URLs.
 
@@ -167,7 +178,9 @@ class StreamResolver:
         # In-flight async resolves, keyed by video_id, tagged with the
         # _cache_generation they started under so a request made after
         # clear_cache() never joins (or gets cleaned up by) a stale one.
-        self._pending: dict[str, tuple[int, asyncio.Future[StreamInfo | None]]] = {}
+        self._pending: dict[
+            str, tuple[int, asyncio.Future[StreamInfo | _OwnerCancelled | None]]
+        ] = {}
         # yt_dlp.YoutubeDL — typed Any because yt-dlp ships no stubs.
         self._ydl: Any | None = None
         self._ydl_lock = threading.Lock()
@@ -554,11 +567,25 @@ class StreamResolver:
         # over the slot (the old owner's cleanup below checks identity).
         generation = self._cache_generation
         pending = self._current_pending(video_id, generation)
-        if pending is not None:
-            return await asyncio.shield(pending)
+        while pending is not None:
+            result = await asyncio.shield(pending)
+            if not isinstance(result, _OwnerCancelled):
+                return result
+            # The owner was cancelled, not this caller, and its pending entry
+            # is already gone: look again (the cache, then a newer resolve to
+            # join, else fall through and own one).  A loop, not a recursive
+            # call: owners can be replaced any number of times.
+            cached = self._get_cached(video_id)
+            if cached is not None:
+                logger.debug("Cache hit for video_id=%s", video_id)
+                return cached
+            generation = self._cache_generation
+            pending = self._current_pending(video_id, generation)
 
         logger.debug("Cache miss for video_id=%s, resolving via yt-dlp", video_id)
-        future: asyncio.Future[StreamInfo | None] = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[StreamInfo | _OwnerCancelled | None] = (
+            asyncio.get_running_loop().create_future()
+        )
         self._pending[video_id] = (generation, future)
         try:
             info = await asyncio.to_thread(self._resolve_sync, video_id)
@@ -577,14 +604,15 @@ class StreamResolver:
                 del self._pending[video_id]
             if not future.done():
                 # Owner was cancelled before the future resolved (a BaseException
-                # such as CancelledError bypasses the except above).  Cancel the
-                # shared future so concurrent waiters get CancelledError instead
-                # of hanging forever on an orphaned, never-resolved future.
-                future.cancel()
+                # such as CancelledError bypasses the except above).  Settle the
+                # shared future so concurrent waiters neither hang on an orphaned
+                # future nor inherit a cancellation that was not theirs: they
+                # resolve again, now that the entry above is removed.
+                future.set_result(_OWNER_CANCELLED)
 
     def _current_pending(
         self, video_id: str, generation: int
-    ) -> asyncio.Future[StreamInfo | None] | None:
+    ) -> asyncio.Future[StreamInfo | _OwnerCancelled | None] | None:
         """The in-flight resolve for *video_id* if it started under *generation*."""
         entry = self._pending.get(video_id)
         if entry is None or entry[0] != generation:
