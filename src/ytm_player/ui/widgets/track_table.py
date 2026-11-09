@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from typing import Any
 
+from rich.text import Text
 from textual.events import Click, MouseDown, MouseMove, MouseUp
 from textual.geometry import Size
 from textual.message import Message
@@ -164,6 +165,8 @@ class TrackTable(DataTable):
         # True on the Queue page only: its rows are loaded with QueueManager
         # entry ids as keys, so a row names one queue occurrence.
         self.queue_entry_keys = queue_entry_keys
+        # Occurrence keys of rows autoplay added; they get a dim ↻ label.
+        self.autoplay_keys: frozenset[Hashable] = frozenset()
         self._all_tracks: list[dict] = []
         self._tracks: list[dict] = []
         self._filtered_map: list[int] = []
@@ -571,10 +574,20 @@ class TrackTable(DataTable):
         cells.append(format_duration(duration) if duration else "--:--")
 
         video_id = track.get("video_id", f"row_{index}")
-        # Pass label=" " on every row so Textual reserves the row-label
+        # Pass a label on every row so Textual reserves the row-label
         # column once any row has a non-None label. _highlight_playing
         # mutates this slot to show ▶ on the playing row.
-        return self.add_row(*cells, key=f"{video_id}_{index}", label=" ")
+        return self.add_row(
+            *cells,
+            key=f"{video_id}_{index}",
+            label=self._idle_label(track.get("_original_index", index)),
+        )
+
+    def _idle_label(self, original_index: int) -> Text:
+        """Row label for a row that isn't playing: ↻ marks an autoplay pick."""
+        if self.occurrence_key(original_index) in self.autoplay_keys:
+            return Text("↻", style="dim")
+        return Text(" ")
 
     # -- Playing state ----------------------------------------------------
 
@@ -695,7 +708,7 @@ class TrackTable(DataTable):
                     self.update_cell(row_key, col_key, value)
             except Exception:
                 logger.debug("Failed to restore row %d cells", old_index, exc_info=True)
-            _set_row_label(row_key, Text(" "))
+            _set_row_label(row_key, self._idle_label(self._tracks[old_index]["_original_index"]))
 
         # Mark the new row: bold (no color) on data cells + ▶ label.
         # Why no color: the user's theme can have $primary close to

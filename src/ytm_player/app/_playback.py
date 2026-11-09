@@ -518,7 +518,7 @@ class PlaybackMixin(YTMHostBase):
             return
 
         if append:
-            self.queue.set_radio_tracks(tracks)
+            self.queue.set_radio_tracks(tracks, autoplay=True)
             self.queue.radio_seeds = seeds
             self._refresh_queue_page()
             # The track change that asked for this refill had nothing to
