@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from ytm_player.app._base import YTMHostBase
+from ytm_player.ipc import reply_now
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,16 @@ class IPCMixin(YTMHostBase):
                 case "next":
                     if not self.player:
                         return {"ok": False, "error": "player not ready"}
+                    # Starting the next track can outlast the CLI's timeout while
+                    # its stream resolves, so reply first, then skip (#201).
+                    reply_now({"ok": True})
                     await self._play_next()
                     return {"ok": True}
 
                 case "prev":
                     if not self.player:
                         return {"ok": False, "error": "player not ready"}
+                    reply_now({"ok": True})
                     await self._play_previous()
                     return {"ok": True}
 
@@ -68,6 +73,22 @@ class IPCMixin(YTMHostBase):
 
                 case "unlike":
                     return await self._ipc_rate("INDIFFERENT")
+
+                case "play_index":
+                    if not self.player:
+                        return {"ok": False, "error": "player not ready"}
+                    index = args.get("index")
+                    if type(index) is not int:
+                        return {"ok": False, "error": f"invalid index: {index}"}
+                    # Select the row the way the queue page does, so next/prev
+                    # continue from it; None means out of range.
+                    track = self.queue.jump_to(index)
+                    if track is None:
+                        return {"ok": False, "error": f"invalid index: {index}"}
+                    # Reply before the track starts, as next/prev do (#201).
+                    reply_now({"ok": True})
+                    await self.play_track(track)
+                    return {"ok": True}
 
                 case _:
                     return {"ok": False, "error": f"unknown command: {command}"}

@@ -62,14 +62,26 @@ _BROWSERS = (
 _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
     "helium": ("net.imput.helium", "Chromium"),
 }
+
+# Default number of Google multi-login account slots (x-goog-authuser 0..N-1)
+# to probe during interactive setup and silent renewal. Google multi-login
+# supports at least 10 accounts in browser sessions.
+DEFAULT_ACCOUNT_PROBE_SLOTS = 10
+MAX_ACCOUNT_PROBE_SLOTS = 30
 _yt_dlp_patched = False
 
 
 def _zen_profile_roots() -> list[Path]:
     """Return candidate Zen profile roots for the current platform."""
     if sys.platform == "win32":
+        roots: list[Path] = []
         appdata = os.environ.get("APPDATA")
-        return [Path(appdata) / "zen"] if appdata else []
+        if appdata:
+            roots.append(Path(appdata) / "zen")
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            roots.append(Path(local_appdata) / "zen")
+        return roots
 
     home = Path.home()
     if sys.platform == "darwin":
@@ -77,25 +89,105 @@ def _zen_profile_roots() -> list[Path]:
 
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
     xdg_root = Path(xdg_config_home) if xdg_config_home else home / ".config"
-    return [
-        home / ".zen",
-        xdg_root / "zen",
-        home / ".var" / "app" / "app.zen_browser.zen" / ".zen",
-        home / ".var" / "app" / "app.zen_browser.zen" / "zen",
-    ]
+    candidates = [home / ".zen", xdg_root / "zen"]
+    flatpak_base = home / ".var" / "app" / "app.zen_browser.zen"
+    candidates.extend(
+        [
+            flatpak_base / ".zen",
+            flatpak_base / "zen",
+            flatpak_base / "config" / "zen",
+        ]
+    )
+    # De-duplicate while preserving order (XDG_CONFIG_HOME may equal ~/.config).
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = os.path.normcase(os.path.abspath(candidate))
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def _has_youtube_auth_cookies(cookies) -> bool:  # type: ignore[no-untyped-def]
+    """True when *cookies* holds a signed-in session: ytmusicapi signs with __Secure-3PAPISID."""
+    return any(
+        c.domain == ".youtube.com"
+        and c.name == "__Secure-3PAPISID"
+        and bool(c.value)
+        and not c.is_expired()
+        for c in cookies
+    )
 
 
 def _extract_browser_jar(browser: str):  # type: ignore[no-untyped-def]
-    """Extract cookies from a supported browser, including Zen profiles."""
-    from yt_dlp.cookies import extract_cookies_from_browser
+    """Extract cookies from a supported browser, including Zen profiles.
+
+    Zen keeps Firefox-format profiles in its own directories, which yt-dlp
+    does not search. Each candidate root that exists is tried through the
+    Firefox extractor, and the first one holding a signed-in YouTube session
+    wins: a stale directory (e.g. a leftover ``~/.zen`` after Zen migrated
+    to ``~/.config/zen``) must not shadow the real profile. Jars are never
+    merged, so one profile's cookies don't mix with another's.
+    """
+    from yt_dlp.cookies import CHROMIUM_BASED_BROWSERS, extract_cookies_from_browser
 
     if browser == "zen":
+        first_jar = None
+        last_error: Exception | None = None
         for root in _zen_profile_roots():
-            if root.exists():
-                return extract_cookies_from_browser("firefox", profile=str(root))
+            if not root.is_dir():
+                continue
+            try:
+                jar = extract_cookies_from_browser("firefox", profile=str(root))
+            except Exception as exc:  # noqa: BLE001 — one bad root must not hide the rest
+                logger.debug("Zen profile root %s not usable: %s", root, exc)
+                last_error = exc
+                continue
+            if first_jar is None:
+                first_jar = jar
+            if _has_youtube_auth_cookies(jar):
+                return jar
+        # No signed-in profile: the first readable one, so callers report no account.
+        if first_jar is not None:
+            return first_jar
+        if last_error is not None:
+            raise last_error
         raise FileNotFoundError("no Zen profile directory found")
 
-    return extract_cookies_from_browser(browser)
+    jar = extract_cookies_from_browser(browser)
+    if _has_youtube_auth_cookies(jar):
+        return jar
+
+    # yt-dlp guesses which Chromium keyring encrypted the cookie database
+    # from XDG_CURRENT_DESKTOP / DESKTOP_SESSION. On desktops it does not
+    # recognise (e.g. Hyprland/omarchy, Sway/i3) it picks BASICTEXT, which
+    # cannot decrypt a libsecret-backed profile: extraction "succeeds" with
+    # zero usable cookies and every later step fails with no clear cause.
+    # Retry with the concrete keyring backends instead of giving up. Only
+    # Chromium-based browsers use a keyring (Helium joins the set through
+    # _patch_yt_dlp_browsers).
+    if sys.platform.startswith("linux") and browser in CHROMIUM_BASED_BROWSERS:
+        for keyring in ("GNOMEKEYRING", "KWALLET6", "KWALLET5", "KWALLET", "BASICTEXT"):
+            try:
+                retried = extract_cookies_from_browser(
+                    browser,
+                    # yt-dlp accepts the keyring name string at runtime.
+                    keyring=keyring,  # pyright: ignore[reportArgumentType]
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Cookie extraction from %s with keyring %s failed: %s",
+                    browser,
+                    keyring,
+                    exc,
+                )
+                continue
+            if _has_youtube_auth_cookies(retried):
+                logger.debug("Cookies from %s decrypted with keyring %s", browser, keyring)
+                return retried
+
+    return jar
 
 
 def _patch_yt_dlp_browsers() -> None:
@@ -777,6 +869,12 @@ def _probe_account(auth_path: str, slot: int) -> _ProbedAccount | None:
     return _ProbedAccount(slot=slot, name=str(name), handle=str(handle), channel_id=channel_id)
 
 
+def _recovery_hint(slots: int) -> str:
+    if slots < MAX_ACCOUNT_PROBE_SLOTS:
+        return f"retry with `ytm setup --slots {min(slots + 5, MAX_ACCOUNT_PROBE_SLOTS)}`."
+    return "retry with `ytm setup --manual`."
+
+
 class AuthManager:
     """Manages YouTube Music authentication via browser cookie extraction,
     and the yt-dlp stream cookiejar consumed by stream.py."""
@@ -788,10 +886,23 @@ class AuthManager:
         cookies_file: str | None = None,
         stream_cookies_file: Path = STREAM_COOKIES_FILE,
         account_file: Path | None = None,
+        *,
+        cookie_browser: str | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._auth_file = auth_file
         self._cookies_file = normalize_cookiefile(cookies_file)
+        # [yt_dlp] cookie_browser: the only browser setup and renewal read
+        # when set; empty or unknown means auto-detect.
+        browser = cookie_browser.strip().lower() if isinstance(cookie_browser, str) else ""
+        if browser and browser not in _BROWSERS:
+            logger.warning(
+                "Unknown cookie_browser %r; valid browsers: %s. Falling back to auto-detection.",
+                cookie_browser,
+                ", ".join(_BROWSERS),
+            )
+            browser = ""
+        self._cookie_browser = browser or None
         self._stream_cookies_file = stream_cookies_file
         # Identity of the session in auth.json (see _commit_session).
         # Lives next to auth.json (ACCOUNT_FILE for the default location) so
@@ -924,12 +1035,18 @@ class AuthManager:
 
     # ── Setup entry point ────────────────────────────────────────────
 
-    def setup_interactive(self, manual: bool = False, browser: str | None = None) -> bool:
+    def setup_interactive(
+        self,
+        manual: bool = False,
+        browser: str | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
+    ) -> bool:
         """Interactive setup — auto-extract from browser, manual paste as fallback.
 
         Args:
             manual: Skip browser detection, go straight to manual header paste.
             browser: Extract from a specific browser instead of auto-detecting.
+            slots: Number of Google account slots to probe (default 10).
         """
         print()
         print("=" * 60)
@@ -943,16 +1060,22 @@ class AuthManager:
         # Try cookies file first (unless a specific browser was requested).
         if self._cookies_file and not browser:
             print(f"  Trying cookies file: {self._cookies_file}")
-            if self._refresh_from_cookies_file(Path(self._cookies_file), interactive=True):
+            if self._refresh_from_cookies_file(
+                Path(self._cookies_file), interactive=True, slots=slots
+            ):
                 return True
             print("  Cookies file extraction failed. Falling back to browser/manual setup.")
             print()
 
+        # After the cookies file, as in renewal; an explicit --browser still wins.
+        if browser is None:
+            browser = self._cookie_browser
+
         if browser:
-            # User specified a browser explicitly.
+            # Explicit or configured browser.
             print(f"  Trying browser: {browser}")
             print()
-            if self._extract_and_save(browser, interactive=True):
+            if self._extract_and_save(browser, interactive=True, slots=slots):
                 return True
             print(f"  Could not extract from {browser}. Falling back to manual setup.")
             print()
@@ -965,7 +1088,7 @@ class AuthManager:
             print(f"  Found YouTube cookies in {browser}.")
             print("  Extracting automatically...")
             print()
-            if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar):
+            if self._save_youtube_cookies(cookies, interactive=True, stream_jar=jar, slots=slots):
                 return True
             print("  Auto-extraction failed. Falling back to manual setup.")
             print()
@@ -974,8 +1097,7 @@ class AuthManager:
 
     # ── Browser cookie extraction ────────────────────────────────────
 
-    @staticmethod
-    def _detect_browser() -> tuple[str, list, list] | None:
+    def _detect_browser(self) -> tuple[str, list, list] | None:
         """Find a browser that has YouTube cookies.
 
         Returns ``(browser, youtube_cookies, full_jar)`` — the full jar feeds
@@ -983,7 +1105,8 @@ class AuthManager:
         """
         _patch_yt_dlp_browsers()
 
-        for browser in _BROWSERS:
+        candidates = (self._cookie_browser,) if self._cookie_browser else _BROWSERS
+        for browser in candidates:
             try:
                 jar = _extract_browser_jar(browser)
                 yt_cookies = [c for c in jar if c.domain == ".youtube.com"]
@@ -1002,6 +1125,7 @@ class AuthManager:
         *,
         recorded: _RecordedIdentity | None = None,
         owner: _SessionOwner | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
     ) -> bool:
         """Refresh auth from a cookies file.
 
@@ -1017,6 +1141,7 @@ class AuthManager:
             expected_channel_id=expected_channel_id,
             recorded=recorded,
             owner=owner,
+            slots=slots,
         )
 
     def _extract_and_save_from_cookies_file(
@@ -1027,6 +1152,7 @@ class AuthManager:
         *,
         recorded: _RecordedIdentity | None = None,
         owner: _SessionOwner | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
     ) -> bool:
         """Extract YouTube cookies from a Netscape cookies.txt file and write auth.json."""
         if not cookies_file.exists():
@@ -1067,13 +1193,19 @@ class AuthManager:
             expected_channel_id=expected_channel_id,
             recorded=recorded,
             owner=owner,
+            slots=slots,
         ):
             if interactive:
                 print(f"  Cookies extracted from file and saved: {cookies_file}")
             return True
         return False
 
-    def _extract_and_save(self, browser: str, interactive: bool = False) -> bool:
+    def _extract_and_save(
+        self,
+        browser: str,
+        interactive: bool = False,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
+    ) -> bool:
         """Extract YouTube cookies from *browser* and write auth.json."""
         try:
             _patch_yt_dlp_browsers()
@@ -1089,7 +1221,9 @@ class AuthManager:
             logger.warning("No .youtube.com cookies found in %s", browser)
             return False
 
-        if self._save_youtube_cookies(yt_cookies, interactive=interactive, stream_jar=jar):
+        if self._save_youtube_cookies(
+            yt_cookies, interactive=interactive, stream_jar=jar, slots=slots
+        ):
             if interactive:
                 print(f"  Cookies extracted from {browser} and saved.")
             return True
@@ -1104,6 +1238,7 @@ class AuthManager:
         *,
         recorded: _RecordedIdentity | None = None,
         owner: _SessionOwner | None = None,
+        slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS,
     ) -> bool:
         """Persist YouTube cookie headers into auth.json and record the account.
 
@@ -1119,7 +1254,12 @@ class AuthManager:
         session as expired and the user runs ``ytm setup`` once. The commit
         itself refuses when the files no longer match *owner*.
         """
-        cookie_str = "; ".join(f"{c.name}={c.value}" for c in cookies)
+        # The multi-KB ST-* tracking cookies can push the header past the
+        # server's size limit: sign-in probes come back empty and home-feed
+        # continuations get 413. Requests never need them; the stream jar
+        # keeps the full set.
+        auth_cookies = [c for c in cookies if not c.name.startswith("ST-")]
+        cookie_str = "; ".join(f"{c.name}={c.value}" for c in auth_cookies)
 
         # Verify we have the critical SAPISID cookie.
         try:
@@ -1137,7 +1277,7 @@ class AuthManager:
         self._config_dir.mkdir(parents=True, exist_ok=True)
 
         if interactive:
-            chosen = self._select_account_interactively(base_headers)
+            chosen = self._select_account_interactively(base_headers, slots=slots)
         else:
             chosen = self._find_recorded_account(base_headers, expected_channel_id, recorded)
         if chosen is None:
@@ -1168,18 +1308,25 @@ class AuthManager:
                 except OSError:
                     pass
 
-    def _select_account_interactively(self, base_headers: dict) -> _ProbedAccount | None:
+    def _select_account_interactively(
+        self, base_headers: dict, slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS
+    ) -> _ProbedAccount | None:
         """``ytm setup``: list every account the browser is signed in to and pick one."""
         valid_accounts = [
             account
-            for slot in range(5)
+            for slot in range(slots)
             if (account := self._probe_payload(_candidate_payload(base_headers, slot), slot))
             is not None
         ]
         if not valid_accounts:
             logger.warning(
                 "No valid YouTube Music account found in extracted cookies (tried indices %s)",
-                list(range(5)),
+                list(range(slots)),
+            )
+            slot_desc = "slot 0" if slots == 1 else f"slots 0-{slots - 1}"
+            print(
+                f"\n  No valid YouTube Music account found in {slot_desc}."
+                f"\n  If your account is in a higher slot, {_recovery_hint(slots)}"
             )
             return None
 
@@ -1196,6 +1343,7 @@ class AuthManager:
             print("  browser's account list — slot 0 is the first account you added,")
             print("  slot 1 the second, and so on. To check, click your profile picture")
             print("  in Chrome/Firefox: accounts are listed in the same order.")
+            print(f"  If your account isn't listed, {_recovery_hint(slots)}")
             print()
             for i, account in enumerate(valid_accounts):
                 print(f"  [{i + 1}] {account.label()}")
@@ -1253,9 +1401,16 @@ class AuthManager:
         if probed is not None and probed.channel_id == recorded.channel_id:
             return probed
 
+        # An account set up past the default range (`ytm setup --slots N`) may
+        # have moved anywhere within the maximum; renewal does not know N.
+        probe_limit = (
+            DEFAULT_ACCOUNT_PROBE_SLOTS
+            if recorded.slot < DEFAULT_ACCOUNT_PROBE_SLOTS
+            else MAX_ACCOUNT_PROBE_SLOTS
+        )
         matches = [
             account
-            for slot in range(5)
+            for slot in range(probe_limit)
             if slot != recorded.slot
             and (account := self._probe_payload(_candidate_payload(base_headers, slot), slot))
             is not None

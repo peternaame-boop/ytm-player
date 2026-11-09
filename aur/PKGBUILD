@@ -16,6 +16,7 @@ depends=(
     'python-packaging'
     'python-pillow'
     'python-pycryptodomex'
+    'python-secretstorage>=3.3'
     'python-textual>=7.0'
     'python-textual<9.0'
     'python-ytmusicapi'

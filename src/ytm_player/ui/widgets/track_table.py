@@ -999,14 +999,12 @@ class TrackTable(DataTable):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Forward track selection as a TrackSelected message."""
-        if self._right_clicked:
+        # Eat one selection while popup state is armed, and reset every flag
+        # so a stale one cannot eat the next genuine selection too.
+        if self._right_clicked or self._suppress_select_on_refocus:
             self._right_clicked = False
-            return
-        # Suppress the spurious RowSelected that fires when a modal popup
-        # (e.g. ActionsPopup) dismisses and focus returns to this table.
-        # The flag is set on right-click and consumed here once.
-        if self._suppress_select_on_refocus:
             self._suppress_select_on_refocus = False
+            self._popup_pending = False
             return
         # A genuine selection got through — drop any pending right-click intent
         # so it can't linger and arm suppression on a later, unrelated blur.
@@ -1015,6 +1013,12 @@ class TrackTable(DataTable):
         if 0 <= row_idx < len(self._tracks):
             original_idx = self._filtered_map[row_idx] if self._filtered_map else row_idx
             self.post_message(self.TrackSelected(self._tracks[row_idx], original_idx))
+
+    def clear_popup_suppression(self) -> None:
+        """Clear stale popup state once an actions popup over this table closes."""
+        self._suppress_select_on_refocus = False
+        self._right_clicked = False
+        self._popup_pending = False
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Forward row highlight as a TrackHighlighted message and update SelectionInfoBar.
