@@ -374,8 +374,10 @@ class ContextPage(TrackFilterHost, Widget):
         header.mount(title_row)
         title_row.mount(Label("[b]Album[/b]", markup=True))
         title_row.mount(Static("[+ Add to Library]", id="add-to-library-btn", markup=True))
-        header.mount(Label(title, classes="context-title"))
-        header.mount(Label(" \u00b7 ".join(subtitle_parts), classes="context-subtitle"))
+        header.mount(Label(title, classes="context-title", markup=False))
+        header.mount(
+            Label(" \u00b7 ".join(subtitle_parts), classes="context-subtitle", markup=False)
+        )
         unavailable = len(raw_tracks) - track_count
         if unavailable:
             header.mount(
@@ -409,8 +411,8 @@ class ContextPage(TrackFilterHost, Widget):
         if not owned:
             title_row.mount(Static("[+ Add to Library]", id="add-to-library-btn", markup=True))
         title_row.mount(Static("[▶ Start Radio]", id="start-radio-btn", markup=True))
-        header.mount(Label(title, classes="context-title"))
-        header.mount(Label(subtitle, classes="context-subtitle"))
+        header.mount(Label(title, classes="context-title", markup=False))
+        header.mount(Label(subtitle, classes="context-subtitle", markup=False))
         unavailable = len(raw_tracks) - track_count
         if unavailable:
             header.mount(
@@ -494,9 +496,9 @@ class ContextPage(TrackFilterHost, Widget):
         header = Vertical(classes="context-header")
         container.mount(header)
         header.mount(Label("[b]Artist[/b]", markup=True))
-        header.mount(Label(name, classes="context-title"))
+        header.mount(Label(name, classes="context-title", markup=False))
         if subscriber_text:
-            header.mount(Label(subscriber_text, classes="context-subtitle"))
+            header.mount(Label(subscriber_text, classes="context-subtitle", markup=False))
 
         # Two-column layout: top songs on left, albums on right.
         columns = Horizontal(classes="artist-columns")
@@ -551,7 +553,7 @@ class ContextPage(TrackFilterHost, Widget):
                 a.get("name", "") if isinstance(a, dict) else str(a) for a in related_artists[:8]
             ]
             similar_text = "Similar Artists: " + " \u00b7 ".join(n for n in names if n)
-            container.mount(Label(similar_text, classes="similar-artists-bar"))
+            container.mount(Label(similar_text, classes="similar-artists-bar", markup=False))
 
     def _focus_track_table(self) -> None:
         """Focus the track table after content loads."""

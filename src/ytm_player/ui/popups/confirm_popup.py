@@ -68,7 +68,7 @@ class ConfirmPopup(BasePopup[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(self._message, id="confirm-message")
+            yield Static(self._message, id="confirm-message", markup=False)
             with Horizontal():
                 yield Button(self._cancel_label, variant="default", id="confirm-no")
                 yield Button(self._confirm_label, variant="primary", id="confirm-yes")

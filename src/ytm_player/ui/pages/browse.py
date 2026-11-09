@@ -497,7 +497,7 @@ class ForYouSection(Widget):
                 continue
 
             try:
-                await container.mount(Label(title, classes="shelf-title"))
+                await container.mount(Label(title, classes="shelf-title", markup=False))
 
                 list_view = ListView(classes="shelf-items")
                 await container.mount(list_view)
@@ -514,7 +514,7 @@ class ForYouSection(Widget):
                     subtitle = " - ".join(subtitle_parts)
                     display = truncate(f"{item_title}  {subtitle}", 80) if subtitle else item_title
 
-                    list_view.append(ListItem(Label(display)))
+                    list_view.append(ListItem(Label(display, markup=False)))
 
                 # Store items on the list_view for later retrieval.
                 list_view._shelf_items = contents[:8]  # type: ignore[attr-defined]
@@ -843,7 +843,7 @@ class ChartsSection(Widget):
             classes = "shelf-pill event" if is_event else "shelf-pill"
             if i == self._active_daily:
                 classes += " active"
-            pill = Static(title, classes=classes, id=f"charts-pill-{i}")
+            pill = Static(title, classes=classes, id=f"charts-pill-{i}", markup=False)
             await (event_row if is_event else chart_row).mount(pill)
         # Final visibility pass: hide the event row if no events at all,
         # or if the terminal is too narrow to spare a row.
@@ -1077,7 +1077,7 @@ class NewReleasesSection(Widget):
                 parts.append(f"({', '.join(meta_parts)})")
 
             display = truncate(" ".join(parts), 80)
-            list_view.append(ListItem(Label(display)))
+            list_view.append(ListItem(Label(display, markup=False)))
 
     def _show_error(self, message: str) -> None:
         self.load_failed = True
@@ -1215,7 +1215,7 @@ class PlaylistsSection(Widget):
                 parts.append(f"({description})")
             elif count:
                 parts.append(f"({count} songs)")
-            list_view.append(ListItem(Label(truncate(" ".join(parts), 80))))
+            list_view.append(ListItem(Label(truncate(" ".join(parts), 80), markup=False)))
 
     def _show_error(self, message: str) -> None:
         self.load_failed = True
@@ -1337,7 +1337,7 @@ class SubscriptionsSection(Widget):
             name = artist.get("artist", "Unknown artist")
             subscribers = artist.get("subscribers", "")
             display = f"{name}  ({subscribers} subscribers)" if subscribers else name
-            list_view.append(ListItem(Label(truncate(display, 80))))
+            list_view.append(ListItem(Label(truncate(display, 80), markup=False)))
 
     def _show_error(self, message: str) -> None:
         self.load_failed = True

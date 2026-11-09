@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -270,7 +271,7 @@ class HelpPage(Widget):
                     key=f"header_{category}",
                 )
 
-            table.add_row(name, keys, desc)
+            table.add_row(name, Text(keys), desc)
 
     # ── Filter management ─────────────────────────────────────────────
 
