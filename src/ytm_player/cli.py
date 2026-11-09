@@ -660,3 +660,19 @@ def config() -> None:
         subprocess.run([*shlex.split(editor), target], check=True)
     except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as exc:
         _error(f"Failed to open editor: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Play music by index
+# ---------------------------------------------------------------------------
+
+
+@main.command("play-index")
+@click.argument("index", type=int)
+def play_index(index: int) -> None:
+    """Play the track at zero-based INDEX in the current queue.
+
+    INDEX follows the playback order shown by `ytm queue`, including shuffle.
+    Requires a running TUI.
+    """
+    _ipc_action("play_index", f"Playing track at index {index}.", {"index": index})

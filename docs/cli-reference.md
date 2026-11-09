@@ -51,7 +51,12 @@ ytm prev                     # Previous track
 ytm seek +10                 # Seek forward 10 seconds
 ytm seek -5                  # Seek backward 5 seconds
 ytm seek 1:30                # Seek to 1:30 (m:ss or h:mm:ss)
+ytm play-index 4             # Play the fifth track in the current queue
 ```
+
+`play-index` uses a zero-based position in the playback order returned by `ytm queue`, including
+shuffle. The position is evaluated when the command is handled. Success confirms acceptance; audio
+may start later while the stream resolves.
 
 ## Like / dislike (IPC)
 
