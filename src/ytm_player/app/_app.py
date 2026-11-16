@@ -304,6 +304,9 @@ class YTMPlayerApp(
         self._ytm_history_pending_seq = 0
         # Makes the generation check + mpv play command atomic.
         self._play_lock = asyncio.Lock()
+        # Serializes background prefetch workers so an exclusive=False refill
+        # prefetch queues behind an in-flight prefetch instead of leapfrogging.
+        self._prefetch_lock = asyncio.Lock()
 
         # Pending resume from prior session (set by _restore_session_state).
         # Cleared on first matching play_track call.

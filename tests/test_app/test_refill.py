@@ -280,3 +280,205 @@ class TestPrefetchAfterAppend:
 
         assert h.player.play.await_args.args[0] == "http://stream/radio0"
         assert extractions == ["radio0"]
+
+
+class TestPrefetchLookahead:
+    """[cache] prefetch_next supports disabling (false/0) and sequential N-track lookahead."""
+
+    async def test_prefetch_disabled_with_false_or_zero_starts_no_worker(self):
+        for disabled_value in (False, 0):
+            workers = _Workers()
+            h = _host(workers)
+            h.settings.cache.prefetch_next = disabled_value
+            _load(h, "q", 4)
+
+            h._prefetch_next_track()
+            await workers.settle()
+
+            assert workers.calls == []
+            h.stream_resolver.prefetch.assert_not_called()
+
+    async def test_prefetch_lookahead_runs_sequentially_and_deduplicates(self):
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 4
+        h.queue.add_multiple(
+            [
+                {"video_id": "q0", "title": "q0"},
+                {"video_id": "q1", "title": "q1"},
+                {"title": "no_id"},
+                {"video_id": "q1", "title": "q1_dup"},
+                {"video_id": "q2", "title": "q2"},
+                {"video_id": "q3", "title": "q3"},
+            ]
+        )
+        h.queue.jump_to(0)
+
+        active = 0
+        max_active = 0
+        seen: list[str] = []
+
+        async def tracked_prefetch(video_id: str) -> None:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            seen.append(video_id)
+            await asyncio.sleep(0.01)
+            active -= 1
+
+        h.stream_resolver.prefetch = AsyncMock(side_effect=tracked_prefetch)
+
+        h._prefetch_next_track()
+        await workers.settle()
+
+        assert workers.calls == [{"group": "prefetch", "exclusive": True}]
+        assert max_active == 1
+        assert seen == ["q1", "q2"]
+
+    async def test_prefetch_lookahead_stops_when_queue_cleared_mid_sequence(self):
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 3
+        _load(h, "q", 5)
+
+        seen: list[str] = []
+
+        async def clear_on_first(video_id: str) -> None:
+            seen.append(video_id)
+            h.queue.clear()
+
+        h.stream_resolver.prefetch = AsyncMock(side_effect=clear_on_first)
+
+        h._prefetch_next_track()
+        await workers.settle()
+
+        assert seen == ["q1"]
+
+    async def test_prefetch_lookahead_stops_when_playback_stopped_mid_sequence(self):
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 3
+        _load(h, "q", 5)
+
+        seen: list[str] = []
+
+        async def stop_on_first(video_id: str) -> None:
+            seen.append(video_id)
+            invalidate_requests(h)
+
+        h.stream_resolver.prefetch = AsyncMock(side_effect=stop_on_first)
+
+        h._prefetch_next_track()
+        await workers.settle()
+
+        assert seen == ["q1"]
+
+    async def test_refill_threshold_scales_with_prefetch_count(self):
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 5
+        h.ytmusic.get_radio = AsyncMock(return_value=_tracks("radio", 3))
+        _load(h, "q", 6)  # jump_to(0) leaves 5 remaining tracks
+
+        h._refill_queue()
+        await workers.settle()
+
+        assert workers.started("queue_extend") == 1
+
+    async def test_overlapping_refill_prefetch_never_leapfrogs_active_extraction(self):
+        """With real StreamResolver and prefetch_next=3, an exclusive=False refill
+        worker waits behind the in-flight exclusive=True worker instead of
+        starting a second concurrent extraction."""
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 3
+        _load(h, "q", 3)  # q0 playing -> q1, q2 remaining
+
+        resolver = StreamResolver()
+        q1_entered = threading.Event()
+        q1_release = threading.Event()
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+        extractions: list[str] = []
+
+        def extract(video_id: str):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+                extractions.append(video_id)
+            try:
+                if video_id == "q1":
+                    q1_entered.set()
+                    q1_release.wait(timeout=5)
+                return _stream_info(video_id)
+            finally:
+                with lock:
+                    active -= 1
+
+        resolver._resolve_sync = extract
+        h.stream_resolver = resolver
+
+        # Track change starts W1 (exclusive=True) for [q1, q2]; q1 blocks mid-extract.
+        h._prefetch_next_track(exclusive=True)
+        assert await asyncio.to_thread(q1_entered.wait, 5)
+
+        # Radio refill appends [radio0, radio1] and starts W2 (exclusive=False).
+        h.ytmusic.get_radio = AsyncMock(return_value=_tracks("radio", 2))
+        await h._fetch_and_play_radio(h.queue.tracks[0], append=True)
+        await asyncio.sleep(0.05)
+
+        # While q1 is still in flight, W2 must NOT have leapfrogged to q2 or radio0.
+        assert extractions == ["q1"]
+        q1_release.set()
+        await workers.settle()
+
+        assert max_active == 1
+        assert extractions == ["q1", "q2", "radio0"]
+
+    async def test_autoplay_at_queue_end_with_lookahead_serializes_with_play_resolve(self):
+        """At EOF with prefetch_next=3, the refill prefetch waits on play_track's
+        in-flight radio0 resolve before extracting radio1/radio2."""
+        workers = _Workers()
+        h = _fresh_playback_host()
+        h.queue = QueueManager()
+        h.queue.add_multiple(_tracks("q", 1))
+        h.queue.jump_to(0)
+        h.workers = workers
+        h.run_worker = workers.run
+        h._refresh_queue_page = MagicMock()
+        h.settings.playback.autoplay = True
+        h.settings.cache.prefetch_next = 3
+        h.player.current_track = h.queue.tracks[0]
+        h.ytmusic = MagicMock()
+        h.ytmusic.get_radio = AsyncMock(return_value=_tracks("radio", 3))
+        _accept_playback(h)
+
+        resolver = StreamResolver()
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+        extractions: list[str] = []
+
+        def extract(video_id: str):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+                extractions.append(video_id)
+            try:
+                return _stream_info(video_id)
+            finally:
+                with lock:
+                    active -= 1
+
+        resolver._resolve_sync = extract
+        h.stream_resolver = resolver
+
+        await h._play_next()
+        await workers.settle()
+
+        assert h.player.play.await_args.args[0] == "http://stream/radio0"
+        assert max_active == 1
+        assert extractions == ["radio0", "radio1", "radio2"]

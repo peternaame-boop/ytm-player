@@ -662,48 +662,66 @@ class QueueManager:
                 if autoplay:
                     self._autoplay_ids.update(self._entry_ids[-len(new_tracks) :])
 
+    def peek_upcoming(self, count: int = 1) -> list[dict]:
+        """Return up to *count* upcoming tracks WITHOUT advancing the position.
+
+        Follows the same order :meth:`next_track` walks, stopping where the
+        future order is not yet determined (end of queue with repeat off, or
+        end of the current shuffle pass before a reshuffle) and capping cyclic
+        modes (at most 1 entry for ``RepeatMode.ONE`` and at most one full
+        queue pass for linear ``RepeatMode.ALL``).
+        """
+        if count <= 0:
+            return []
+        with self._lock:
+            n = len(self._tracks)
+            if n == 0:
+                return []
+
+            if self._removed_current:
+                pos = self._removed_next_position()
+                if pos == n:
+                    if self._repeat != RepeatMode.ALL:
+                        return []
+                    pos = 0
+                if self._repeat == RepeatMode.ONE:
+                    real = self._shuffle_order[pos] if self._shuffle else pos
+                    return [self._tracks[real]] if 0 <= real < n else []
+                start_pos = pos
+            elif self._repeat == RepeatMode.ONE:
+                real = self._real_index()
+                return [self._tracks[real]] if 0 <= real < n else []
+            elif self._shuffle:
+                start_pos = self._shuffle_position + 1
+            else:
+                start_pos = self._current_index + 1
+
+            if start_pos < 0:
+                start_pos = 0
+
+            if self._shuffle:
+                end_pos = min(start_pos + count, len(self._shuffle_order))
+                return [
+                    self._tracks[real_idx]
+                    for pos in range(start_pos, end_pos)
+                    if 0 <= (real_idx := self._shuffle_order[pos]) < n
+                ]
+
+            if self._repeat == RepeatMode.ALL:
+                steps = min(count, n)
+                return [self._tracks[(start_pos + offset) % n] for offset in range(steps)]
+
+            if start_pos >= n:
+                return []
+            return list(self._tracks[start_pos : start_pos + count])
+
     def peek_next(self) -> dict | None:
         """Return the next track WITHOUT advancing the position.
 
         Useful for prefetching stream URLs ahead of time.
         """
-        with self._lock:
-            if len(self._tracks) == 0:
-                return None
-
-            if self._removed_current:
-                pos = self._removed_next_position()
-                if pos == len(self._tracks):
-                    if self._repeat != RepeatMode.ALL:
-                        return None
-                    pos = 0
-                real = self._shuffle_order[pos] if self._shuffle else pos
-                return self._tracks[real]
-
-            if self._repeat == RepeatMode.ONE:
-                real = self._real_index()
-                if 0 <= real < len(self._tracks):
-                    return self._tracks[real]
-                return None
-
-            if self._shuffle:
-                next_pos = self._shuffle_position + 1
-                if next_pos >= len(self._shuffle_order):
-                    # End of the shuffle order. Even under RepeatMode.ALL we
-                    # can't predict the next reshuffle, so there's nothing to
-                    # prefetch.
-                    return None
-                real_idx = self._shuffle_order[next_pos]
-                if 0 <= real_idx < len(self._tracks):
-                    return self._tracks[real_idx]
-                return None
-            else:
-                next_idx = self._current_index + 1
-                if next_idx >= len(self._tracks):
-                    if self._repeat == RepeatMode.ALL:
-                        return self._tracks[0] if self._tracks else None
-                    return None
-                return self._tracks[next_idx]
+        upcoming = self.peek_upcoming(1)
+        return upcoming[0] if upcoming else None
 
     # -- Utility ----------------------------------------------------------
 

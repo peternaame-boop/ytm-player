@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +17,7 @@ from ytm_player.app._ownership import (
     request_number,
     request_scope,
 )
+from ytm_player.config.settings import prefetch_ahead_count
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.widgets.track_table import TrackTable
@@ -60,6 +62,19 @@ class _LocalHistoryClaim:
     # A finalize consumed this claim: stops the report chain and blocks a
     # second finalize from double-logging.
     finalized: bool = False
+
+
+@dataclass(slots=True)
+class _PrefetchJob:
+    """Deferred awaitable so unscheduled workers allocate no coroutine frame."""
+
+    host: PlaybackMixin
+    video_ids: list[str]
+    queue_gen: object
+    stop_gen: int
+
+    def __await__(self) -> Generator[Any, None, None]:
+        return self.host._prefetch_tracks(self.video_ids, self.queue_gen, self.stop_gen).__await__()
 
 
 class PlaybackMixin(YTMHostBase):
@@ -713,23 +728,65 @@ class PlaybackMixin(YTMHostBase):
         except Exception:
             logger.debug("Failed to prefetch next track", exc_info=True)
 
-    def _prefetch_next_track(self, *, exclusive: bool = True) -> None:
-        """Prefetch the next track's stream URL in the background.
+    def _prefetch_count(self) -> int:
+        """Configured number of upcoming tracks to prefetch (0..MAX_PREFETCH_NEXT)."""
+        cache_cfg = getattr(getattr(self, "settings", None), "cache", None)
+        return prefetch_ahead_count(getattr(cache_cfg, "prefetch_next", True))
 
-        Called after a new track starts playing so that hitting "next"
-        or reaching the end of the current track starts instantly.
+    def _get_prefetch_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_prefetch_lock", None)
+        if not isinstance(lock, asyncio.Lock):
+            lock = asyncio.Lock()
+            self._prefetch_lock = lock
+        return lock
+
+    async def _prefetch_tracks(
+        self, video_ids: list[str], queue_gen: object, stop_gen: int
+    ) -> None:
+        """Prefetch *video_ids* sequentially so at most one background resolve
+        holds ``StreamResolver._extract_lock`` at a time."""
+        async with self._get_prefetch_lock():
+            for video_id in video_ids:
+                if (
+                    not self.stream_resolver
+                    or self.queue.generation != queue_gen
+                    or getattr(self, "_queue_stop_generation", 0) != stop_gen
+                ):
+                    return
+                await self.stream_resolver.prefetch(video_id)
+
+    def _prefetch_next_track(self, *, exclusive: bool = True) -> None:
+        """Prefetch upcoming stream URLs in the background.
+
+        Called after a new track starts playing (or an autoplay refill appends
+        tracks) so hitting "next" or reaching the end of the track starts
+        instantly.
         """
         if not self.stream_resolver:
             return
-        next_track = self.queue.peek_next()
-        if next_track:
-            next_id = next_track.get("video_id", "")
-            if next_id:
-                self.run_worker(
-                    self.stream_resolver.prefetch(next_id),
-                    group="prefetch",
-                    exclusive=exclusive,
-                )
+        count = self._prefetch_count()
+        if count <= 0:
+            return
+        if count == 1:
+            next_track = self.queue.peek_next()
+            tracks = [next_track] if isinstance(next_track, dict) else []
+        else:
+            tracks = self.queue.peek_upcoming(count)
+        video_ids = list(
+            dict.fromkeys(vid for t in tracks if isinstance(t, dict) and (vid := get_video_id(t)))
+        )
+        if not video_ids:
+            return
+        self.run_worker(
+            _PrefetchJob(
+                self,
+                video_ids,
+                self.queue.generation,
+                getattr(self, "_queue_stop_generation", 0),
+            ),
+            group="prefetch",
+            exclusive=exclusive,
+        )
 
     def _refill_queue(self) -> None:
         """Refill the queue in the background when tracks are running low."""
@@ -737,7 +794,7 @@ class PlaybackMixin(YTMHostBase):
             return
         if not self.settings.playback.autoplay:
             return
-        if self.queue.remaining_tracks > 3:
+        if self.queue.remaining_tracks > max(3, self._prefetch_count()):
             return
         # A refill started for an earlier queue or before a Stop has its result
         # dropped, so it must not hold this one back; run_worker cancels it.

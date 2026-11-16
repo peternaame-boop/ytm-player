@@ -236,3 +236,76 @@ class TestAtomicWrites:
             data = tomllib.load(f)
         assert data["ui"]["theme"] == "textual-dark"
         assert not config_path.with_suffix(config_path.suffix + ".tmp").exists()
+
+
+class TestPrefetchNextSetting:
+    """[cache] prefetch_next accepts bool or int (clamped to 0..MAX_PREFETCH_NEXT)."""
+
+    def test_default_is_true_and_resolves_to_one(self):
+        from ytm_player.config.settings import prefetch_ahead_count
+
+        s = Settings()
+        assert s.cache.prefetch_next is True
+        assert prefetch_ahead_count(s.cache.prefetch_next) == 1
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            (True, 1),
+            (False, 0),
+            (0, 0),
+            (-3, 0),
+            (1, 1),
+            (3, 3),
+            (5, 5),
+            (99, 5),
+            (object(), 1),
+        ],
+    )
+    def test_prefetch_ahead_count_normalizes_values(self, raw, expected):
+        from ytm_player.config.settings import prefetch_ahead_count
+
+        assert prefetch_ahead_count(raw) == expected
+
+    @pytest.mark.parametrize(
+        ("toml_literal", "loaded_value", "ahead_count"),
+        [
+            ("true", True, 1),
+            ("false", False, 0),
+            ("0", 0, 0),
+            ("-4", 0, 0),
+            ("3", 3, 3),
+            ("25", 5, 5),
+        ],
+    )
+    def test_load_accepts_bool_and_clamps_int(
+        self, tmp_config_dir, toml_literal, loaded_value, ahead_count
+    ):
+        from ytm_player.config.settings import prefetch_ahead_count
+
+        path = tmp_config_dir / "config.toml"
+        path.write_text(f"[cache]\nprefetch_next = {toml_literal}\n", encoding="utf-8")
+
+        loaded = Settings.load(path)
+        assert loaded.cache.prefetch_next == loaded_value
+        assert type(loaded.cache.prefetch_next) is type(loaded_value)
+        assert prefetch_ahead_count(loaded.cache.prefetch_next) == ahead_count
+
+    @pytest.mark.parametrize("invalid_literal", ['"three"', "1.5", "[1, 2]"])
+    def test_load_rejects_invalid_types_and_keeps_default(self, tmp_config_dir, invalid_literal):
+        path = tmp_config_dir / "config.toml"
+        path.write_text(f"[cache]\nprefetch_next = {invalid_literal}\n", encoding="utf-8")
+
+        loaded = Settings.load(path)
+        assert loaded.cache.prefetch_next is True
+
+    @pytest.mark.parametrize("value", [True, False, 0, 4])
+    def test_save_load_preserves_bool_vs_int_distinction(self, tmp_config_dir, value):
+        path = tmp_config_dir / "config.toml"
+        s = Settings()
+        s.cache.prefetch_next = value
+        s.save(path)
+
+        loaded = Settings.load(path)
+        assert loaded.cache.prefetch_next == value
+        assert type(loaded.cache.prefetch_next) is type(value)

@@ -123,6 +123,7 @@ if TYPE_CHECKING:
         _ytm_history_pending: list[tuple[int, dict]]
         _ytm_history_pending_seq: int
         _play_lock: asyncio.Lock
+        _prefetch_lock: asyncio.Lock
 
         # ── Pending resume from prior session ──────────────────────────
         _pending_resume_video_id: str | None

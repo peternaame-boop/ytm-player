@@ -630,15 +630,13 @@ class StreamResolver:
         return entry[1]
 
     async def prefetch(self, video_id: str) -> None:
-        """Resolve a video ID in the background without blocking the caller.
+        """Resolve a video ID in the background without blocking playback's ad wait.
 
-        Used to pre-cache the next track's stream URL so playback starts
-        instantly when the user hits next or the current track ends.
+        Joins an in-flight resolve when one is already running so sequential
+        prefetchers wait for the active extraction before starting the next.
         """
         if self._get_cached(video_id) is not None:
             return  # Already cached, nothing to do.
-        if self._current_pending(video_id, self._cache_generation) is not None:
-            return  # Already being resolved.
         try:
             await self._resolve(video_id)  # caches without waiting; playback waits in resolve()
         except Exception:
