@@ -711,9 +711,7 @@ class QueueManager:
                 steps = min(count, n)
                 return [self._tracks[(start_pos + offset) % n] for offset in range(steps)]
 
-            if start_pos >= n:
-                return []
-            return list(self._tracks[start_pos : start_pos + count])
+            return self._tracks[start_pos : start_pos + count]
 
     def peek_next(self) -> dict | None:
         """Return the next track WITHOUT advancing the position.

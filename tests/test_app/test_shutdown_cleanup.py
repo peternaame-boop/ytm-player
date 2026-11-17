@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ytm_player.app._app import YTMPlayerApp
+from ytm_player.app._playback import _ActivePrefetch, _consume_task_exception
 
 # Today's cleanup order, one name per step.
 STEPS = [
@@ -173,3 +174,33 @@ async def test_cancellation_at_an_awaited_step_finishes_the_rest_then_propagates
     # No detached cleanup task was left behind.
     after = {t for t in asyncio.all_tasks() if not t.done()}
     assert after - before == set()
+
+
+async def test_active_prefetch_task_is_cancelled_before_resolver_clear_cache(monkeypatch):
+    order: list[str] = []
+    h = _host(order, monkeypatch)
+    entered = asyncio.Event()
+    cancelled_at_resolver = False
+
+    async def hang_prefetch() -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    prefetch_task: asyncio.Task[None] = asyncio.create_task(hang_prefetch())
+    prefetch_task.add_done_callback(_consume_task_exception)
+    await entered.wait()
+    h._active_prefetch = _ActivePrefetch("vid0", 0, prefetch_task)
+
+    def check_resolver_clear() -> None:
+        nonlocal cancelled_at_resolver
+        cancelled_at_resolver = prefetch_task.cancelled()
+        order.append("resolver")
+
+    h.stream_resolver.clear_cache = MagicMock(side_effect=check_resolver_clear)
+
+    await YTMPlayerApp.on_unmount(h)
+
+    assert cancelled_at_resolver
+    assert prefetch_task.cancelled()
+    assert h._active_prefetch is None
+    assert order == STEPS

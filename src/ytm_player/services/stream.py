@@ -33,6 +33,10 @@ _CACHE_MAX_SIZE = 128
 # by every read path (_get_cached, is_expired, resolve).
 _EXPIRY_BUFFER_SECONDS = 300
 
+# Suppress repeated background prefetches of unplayable tracks across sliding
+# lookahead windows; foreground resolve() still retries live when played.
+_FAILED_PREFETCH_TTL_SECONDS = 300.0
+
 
 def _is_stale(expires_at: float) -> bool:
     """True when a cached URL has passed, or is within the buffer of, expiry."""
@@ -205,6 +209,15 @@ class StreamResolver:
         # Bumped by clear_cache(). A resolve that started before the clear
         # must not put its (pre-clear) result back into the emptied cache.
         self._cache_generation = 0
+        # Deadlines (time.time()) until which background prefetch() skips a
+        # video_id that failed extraction (guarded by _cache_lock).
+        self._failed_prefetches: dict[str, float] = {}
+
+    @property
+    def cache_generation(self) -> int:
+        """Generation token bumped whenever the stream cache is cleared."""
+        with self._cache_lock:
+            return self._cache_generation
 
     @property
     def quality(self) -> str:
@@ -495,6 +508,7 @@ class StreamResolver:
                 )
                 return
             self._cache[info.video_id] = info
+            self._failed_prefetches.pop(info.video_id, None)
 
             # Prune expired entries on every write to prevent unbounded growth.
             now = time.time()
@@ -629,18 +643,48 @@ class StreamResolver:
             return None
         return entry[1]
 
+    def _is_prefetch_cooled_down(self, video_id: str) -> bool:
+        with self._cache_lock:
+            until = self._failed_prefetches.get(video_id)
+            if until is None:
+                return False
+            if time.time() < until:
+                return True
+            del self._failed_prefetches[video_id]
+            return False
+
+    def _record_failed_prefetch(self, video_id: str, generation: int) -> None:
+        now = time.time()
+        with self._cache_lock:
+            if generation != self._cache_generation or video_id in self._cache:
+                return
+            self._failed_prefetches[video_id] = now + _FAILED_PREFETCH_TTL_SECONDS
+            expired = [vid for vid, until in self._failed_prefetches.items() if now >= until]
+            for vid in expired:
+                del self._failed_prefetches[vid]
+            if len(self._failed_prefetches) > _CACHE_MAX_SIZE:
+                oldest = sorted(self._failed_prefetches, key=self._failed_prefetches.__getitem__)
+                for vid in oldest[: len(self._failed_prefetches) - _CACHE_MAX_SIZE]:
+                    del self._failed_prefetches[vid]
+
     async def prefetch(self, video_id: str) -> None:
         """Resolve a video ID in the background without blocking playback's ad wait.
 
         Joins an in-flight resolve when one is already running so sequential
         prefetchers wait for the active extraction before starting the next.
         """
-        if self._get_cached(video_id) is not None:
-            return  # Already cached, nothing to do.
+        if self._get_cached(video_id) is not None or self._is_prefetch_cooled_down(video_id):
+            return
+        generation = self.cache_generation
         try:
-            await self._resolve(video_id)  # caches without waiting; playback waits in resolve()
+            info = await self._resolve(
+                video_id
+            )  # caches without waiting; playback waits in resolve()
         except Exception:
             logger.debug("Prefetch failed for video_id=%s", video_id, exc_info=True)
+            info = None
+        if info is None:
+            self._record_failed_prefetch(video_id, generation)
 
     @staticmethod
     def warm_import() -> None:
@@ -654,11 +698,13 @@ class StreamResolver:
         """Remove a specific video ID from the cache."""
         with self._cache_lock:
             self._cache.pop(video_id, None)
+            self._failed_prefetches.pop(video_id, None)
 
     def clear_cache(self) -> None:
         """Remove all entries from the cache and reset the yt-dlp instance."""
         with self._cache_lock:
             self._cache.clear()
+            self._failed_prefetches.clear()
             self._cache_generation += 1
         self._reset_ydl()
 

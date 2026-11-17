@@ -147,14 +147,20 @@ class CacheManager:
         return dest
 
     async def has(self, video_id: str) -> bool:
-        """Return True if *video_id* is cached."""
+        """Return True if *video_id* has a cached file on disk without updating LRU."""
         if self._db is None:
             raise RuntimeError("Database not initialized")
         async with self._db.execute(
-            "SELECT 1 FROM cache_index WHERE video_id = ?",
+            "SELECT file_path FROM cache_index WHERE video_id = ?",
             (video_id,),
         ) as cursor:
-            return await cursor.fetchone() is not None
+            row = await cursor.fetchone()
+        if row is None:
+            return False
+        if not Path(row["file_path"]).exists():
+            await self.remove(video_id)
+            return False
+        return True
 
     async def remove(self, video_id: str) -> None:
         """Remove a single cached file and its index entry."""

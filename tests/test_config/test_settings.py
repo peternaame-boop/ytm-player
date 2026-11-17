@@ -12,7 +12,7 @@ else:
     # Python 3.10 backport via PyPI
     import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
-from ytm_player.config.settings import Settings
+from ytm_player.config.settings import Settings, prefetch_ahead_count
 
 
 class TestDefaultValues:
@@ -242,8 +242,6 @@ class TestPrefetchNextSetting:
     """[cache] prefetch_next accepts bool or int (clamped to 0..MAX_PREFETCH_NEXT)."""
 
     def test_default_is_true_and_resolves_to_one(self):
-        from ytm_player.config.settings import prefetch_ahead_count
-
         s = Settings()
         assert s.cache.prefetch_next is True
         assert prefetch_ahead_count(s.cache.prefetch_next) == 1
@@ -263,8 +261,6 @@ class TestPrefetchNextSetting:
         ],
     )
     def test_prefetch_ahead_count_normalizes_values(self, raw, expected):
-        from ytm_player.config.settings import prefetch_ahead_count
-
         assert prefetch_ahead_count(raw) == expected
 
     @pytest.mark.parametrize(
@@ -281,8 +277,6 @@ class TestPrefetchNextSetting:
     def test_load_accepts_bool_and_clamps_int(
         self, tmp_config_dir, toml_literal, loaded_value, ahead_count
     ):
-        from ytm_player.config.settings import prefetch_ahead_count
-
         path = tmp_config_dir / "config.toml"
         path.write_text(f"[cache]\nprefetch_next = {toml_literal}\n", encoding="utf-8")
 
