@@ -230,6 +230,33 @@ class TestPlayerMpvLogHandler:
             f"info message not routed: {messages!r}"
         )
 
+    def test_mpv_constructed_with_chunked_http_and_interleaved_float(self, monkeypatch):
+        """Verify _init_mpv sets audio_format='float' and chunked lavf HTTP options."""
+        from unittest.mock import MagicMock
+
+        from ytm_player.services.player import Player
+
+        captured: dict[str, dict[str, object]] = {}
+
+        def fake_mpv_ctor(*_args: object, **kwargs: object) -> MagicMock:
+            captured["kwargs"] = kwargs
+            instance = MagicMock()
+            instance.volume = 80
+            instance.pause = False
+            return instance
+
+        monkeypatch.setattr("ytm_player.services.player.mpv.MPV", fake_mpv_ctor)
+
+        Player._instance = None
+        try:
+            Player()
+        finally:
+            Player._instance = None
+
+        kwargs = captured.get("kwargs") or {}
+        assert kwargs.get("audio_format") == "float"
+        assert kwargs.get("stream_lavf_o") == "request_size=2097152,multiple_requests=1"
+
 
 class TestSeekDispatch:
     """T10: seek/seek_absolute must dispatch PlayerEvent.SEEK with the

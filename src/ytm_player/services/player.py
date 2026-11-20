@@ -263,6 +263,12 @@ class Player:
             terminal=False,
             input_default_bindings=False,
             input_vo_keyboard=False,
+            # Interleaved float avoids CoreAudio channel-layout rejection (-50)
+            # on planar floatp Opus/AAC output, preventing fallback to avfoundation.
+            audio_format="float",
+            # Fetch HTTPS streams in 2 MiB bounded Range chunks over persistent
+            # connections so YouTube does not throttle un-ranged continuous GETs.
+            stream_lavf_o="request_size=2097152,multiple_requests=1",
             log_handler=_on_mpv_log,
             loglevel="warn",
         )
