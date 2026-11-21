@@ -255,6 +255,7 @@ class TestPlayerMpvLogHandler:
             Player._instance = None
 
         kwargs = captured.get("kwargs") or {}
+        assert kwargs.get("audio_format") == "float"
         assert kwargs.get("stream_lavf_o") == "request_size=10485760,multiple_requests=1"
         # Not a constructor option: it does not exist before mpv 0.42.
         assert "curl_max_request_size" not in kwargs
