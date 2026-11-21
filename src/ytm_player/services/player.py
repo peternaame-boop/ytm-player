@@ -263,6 +263,9 @@ class Player:
             terminal=False,
             input_default_bindings=False,
             input_vo_keyboard=False,
+            # Interleaved float avoids CoreAudio channel-layout rejection (-50)
+            # on planar floatp Opus/AAC output, preventing fallback to avfoundation.
+            audio_format="float",
             # Fetch HTTPS streams in bounded 10 MiB Range chunks (yt-dlp's own
             # http_chunk_size for YouTube) over persistent connections, so
             # YouTube does not throttle open-ended GETs.
