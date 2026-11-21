@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     from textual.app import App
 
-    from ytm_player.app._playback import _LocalHistoryClaim
+    from ytm_player.app._playback import _ActivePrefetch, _LocalHistoryClaim
     from ytm_player.config.keymap import KeyMap
     from ytm_player.config.settings import Settings
     from ytm_player.ipc import IPCServer
@@ -123,6 +123,10 @@ if TYPE_CHECKING:
         _ytm_history_pending: list[tuple[int, dict]]
         _ytm_history_pending_seq: int
         _play_lock: asyncio.Lock
+        _prefetch_lock: asyncio.Lock
+        _active_prefetch: _ActivePrefetch | None
+        _resolving_play_generation: int | None
+        _fg_resolve_idle: asyncio.Event
 
         # ── Pending resume from prior session ──────────────────────────
         _pending_resume_video_id: str | None

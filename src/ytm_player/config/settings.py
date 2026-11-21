@@ -28,6 +28,21 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HISTORY_MIN_LISTEN_SECONDS = 5
 MAX_HISTORY_MIN_LISTEN_SECONDS = 3600
+MAX_PREFETCH_NEXT = 5
+
+
+def prefetch_ahead_count(value: object) -> int:
+    """Return how many upcoming tracks ``[cache] prefetch_next`` prefetches.
+
+    ``False`` and ``<= 0`` disable prefetching; ``True`` (and any non-int/bool
+    object) prefetches ``1`` track; positive integers are clamped to
+    ``MAX_PREFETCH_NEXT``.
+    """
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int):
+        return max(0, min(MAX_PREFETCH_NEXT, value))
+    return 1
 
 
 @dataclass
@@ -81,7 +96,7 @@ class SearchSettings:
 class CacheSettings:
     enabled: bool = True
     max_size_mb: int = 1024
-    prefetch_next: bool = True
+    prefetch_next: bool | int = True
     location: str = ""
 
 
@@ -244,6 +259,13 @@ class Settings:
             0,
             min(MAX_HISTORY_MIN_LISTEN_SECONDS, settings.playback.history_min_listen_seconds),
         )
+        if isinstance(settings.cache.prefetch_next, int) and not isinstance(
+            settings.cache.prefetch_next, bool
+        ):
+            settings.cache.prefetch_next = max(
+                0,
+                min(MAX_PREFETCH_NEXT, settings.cache.prefetch_next),
+            )
 
         return settings
 

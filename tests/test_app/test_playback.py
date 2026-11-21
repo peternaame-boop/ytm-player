@@ -32,6 +32,7 @@ def _fresh_playback_host():
     p.queue = MagicMock()
     p.queue.next_track = MagicMock(return_value=None)
     p.queue.peek_next = MagicMock(return_value=None)
+    p.queue.peek_upcoming = MagicMock(return_value=[])
     p.history = None
     p.cache = None
     p.discord = None

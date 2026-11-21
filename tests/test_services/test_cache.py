@@ -67,6 +67,52 @@ class TestHas:
         assert await cache_manager.has(VID_A) is False
         await cache_manager.close()
 
+    async def test_has_prunes_stale_entry_when_file_deleted_externally(self, cache_manager):
+        await cache_manager.init()
+        path = await cache_manager.put(VID_A, b"data", "opus")
+        path.unlink()
+        assert await cache_manager.has(VID_A) is False
+        assert await cache_manager.get(VID_A) is None
+        await cache_manager.close()
+
+    async def test_has_does_not_update_lru_or_hit_count(self, tmp_path):
+        manager = CacheManager(
+            cache_dir=tmp_path / "cache",
+            db_path=tmp_path / "cache.db",
+            max_size_mb=1,
+        )
+        await manager.init()
+        try:
+            chunk = b"x" * (400 * 1024)  # two fit in 1 MB; third triggers eviction
+            await manager.put(VID_A, chunk, "opus")
+            await manager.put(VID_B, chunk, "opus")
+            assert manager._db is not None
+            await manager._db.execute(
+                "UPDATE cache_index SET last_accessed = '2000-01-01 00:00:00' WHERE video_id = ?",
+                (VID_A,),
+            )
+            await manager._db.commit()
+
+            # Touch VID_B via get(), then check VID_A via has() — VID_A's
+            # last_accessed and _hit_count must stay untouched so VID_A is evicted.
+            assert await manager.get(VID_B) is not None
+            hits_after_get = manager._hit_count
+            assert await manager.has(VID_A) is True
+            assert manager._hit_count == hits_after_get
+            async with manager._db.execute(
+                "SELECT last_accessed FROM cache_index WHERE video_id = ?",
+                (VID_A,),
+            ) as cur:
+                row = await cur.fetchone()
+            assert row is not None and row["last_accessed"] == "2000-01-01 00:00:00"
+
+            await manager.put(VID_C, chunk, "opus")
+            assert await manager.has(VID_A) is False
+            assert await manager.has(VID_B) is True
+            assert await manager.has(VID_C) is True
+        finally:
+            await manager.close()
+
 
 class TestRemove:
     async def test_remove_deletes_entry_and_file(self, cache_manager):
