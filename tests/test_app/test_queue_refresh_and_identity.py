@@ -13,6 +13,7 @@ from __future__ import annotations
 import types
 from unittest.mock import AsyncMock, MagicMock
 
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.services.queue import QueueManager
 from ytm_player.ui.widgets.track_table import TrackTable
@@ -39,6 +40,7 @@ def _ids(queue: QueueManager) -> list[int]:
 def _host(queue: QueueManager) -> MagicMock:
     """A mocked host whose remove/open helpers are the real ones."""
     host = MagicMock()
+    host._ownership = PlaybackOwnership()
     host.queue = queue
     for name in ("_remove_from_queue", "_open_actions_for_track"):
         setattr(host, name, types.MethodType(getattr(TrackActionsMixin, name), host))
@@ -262,6 +264,7 @@ class TestOccurrenceSnapshot:
 class TestBackgroundFillRefresh:
     async def test_appended_tracks_refresh_the_page(self):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host.queue = QueueManager()
         host.ytmusic.get_playlist_remaining = AsyncMock(
             return_value=[{"videoId": "v9", "title": "T", "artists": []}]
@@ -274,6 +277,7 @@ class TestBackgroundFillRefresh:
 
     async def test_nothing_remaining_does_not_refresh(self):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host.queue = QueueManager()
         host.ytmusic.get_playlist_remaining = AsyncMock(return_value=[])
 

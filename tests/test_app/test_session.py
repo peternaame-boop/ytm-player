@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ytm_player.app._mpris import MPRISMixin
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._playback import PlaybackMixin
 from ytm_player.app._session import SessionMixin
 from ytm_player.services.queue import QueueManager, RepeatMode
@@ -432,14 +433,10 @@ def _sequence_host(tmp_path, monkeypatch, *, resume_on_launch: bool):
     h._mpris_hint_shown = False
     h._session_restored = False
     h._loaded_resume = None
-    h._last_play_video_id = None
-    h._last_play_time = 0.0
+    h._ownership = PlaybackOwnership()
     h._consecutive_failures = 0
     h._track_start_position = 0.0
     h._advancing = False
-    h._play_generation = 0
-    h._recovery_generation = None
-    h._handled_error_attempt = 0
     h._local_history_claim = None
     h._play_lock = asyncio.Lock()
     h._get_transliteration_state = lambda: False
@@ -469,11 +466,11 @@ class TestRestorePlayStopSaveSequence:
         await h.play_track(_track(played))
         h.player.play.assert_awaited_once()
         assert h._loaded_resume is None
-        generation = h._play_generation
+        attempt = h.player.play.await_args.kwargs["attempt"]
 
         await h._mpris_stop()
         h.player.stop.assert_awaited_once()
-        assert h._play_generation == generation + 1
+        assert h._ownership.is_current_attempt(attempt + 1)
 
         h._save_session_state()
 

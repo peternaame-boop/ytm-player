@@ -230,6 +230,61 @@ class TestPlayerMpvLogHandler:
             f"info message not routed: {messages!r}"
         )
 
+    def test_mpv_constructed_with_chunked_http(self, monkeypatch):
+        """Verify _init_mpv bounds HTTP request size on both mpv HTTP backends."""
+        from unittest.mock import MagicMock
+
+        from ytm_player.services.player import Player
+
+        captured: dict[str, dict[str, object]] = {}
+
+        instance = MagicMock()
+        instance.volume = 80
+        instance.pause = False
+
+        def fake_mpv_ctor(*_args: object, **kwargs: object) -> MagicMock:
+            captured["kwargs"] = kwargs
+            return instance
+
+        monkeypatch.setattr("ytm_player.services.player.mpv.MPV", fake_mpv_ctor)
+
+        Player._instance = None
+        try:
+            Player()
+        finally:
+            Player._instance = None
+
+        kwargs = captured.get("kwargs") or {}
+        assert kwargs.get("audio_format") == "float"
+        assert kwargs.get("stream_lavf_o") == "request_size=10485760,multiple_requests=1"
+        # Not a constructor option: it does not exist before mpv 0.42.
+        assert "curl_max_request_size" not in kwargs
+        instance.__setitem__.assert_any_call("curl-max-request-size", 10485760)
+
+    def test_mpv_init_survives_missing_curl_option(self, monkeypatch):
+        """mpv older than 0.42 has no curl-max-request-size; startup must not break."""
+        from unittest.mock import MagicMock
+
+        from ytm_player.services.player import Player
+
+        def fake_setitem(name: str, _value: object) -> None:
+            if name == "curl-max-request-size":
+                raise AttributeError("mpv option does not exist")
+
+        instance = MagicMock()
+        instance.volume = 80
+        instance.pause = False
+        instance.__setitem__.side_effect = fake_setitem
+
+        monkeypatch.setattr("ytm_player.services.player.mpv.MPV", lambda *_a, **_k: instance)
+
+        Player._instance = None
+        try:
+            player = Player()
+            assert player._mpv is instance
+        finally:
+            Player._instance = None
+
 
 class TestSeekDispatch:
     """T10: seek/seek_absolute must dispatch PlayerEvent.SEEK with the

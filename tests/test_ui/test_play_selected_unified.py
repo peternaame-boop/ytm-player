@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from textual.widget import Widget
 
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.services.queue import QueueManager
 from ytm_player.ui.pages.browse import BrowsePage, navigate_browse_item
@@ -41,6 +42,7 @@ def _track(video_id: str, title: str = "T") -> dict:
 
 def _make_host(*, queue: QueueManager | None = None, real_helper: bool = False) -> MagicMock:
     host = MagicMock()
+    host._ownership = PlaybackOwnership()
     host.queue = queue if queue is not None else QueueManager()
     host.shuffle_prefs = MagicMock()
     host.shuffle_prefs.get = MagicMock(return_value=None)

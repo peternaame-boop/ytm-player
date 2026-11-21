@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **New features**
 
-- **Prefetch multiple upcoming tracks**: `[cache] prefetch_next` now accepts a track count (`0`-`5`) in addition to `true` (`1`) and `false` (`0`), resolving upcoming queue entries sequentially in the background so quick skips have streams ready ahead of time, and disabling prefetching when set to `false` or `0`.
+- **Prefetch multiple upcoming tracks**: `[cache] prefetch_next` now accepts a track count (`0`-`5`) in addition to `true` (`1`) and `false` (`0`), resolving upcoming queue entries sequentially in the background so quick skips have streams ready ahead of time, and disabling prefetching when set to `false` or `0`. Thanks to @wgordon17 for the feature ([#219](https://github.com/peternaame-boop/ytm-player/pull/219)).
 
 ---
 

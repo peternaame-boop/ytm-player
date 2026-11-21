@@ -27,6 +27,7 @@ from ytm_player.app._ipc import IPCMixin
 from ytm_player.app._keys import KeyHandlingMixin
 from ytm_player.app._mpris import MPRISMixin
 from ytm_player.app._navigation import PAGE_NAMES, NavigationMixin
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._playback import PlaybackMixin, _ActivePrefetch, _LocalHistoryClaim
 from ytm_player.app._session import SessionMixin
 from ytm_player.app._sidebar import SidebarMixin
@@ -268,22 +269,8 @@ class YTMPlayerApp(
         # Consecutive stream failure counter (prevents infinite skip loops).
         self._consecutive_failures: int = 0
 
-        # Debounce rapid play_track calls (e.g. double-click).
-        self._last_play_video_id: str = ""
-        self._last_play_time: float = 0.0
-        # Cross-track supersede counter: each committed play_track call
-        # bumps it; older in-flight calls abort at their next check.
-        self._play_generation: int = 0
-        self._play_request: int = 0
-        self._active_stop_generation: int = 0
-        self._queue_stop_generation: int = 0
-        # (queue generation, stop generation) the running refill was started for.
-        self._refill_owner: tuple[int, int] | None = None
-        self._handled_end_attempt: int = -1
-        # Generation of the one retry a failed play attempt gets, and the
-        # highest attempt whose ERROR was handled (see _on_player_error).
-        self._recovery_generation: int | None = None
-        self._handled_error_attempt: int = 0
+        # Playback requests, play attempts, retry, refill and debounce.
+        self._ownership: PlaybackOwnership = PlaybackOwnership()
         # Play generation already reported to the YT Music account history,
         # so each play is reported at most once. -1 = nothing reported yet.
         self._ytm_reported_generation: int = -1

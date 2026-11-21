@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._track_actions import TrackActionsMixin
 
 
 def _make_host(*, get_artist_return=None, get_watch_playlist_return=None):
     """Build a MagicMock standing in for a host app with ytmusic service."""
     host = MagicMock()
+    host._ownership = PlaybackOwnership()
     host.ytmusic = MagicMock()
     host.ytmusic.get_artist = AsyncMock(return_value=get_artist_return or {})
     host.ytmusic.get_watch_playlist = AsyncMock(return_value=get_watch_playlist_return or [])
@@ -332,6 +334,7 @@ class TestFetchRemainingArtistSongs:
 class TestReplaceQueueAndPlay:
     def _make_host(self, shuffle_locked=False):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host.queue = MagicMock()
         host.queue.shuffle_enabled = False
         host.shuffle_prefs = MagicMock()
@@ -434,6 +437,7 @@ class TestReplaceQueueAndPlay:
 class TestPlayPlaylist:
     def _make_host(self, get_playlist_return=None):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host.ytmusic = MagicMock()
         host.ytmusic.get_playlist = AsyncMock(return_value=get_playlist_return or {})
         host._replace_queue_and_play = AsyncMock()
@@ -494,6 +498,7 @@ class TestPlayPlaylist:
 
     async def test_error_shows_notification(self):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host.ytmusic = MagicMock()
         host.ytmusic.get_playlist = AsyncMock(side_effect=Exception("API error"))
         host.notify = MagicMock()
@@ -565,6 +570,7 @@ class TestAddPlaylistToQueue:
 class TestDispatchEntityAction:
     def _make_host(self):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host._play_album = AsyncMock()
         host._play_playlist = AsyncMock()
         host._add_album_to_queue = AsyncMock()
@@ -834,6 +840,7 @@ class TestBuildActionsSourceFilter:
 class TestStartPlaylistRadio:
     def _make_host(self, radio_return=None, radio_side_effect=None):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host.ytmusic = MagicMock()
         if radio_side_effect is not None:
             host.ytmusic.get_playlist_radio = AsyncMock(side_effect=radio_side_effect)
@@ -917,6 +924,7 @@ class TestStartPlaylistRadio:
 class TestFetchRemainingForQueue:
     def _make_host(self, remaining_return=None, remaining_side_effect=None):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host.ytmusic = MagicMock()
         if remaining_side_effect is not None:
             host.ytmusic.get_playlist_remaining = AsyncMock(side_effect=remaining_side_effect)
@@ -968,6 +976,7 @@ class TestFetchRemainingForQueue:
 class TestDispatchEntityActionExtended:
     def _make_host(self):
         host = MagicMock()
+        host._ownership = PlaybackOwnership()
         host._play_album = AsyncMock()
         host._play_playlist = AsyncMock()
         host._add_album_to_queue = AsyncMock()
