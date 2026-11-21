@@ -172,3 +172,17 @@ Published on four channels:
 - **AUR:** `yay -S ytm-player-git` — https://aur.archlinux.org/packages/ytm-player-git
 - **NixOS:** `flake.nix` with `ytm-player` and `ytm-player-full` packages
 - **Gentoo:** `emerge media-sound/ytm-player` via GURU overlay (community-maintained by @dsafxP)
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (`peternaame-boop/ytm-player`), managed via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical roles, with `needs-info` mapped to the existing `question` label. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`, created lazily. See `docs/agents/domain.md`.
