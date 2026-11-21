@@ -83,6 +83,6 @@ src/ytm_player/
 - **Track format** — All services use a standardized track dict (`video_id`, `title`, `artist`, `artists`, `album`, `album_id`, `duration`, `thumbnail_url`, `is_video`). The `normalize_tracks()` helper in `utils/formatting.py` converts inconsistent ytmusicapi response shapes into this format.
 - **Session persistence** — Volume, queue, shuffle/repeat, and the last-playing track + position are saved on every exit to `session.json`. When `[playback] resume_on_launch` is true (default), the last-playing track + position are staged into the playback bar at launch and consumed the first time the user presses play. Per-playlist Shuffle lock state is stored separately in `shuffle_prefs.json`.
 - **Playback bar keybindings** — Standard transport keys plus `l` to toggle the like state of the currently playing track.
-- **Prefetching** — Next track's stream URL is resolved in the background for instant skip.
+- **Prefetching** — Upcoming stream URLs (`[cache] prefetch_next`: `true` = 1, `false`/`0` = off, or `1`–`5`) are resolved sequentially in the background for fast skips.
 - **Page navigation** — `app/_navigation.py` manages a nav stack (max 20). Each page implements `handle_action(action, count)` for vim-style keybinding dispatch and `get_nav_state()` for state preservation across navigation.
 - **LC_NUMERIC quirk** — `cli.py` forces `LC_NUMERIC=C` at import time — mpv segfaults without it.

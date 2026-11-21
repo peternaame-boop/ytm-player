@@ -397,3 +397,26 @@ async def test_unowned_scope_makes_a_nested_call_a_fresh_request():
 
     h = _Mounting()
     assert await h.mount_page() is False
+
+
+def test_prefetch_window_ends_on_stop_or_queue_replacement():
+    ownership = PlaybackOwnership()
+    snapshot = ownership.capture_prefetch(queue_generation=1)
+    assert ownership.prefetch_window(snapshot, 1, 3, exclusive=False) == 3
+    assert ownership.prefetch_window(snapshot, 2, 3, exclusive=False) == 0
+    ownership.stop()
+    assert ownership.prefetch_window(snapshot, 1, 3, exclusive=False) == 0
+
+
+def test_prefetch_window_after_newer_attempts():
+    ownership = PlaybackOwnership()
+    snapshot = ownership.capture_prefetch(queue_generation=1)
+    ownership._owner_for(Policy.FOREGROUND, 1)  # a reserved request alone keeps the window
+    assert ownership.prefetch_window(snapshot, 1, 3, exclusive=True) == 3
+    ownership.commit_attempt(retry=False)
+    assert ownership.prefetch_window(snapshot, 1, 3, exclusive=True) == 0
+    assert ownership.prefetch_window(snapshot, 1, 3, exclusive=False) == 2
+    ownership.commit_attempt(retry=False)
+    ownership.commit_attempt(retry=False)
+    ownership.commit_attempt(retry=False)
+    assert ownership.prefetch_window(snapshot, 1, 3, exclusive=False) == 0

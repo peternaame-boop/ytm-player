@@ -71,9 +71,11 @@ If one source can't be loaded, All shows the other and says so in the footer. Re
 [cache]
 enabled = true               # currently has no effect; the cache is always on
 max_size_mb = 1024           # 1GB default LRU audio cache
-prefetch_next = true         # currently has no effect; the next track's stream URL is always prefetched
+prefetch_next = true         # true (1 track), false (off), or 0-5 upcoming tracks
 location = ""                # blank = default cache dir; set a path to override
 ```
+
+`prefetch_next` controls how many upcoming queue entries have their stream URLs resolved in the background when playback advances: `true` (default) prefetches the next track, `false` or `0` disables prefetching, and an integer `1`–`5` prefetches up to that many upcoming tracks sequentially (clamped to `0`–`5`).
 
 Tracks saved with **Download for Offline** live in this cache and count toward `max_size_mb`. When the limit is reached, the least recently accessed files are removed — downloads included. A download that doesn't fit within the limit on its own is reported as not retained. A download interrupted by the app being killed starts again from the beginning the next time you download that track.
 

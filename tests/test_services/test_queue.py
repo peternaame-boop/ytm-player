@@ -878,3 +878,117 @@ class TestShuffleOffKeepsThePlayingOccurrence:
             entry_id, track = queue.entries[queue.current_index]
             assert entry_id == playing_id, f"seed {seed}"
             assert track is playing and queue.current_track is playing
+
+
+class TestPeekUpcoming:
+    """peek_upcoming returns up to N future tracks without mutating queue state."""
+
+    def test_empty_or_non_positive_count_returns_empty(self, queue_manager, sample_tracks):
+        assert queue_manager.peek_upcoming(3) == []
+        queue_manager.add_multiple(sample_tracks)
+        queue_manager.jump_to(0)
+        assert queue_manager.peek_upcoming(0) == []
+        assert queue_manager.peek_upcoming(-2) == []
+        assert queue_manager.current() == sample_tracks[0]
+
+    def test_linear_mid_queue_returns_exact_upcoming_slice(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks)
+        queue_manager.jump_to(1)
+
+        assert queue_manager.peek_upcoming(2) == [sample_tracks[2], sample_tracks[3]]
+        assert queue_manager.current() == sample_tracks[1]
+
+    def test_linear_repeat_off_truncates_at_queue_end(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks)
+        queue_manager.jump_to(3)
+
+        assert queue_manager.peek_upcoming(4) == [sample_tracks[4]]
+        queue_manager.jump_to(4)
+        assert queue_manager.peek_upcoming(4) == []
+
+    def test_linear_repeat_all_wraps_and_caps_at_queue_length(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks[:3])
+        queue_manager.jump_to(2)
+        queue_manager.set_repeat(RepeatMode.ALL)
+
+        assert queue_manager.peek_upcoming(2) == [sample_tracks[0], sample_tracks[1]]
+        assert queue_manager.peek_upcoming(5) == [
+            sample_tracks[0],
+            sample_tracks[1],
+            sample_tracks[2],
+        ]
+
+    def test_repeat_one_returns_single_current_entry(self, queue_manager, sample_tracks):
+        queue_manager.add_multiple(sample_tracks)
+        queue_manager.jump_to(2)
+        queue_manager.set_repeat(RepeatMode.ONE)
+
+        assert queue_manager.peek_upcoming(4) == [sample_tracks[2]]
+
+    def test_shuffle_matches_subsequent_next_track_order_and_stops_at_pass_end(
+        self, queue_manager, sample_tracks
+    ):
+        queue_manager.add_multiple(sample_tracks)
+        queue_manager.jump_to(0)
+        queue_manager.toggle_shuffle()
+        queue_manager.set_repeat(RepeatMode.ALL)
+        queue_manager.jump_to(1)
+
+        peeked = queue_manager.peek_upcoming(5)
+        # 5 tracks total at shuffle index 1 -> only indices 2, 3, 4 are known before reshuffle.
+        assert len(peeked) == 3
+        actual = [queue_manager.next_track() for _ in range(3)]
+        assert peeked == actual
+
+    def test_removed_current_starts_from_successor_without_clearing_removed_state(
+        self, queue_manager, sample_tracks
+    ):
+        queue_manager.add_multiple(sample_tracks)
+        queue_manager.jump_to(1)
+        queue_manager.remove(1)
+
+        assert queue_manager.current() is None
+        assert queue_manager.peek_upcoming(2) == [sample_tracks[2], sample_tracks[3]]
+        assert queue_manager.current() is None
+
+    @pytest.mark.parametrize("shuffle", [False, True])
+    @pytest.mark.parametrize("repeat", [RepeatMode.OFF, RepeatMode.ALL, RepeatMode.ONE])
+    @pytest.mark.parametrize("remove_at_end", [False, True])
+    def test_removed_current_matches_next_track_across_modes(
+        self, sample_tracks, shuffle, repeat, remove_at_end
+    ):
+        q = QueueManager()
+        q.add_multiple(sample_tracks[:4])
+        q.jump_to(0)
+        if shuffle:
+            q.toggle_shuffle()
+        q.set_repeat(repeat)
+        target_pos = 3 if remove_at_end else 1
+        q.jump_to(target_pos)
+        q.remove(target_pos)  # 3 tracks remain
+
+        peeked = q.peek_upcoming(3)
+        assert q.current() is None  # state untouched
+
+        if not peeked:
+            assert q.next_track() is None
+            return
+        actual = [q.next_track() for _ in range(len(peeked))]
+        assert peeked == actual
+
+    @pytest.mark.parametrize("shuffle", [False, True])
+    @pytest.mark.parametrize("repeat", [RepeatMode.OFF, RepeatMode.ALL, RepeatMode.ONE])
+    def test_unstarted_queue_matches_next_track(self, sample_tracks, shuffle, repeat):
+        q = QueueManager()
+        q.add_multiple(sample_tracks[:3])
+        if shuffle:
+            q.toggle_shuffle()
+        q.set_repeat(repeat)
+
+        peeked = q.peek_upcoming(2)
+        if repeat == RepeatMode.ONE:
+            assert peeked == []
+            assert q.next_track() is None
+        else:
+            assert len(peeked) == 2
+            assert peeked == [q.next_track(), q.next_track()]

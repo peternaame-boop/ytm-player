@@ -735,6 +735,60 @@ class TestAvailableAtWait:
         assert await asyncio.wait_for(task, timeout=5) is not None
         assert resolver._get_cached("clear01") is None
 
+    async def test_prefetch_joins_pending_resolve_without_waiting_for_ad_window(
+        self, frozen_clock, monkeypatch
+    ):
+        sleep_started = self._gate_async_sleep(monkeypatch)
+        resolver = StreamResolver()
+        entered = threading.Event()
+        release = threading.Event()
+        calls: list[str] = []
+
+        def blocking_resolve(video_id: str) -> StreamInfo:
+            calls.append(video_id)
+            entered.set()
+            release.wait(timeout=5)
+            return self._info(video_id, 1030)
+
+        resolver._resolve_sync = blocking_resolve  # type: ignore[method-assign]
+
+        joined = asyncio.Event()
+        current_pending = resolver._current_pending
+
+        def spy_current_pending(video_id, generation):
+            pending = current_pending(video_id, generation)
+            if pending is not None:
+                joined.set()
+            return pending
+
+        resolver._current_pending = spy_current_pending  # type: ignore[method-assign]
+
+        owner = asyncio.create_task(resolver.resolve("join02"))
+        prefetcher = None
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            prefetcher = asyncio.create_task(resolver.prefetch("join02"))
+            await asyncio.wait_for(joined.wait(), timeout=5)
+            # Prefetch must join and stay suspended while extraction is in flight.
+            assert not prefetcher.done()
+
+            # Once extraction completes, prefetch returns immediately with the stream
+            # cached while resolve() remains suspended in the available_at ad sleep.
+            release.set()
+            await asyncio.wait_for(prefetcher, timeout=5)
+            await asyncio.wait_for(sleep_started.wait(), timeout=5)
+
+            assert not owner.done()
+            assert resolver._get_cached("join02") is not None
+            assert calls == ["join02"]
+        finally:
+            release.set()
+            tasks = [owner] if prefetcher is None else [owner, prefetcher]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     def test_resolve_sync_waits_on_resolve_and_on_cache_hit(self, frozen_clock):
         resolver = StreamResolver()
         resolver._resolve_sync = lambda video_id: self._info(video_id, 1006)  # type: ignore[method-assign]
@@ -744,3 +798,38 @@ class TestAvailableAtWait:
         assert resolver.resolve_sync("sync01") is not None  # cache hit
 
         assert frozen_clock.sleeps == [6, 2]
+
+    async def test_failed_prefetch_cools_down_until_invalidated_or_cleared(self, frozen_clock):
+        resolver = StreamResolver()
+        calls: list[str] = []
+        succeed = False
+
+        def flaky_resolve(video_id: str) -> StreamInfo | None:
+            calls.append(video_id)
+            if not succeed:
+                return None
+            return self._info(video_id, 995)
+
+        resolver._resolve_sync = flaky_resolve  # type: ignore[method-assign]
+
+        await resolver.prefetch("bad01")
+        await resolver.prefetch("bad01")  # skipped during cooldown
+        assert calls == ["bad01"]
+
+        # Foreground resolve() still retries live despite prefetch cooldown,
+        # and caching the stream clears the failed-prefetch cooldown entry.
+        succeed = True
+        assert await resolver.resolve("bad01") is not None
+        assert calls == ["bad01", "bad01"]
+
+        # invalidate(), clear_cache(), and TTL expiry clear negative cooldowns.
+        succeed = False
+        resolver.invalidate("bad01")
+        await resolver.prefetch("bad01")
+        assert len(calls) == 3
+        frozen_clock.now += 301
+        await resolver.prefetch("bad01")
+        assert len(calls) == 4
+        resolver.clear_cache()
+        await resolver.prefetch("bad01")
+        assert len(calls) == 5

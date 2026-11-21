@@ -28,7 +28,7 @@ from ytm_player.app._keys import KeyHandlingMixin
 from ytm_player.app._mpris import MPRISMixin
 from ytm_player.app._navigation import PAGE_NAMES, NavigationMixin
 from ytm_player.app._ownership import PlaybackOwnership
-from ytm_player.app._playback import PlaybackMixin, _LocalHistoryClaim
+from ytm_player.app._playback import PlaybackMixin, _ActivePrefetch, _LocalHistoryClaim
 from ytm_player.app._session import SessionMixin
 from ytm_player.app._sidebar import SidebarMixin
 from ytm_player.app._track_actions import TrackActionsMixin
@@ -291,6 +291,17 @@ class YTMPlayerApp(
         self._ytm_history_pending_seq = 0
         # Makes the generation check + mpv play command atomic.
         self._play_lock = asyncio.Lock()
+        # Serializes background prefetch workers so an exclusive=False refill
+        # prefetch queues behind an in-flight prefetch instead of leapfrogging.
+        self._prefetch_lock = asyncio.Lock()
+        # Shielded single-track prefetch task so worker replacement does not
+        # discard an in-flight yt-dlp extraction.
+        self._active_prefetch: _ActivePrefetch | None = None
+        # Current play_generation while foreground play_track is pre-resolving
+        # or resolving; background prefetch yields until it clears.
+        self._resolving_play_generation: int | None = None
+        self._fg_resolve_idle = asyncio.Event()
+        self._fg_resolve_idle.set()
 
         # Pending resume from prior session (set by _restore_session_state).
         # Cleared on first matching play_track call.
@@ -916,6 +927,16 @@ class YTMPlayerApp(
             await _step("log final listen", self._log_current_listen)
             await _step("remove player callbacks", self.player.clear_callbacks)
             await _step("shut down player", self.player.shutdown)
+
+        active_prefetch = getattr(self, "_active_prefetch", None)
+        if isinstance(active_prefetch, _ActivePrefetch):
+
+            async def _cancel_active_prefetch() -> None:
+                active_prefetch.task.cancel()
+                await asyncio.gather(active_prefetch.task, return_exceptions=True)
+
+            if await _step("cancel active prefetch", _cancel_active_prefetch):
+                self._active_prefetch = None
 
         if self.stream_resolver:
             await _step("clear resolver cache", self.stream_resolver.clear_cache)

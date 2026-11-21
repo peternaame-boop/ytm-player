@@ -89,6 +89,15 @@ class Snapshot:
             _owner.reset(token)
 
 
+@dataclass(frozen=True)
+class PrefetchSnapshot:
+    """Queue lifetime, stop count and play attempt a prefetch batch was scheduled under."""
+
+    queue: int
+    stop: int
+    attempt: int
+
+
 class PlaybackOwnership:
     """Owns every playback ownership decision for one app."""
 
@@ -209,6 +218,27 @@ class PlaybackOwnership:
     def audio_advanced(self) -> None:
         """Audio of the current attempt is flowing: the retry budget is free again."""
         self._retry_attempt = None
+
+    # ── Stream prefetch ─────────────────────────────────────────────
+
+    def capture_prefetch(self, queue_generation: int) -> PrefetchSnapshot:
+        return PrefetchSnapshot(queue_generation, self._stop, self._attempt)
+
+    def prefetch_window(
+        self, snapshot: PrefetchSnapshot, queue_generation: int, count: int, exclusive: bool
+    ) -> int:
+        """How many upcoming tracks the batch may still prefetch; 0 ends it.
+
+        Stop or a queue replacement ends the batch. A newer committed attempt
+        ends an exclusive batch and shrinks a non-exclusive (refill) batch by
+        one per attempt. A request that only reserved leaves the batch alone.
+        """
+        if snapshot.queue != queue_generation or snapshot.stop != self._stop:
+            return 0
+        advances = self._attempt - snapshot.attempt
+        if exclusive and advances:
+            return 0
+        return max(0, count - advances)
 
     # ── Autoplay refill ─────────────────────────────────────────────
 

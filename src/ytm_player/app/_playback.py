@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+import sqlite3
+from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,11 +15,13 @@ from ytm_player.app._ownership import (
     ErrorAction,
     PlaybackOwnership,
     Policy,
+    PrefetchSnapshot,
     adopt_queue,
     owns_attempt,
     owns_request,
     playback_request,
 )
+from ytm_player.config.settings import prefetch_ahead_count
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.widgets.track_table import TrackTable
@@ -61,6 +66,33 @@ class _LocalHistoryClaim:
     # A finalize consumed this claim: stops the report chain and blocks a
     # second finalize from double-logging.
     finalized: bool = False
+
+
+def _consume_task_exception(task: asyncio.Task[Any]) -> None:
+    """Prevent unhandled-task-exception reports if a shielded prefetch outlives its worker."""
+    if not task.cancelled():
+        task.exception()
+
+
+@dataclass(slots=True, frozen=True)
+class _ActivePrefetch:
+    """In-flight single-track prefetch shielded across worker replacement."""
+
+    video_id: str
+    cache_gen: object
+    task: asyncio.Task[Any]
+
+
+@dataclass(slots=True)
+class _PrefetchJob:
+    """Deferred awaitable so unscheduled workers allocate no coroutine frame."""
+
+    host: PlaybackMixin
+    snapshot: PrefetchSnapshot
+    exclusive: bool
+
+    def __await__(self) -> Generator[Any, None, None]:
+        return self.host._prefetch_tracks(self.snapshot, self.exclusive).__await__()
 
 
 def _play_track_policy(
@@ -128,53 +160,57 @@ class PlaybackMixin(YTMHostBase):
         # stealing playback back or pushing stale metadata.
         attempt = self._ownership.commit_attempt(retry=recovery_of is not None)
 
-        # Log listen time for the previous track.
-        await self._log_current_listen()
-
-        if not owns_attempt(self, attempt):
-            return
-
-        # Update UI immediately -- show track info before stream resolves.
+        self._begin_foreground_resolve(attempt)
         try:
-            bar = self.query_one("#playback-bar", PlaybackBar)
-            bar.update_track(track)
-            bar.update_playback_state(is_playing=False, is_paused=False)
-        except Exception:
-            logger.debug("Playback bar not ready during play_track", exc_info=True)
+            # Log listen time for the previous track.
+            await self._log_current_listen()
 
-        # Try local audio cache first (previously downloaded or replayed track).
-        stream_info = None
-        if self.cache:
+            if not owns_attempt(self, attempt):
+                return
+
+            # Update UI immediately -- show track info before stream resolves.
             try:
-                cached_path = await self.cache.get(video_id)
+                bar = self.query_one("#playback-bar", PlaybackBar)
+                bar.update_track(track)
+                bar.update_playback_state(is_playing=False, is_paused=False)
             except Exception:
-                logger.debug("Cache lookup failed for %s", video_id, exc_info=True)
-                cached_path = None
+                logger.debug("Playback bar not ready during play_track", exc_info=True)
 
-            if cached_path is not None:
-                # Build a minimal StreamInfo pointing at the local file.
-                # Downstream code (Discord, Last.fm, MPRIS) only reads
-                # .url and .duration — duration comes from the track dict.
-                from ytm_player.services.stream import StreamInfo
+            # Try local audio cache first (previously downloaded or replayed track).
+            stream_info = None
+            if self.cache:
+                try:
+                    cached_path = await self.cache.get(video_id)
+                except Exception:
+                    logger.debug("Cache lookup failed for %s", video_id, exc_info=True)
+                    cached_path = None
 
-                stream_info = StreamInfo(
-                    url=str(cached_path),
-                    video_id=video_id,
-                    format=cached_path.suffix.lstrip(".") or "opus",
-                    bitrate=0,  # unknown for cached files
-                    duration=track.get("duration") or 0,
-                    expires_at=float("inf"),  # local files don't expire
-                    thumbnail_url=track.get("thumbnail_url"),
-                )
-                logger.info("Cache hit for %s — playing from %s", video_id, cached_path)
+                if cached_path is not None:
+                    # Build a minimal StreamInfo pointing at the local file.
+                    # Downstream code (Discord, Last.fm, MPRIS) only reads
+                    # .url and .duration — duration comes from the track dict.
+                    from ytm_player.services.stream import StreamInfo
 
-        # Resolve via yt-dlp if no cache hit.
-        if stream_info is None:
-            try:
-                stream_info = await self.stream_resolver.resolve(video_id)
-            except Exception:
-                logger.debug("Stream resolution raised for %s", video_id, exc_info=True)
-                stream_info = None
+                    stream_info = StreamInfo(
+                        url=str(cached_path),
+                        video_id=video_id,
+                        format=cached_path.suffix.lstrip(".") or "opus",
+                        bitrate=0,  # unknown for cached files
+                        duration=track.get("duration") or 0,
+                        expires_at=float("inf"),  # local files don't expire
+                        thumbnail_url=track.get("thumbnail_url"),
+                    )
+                    logger.info("Cache hit for %s — playing from %s", video_id, cached_path)
+
+            # Resolve via yt-dlp if no cache hit.
+            if stream_info is None:
+                try:
+                    stream_info = await self.stream_resolver.resolve(video_id)
+                except Exception:
+                    logger.debug("Stream resolution raised for %s", video_id, exc_info=True)
+                    stream_info = None
+        finally:
+            self._end_foreground_resolve(attempt)
 
         # A newer call may have landed while we awaited cache/resolve.
         # Its failure tail must not run either — it would toast, advance
@@ -697,23 +733,150 @@ class PlaybackMixin(YTMHostBase):
         except Exception:
             logger.debug("Failed to prefetch next track", exc_info=True)
 
-    def _prefetch_next_track(self, *, exclusive: bool = True) -> None:
-        """Prefetch the next track's stream URL in the background.
+    def _prefetch_count(self) -> int:
+        """Configured number of upcoming tracks to prefetch (0..MAX_PREFETCH_NEXT)."""
+        cache_cfg = getattr(getattr(self, "settings", None), "cache", None)
+        return prefetch_ahead_count(getattr(cache_cfg, "prefetch_next", True))
 
-        Called after a new track starts playing so that hitting "next"
-        or reaching the end of the current track starts instantly.
+    def _get_prefetch_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_prefetch_lock", None)
+        if not isinstance(lock, asyncio.Lock):
+            lock = asyncio.Lock()
+            self._prefetch_lock = lock
+        return lock
+
+    def _get_fg_resolve_idle(self) -> asyncio.Event:
+        idle = getattr(self, "_fg_resolve_idle", None)
+        if not isinstance(idle, asyncio.Event):
+            idle = asyncio.Event()
+            if getattr(self, "_resolving_play_generation", None) is None:
+                idle.set()
+            self._fg_resolve_idle = idle
+        return idle
+
+    def _begin_foreground_resolve(self, generation: int) -> None:
+        self._resolving_play_generation = generation
+        self._get_fg_resolve_idle().clear()
+
+    def _end_foreground_resolve(self, generation: int) -> None:
+        if getattr(self, "_resolving_play_generation", None) == generation:
+            self._resolving_play_generation = None
+            self._get_fg_resolve_idle().set()
+
+    async def _is_cached_on_disk(self, video_id: str) -> bool:
+        """True when *video_id* already has a local audio file in ``self.cache``."""
+        cache = getattr(self, "cache", None)
+        if cache is None:
+            return False
+        has_fn = getattr(cache, "has", None)
+        if not callable(has_fn):
+            return False
+        try:
+            result = has_fn(video_id)
+            if not inspect.isawaitable(result):
+                return False
+            return await result is True
+        except (RuntimeError, ValueError, sqlite3.Error, OSError) as exc:
+            logger.debug("Cache check skipped for %s: %s", video_id, exc)
+            return False
+
+    async def _run_shielded_prefetch(self, video_id: str) -> None:
+        """Run one ``stream_resolver.prefetch`` step shielded from worker cancellation."""
+        resolver = self.stream_resolver
+        if not resolver:
+            return
+        task: asyncio.Task[Any] = asyncio.create_task(resolver.prefetch(video_id))
+        task.add_done_callback(_consume_task_exception)
+        active = _ActivePrefetch(video_id, resolver.cache_generation, task)
+        self._active_prefetch = active
+        await asyncio.shield(task)
+        if getattr(self, "_active_prefetch", None) == active:
+            self._active_prefetch = None
+
+    async def _prefetch_tracks(
+        self,
+        snapshot: PrefetchSnapshot,
+        exclusive: bool,
+    ) -> None:
+        """Prefetch upcoming queue tracks sequentially, re-evaluating the queue
+        and yielding to foreground ``play_track`` resolves between extractions."""
+
+        def current_window() -> int:
+            if not self.stream_resolver:
+                return 0
+            return self._ownership.prefetch_window(
+                snapshot, self.queue.generation, self._prefetch_count(), exclusive
+            )
+
+        async def upcoming_ids() -> list[str] | None:
+            if current_window() <= 0:
+                return None
+            idle = self._get_fg_resolve_idle()
+            while not idle.is_set():
+                await idle.wait()
+            window = current_window()
+            if window <= 0:
+                return None
+            return [
+                vid
+                for t in self.queue.peek_upcoming(window)
+                if isinstance(t, dict) and (vid := get_video_id(t))
+            ]
+
+        async with self._get_prefetch_lock():
+            attempted: set[str] = set()
+            active = getattr(self, "_active_prefetch", None)
+            if isinstance(active, _ActivePrefetch):
+                if not active.task.done():
+                    await asyncio.shield(active.task)
+                    if (
+                        self.stream_resolver is not None
+                        and self.stream_resolver.cache_generation == active.cache_gen
+                    ):
+                        attempted.add(active.video_id)
+                if getattr(self, "_active_prefetch", None) == active:
+                    self._active_prefetch = None
+
+            while (upcoming := await upcoming_ids()) is not None:
+                next_id = next((vid for vid in upcoming if vid not in attempted), None)
+                if next_id is None:
+                    return
+                if await self._is_cached_on_disk(next_id):
+                    attempted.add(next_id)
+                    continue
+                current_upcoming = await upcoming_ids()
+                if current_upcoming is None:
+                    return
+                if next_id not in current_upcoming:
+                    continue
+                attempted.add(next_id)
+                await self._run_shielded_prefetch(next_id)
+
+    def _prefetch_next_track(self, *, exclusive: bool = True) -> None:
+        """Prefetch upcoming stream URLs in the background.
+
+        Called after a new track starts playing (or an autoplay refill appends
+        tracks) so hitting "next" or reaching the end of the track starts
+        instantly.
         """
         if not self.stream_resolver:
             return
-        next_track = self.queue.peek_next()
-        if next_track:
-            next_id = next_track.get("video_id", "")
-            if next_id:
-                self.run_worker(
-                    self.stream_resolver.prefetch(next_id),
-                    group="prefetch",
-                    exclusive=exclusive,
-                )
+        count = self._prefetch_count()
+        if count <= 0:
+            return
+        tracks = self.queue.peek_upcoming(count)
+        if not any(isinstance(t, dict) and get_video_id(t) for t in tracks):
+            return
+        self.run_worker(
+            _PrefetchJob(
+                self,
+                self._ownership.capture_prefetch(self.queue.generation),
+                exclusive,
+            ),
+            group="prefetch",
+            exclusive=exclusive,
+            exit_on_error=False,
+        )
 
     def _refill_queue(self) -> None:
         """Refill the queue in the background when tracks are running low."""
@@ -721,7 +884,7 @@ class PlaybackMixin(YTMHostBase):
             return
         if not self.settings.playback.autoplay:
             return
-        if self.queue.remaining_tracks > 3:
+        if self.queue.remaining_tracks > max(3, self._prefetch_count()):
             return
         # A refill started for an earlier queue or before a Stop has its result
         # dropped, so it must not hold this one back; run_worker cancels it.

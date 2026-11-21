@@ -64,6 +64,7 @@ Also behind the seam:
 - EOF and error dedupe: each attempt's EOF and error are handled at most once.
 - The single-retry budget: a request's first failed attempt gets one retry; the budget clears once audio actually advances.
 - Refill ownership: one in-flight autoplay refill at a time per (queue lifetime, stop count).
+- Prefetch window: a stream-prefetch batch ends on Stop or queue replacement; a newer committed attempt ends an exclusive batch and shrinks a refill batch by one per attempt.
 
 ### Debounce
 
