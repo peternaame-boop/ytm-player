@@ -12,6 +12,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Prefetch multiple upcoming tracks**: `[cache] prefetch_next` now accepts a track count (`0`-`5`) in addition to `true` (`1`) and `false` (`0`), resolving upcoming queue entries sequentially in the background so quick skips have streams ready ahead of time, and disabling prefetching when set to `false` or `0`. Thanks to @wgordon17 for the feature ([#219](https://github.com/peternaame-boop/ytm-player/pull/219)).
 
+**Fixes**
+
+- **Lyrics load again**: YouTube Music added a Comments tab that ytmusicapi 1.12.0 could not parse, so lyrics failed for every track. ytm-player now requires ytmusicapi 1.12.1 or newer, which handles it ([#227](https://github.com/peternaame-boop/ytm-player/issues/227)).
+
 ---
 
 ### v2.2.0 (2026-11-09)

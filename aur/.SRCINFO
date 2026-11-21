@@ -15,7 +15,7 @@ pkgbase = ytm-player-git
 	depends = python-pillow
 	depends = python-textual>=7.0
 	depends = python-textual<9.0
-	depends = python-ytmusicapi
+	depends = python-ytmusicapi>=1.12.1
 	depends = yt-dlp
 	makedepends = git
 	makedepends = python-build
