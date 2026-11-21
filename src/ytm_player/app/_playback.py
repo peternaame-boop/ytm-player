@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from dataclasses import dataclass
 from typing import Any
 
 from ytm_player.app._base import YTMHostBase
 from ytm_player.app._ownership import (
+    ErrorAction,
+    PlaybackOwnership,
+    Policy,
     adopt_queue,
+    owns_attempt,
     owns_request,
     playback_request,
-    request_number,
-    request_scope,
 )
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.playback_bar import PlaybackBar
@@ -62,10 +63,29 @@ class _LocalHistoryClaim:
     finalized: bool = False
 
 
+def _play_track_policy(
+    ownership: PlaybackOwnership, track: dict | None = None, **_kwargs: Any
+) -> Policy:
+    """Direct duplicate clicks are debounced before request reservation."""
+    if track is None:
+        return Policy.IGNORE
+    video_id = get_video_id(track) if isinstance(track, dict) else None
+    if video_id and ownership.is_duplicate_click(video_id):
+        return Policy.IGNORE
+    return Policy.FOREGROUND
+
+
+def _radio_policy(
+    ownership: PlaybackOwnership, *_args: Any, append: bool = False, **_kwargs: Any
+) -> Policy:
+    """Appending radio is the autoplay refill, a background tail."""
+    return Policy.BACKGROUND if append else Policy.FOREGROUND
+
+
 class PlaybackMixin(YTMHostBase):
     """Playback coordination, player event callbacks, history logging, download."""
 
-    @playback_request
+    @playback_request(_play_track_policy)
     async def play_track(self, track: dict | None, *, recovery_of: int | None = None) -> None:
         """Resolve a stream URL and start playback for a track.
 
@@ -86,12 +106,9 @@ class PlaybackMixin(YTMHostBase):
 
         video_id = get_video_id(track)
 
-        # Direct duplicate clicks are debounced before request reservation.
         # Nested Next/EOF must still play a second occurrence of the same song.
-        now = time.monotonic()
         if video_id:
-            self._last_play_video_id = video_id
-            self._last_play_time = now
+            self._ownership.record_play(video_id)
         if not video_id:
             title = track.get("title", "Unknown")
             self.notify(
@@ -107,21 +124,14 @@ class PlaybackMixin(YTMHostBase):
             return
 
         # This call is committed — supersede any in-flight play_track.
-        # Older calls abort at their next generation check instead of
+        # Older calls abort at their next attempt check instead of
         # stealing playback back or pushing stale metadata.
-        self._play_generation += 1
-        generation = self._play_generation
-        # A request that returns without committing a play must not orphan
-        # this attempt's events. Stop and newer play attempts still supersede it.
-        self._active_stop_generation = getattr(self, "_queue_stop_generation", 0)
-        # The single retry a failed attempt gets. Any other committed play
-        # is a new request and starts without one in flight.
-        self._recovery_generation = generation if recovery_of is not None else None
+        attempt = self._ownership.commit_attempt(retry=recovery_of is not None)
 
         # Log listen time for the previous track.
         await self._log_current_listen()
 
-        if generation != self._play_generation or not owns_request(self):
+        if not owns_attempt(self, attempt):
             return
 
         # Update UI immediately -- show track info before stream resolves.
@@ -169,7 +179,7 @@ class PlaybackMixin(YTMHostBase):
         # A newer call may have landed while we awaited cache/resolve.
         # Its failure tail must not run either — it would toast, advance
         # the queue, or reset the resolver out from under the winner.
-        if generation != self._play_generation or not owns_request(self):
+        if not owns_attempt(self, attempt):
             logger.debug("play_track for %s superseded during resolve", video_id)
             return
 
@@ -193,7 +203,7 @@ class PlaybackMixin(YTMHostBase):
         # play command after the winner's, stealing playback at the mpv
         # level while the app state says otherwise.
         async with self._play_lock:
-            if generation != self._play_generation or not owns_request(self):
+            if not owns_attempt(self, attempt):
                 logger.debug("play_track for %s superseded before play()", video_id)
                 return
             # Load and stream failures are not raised here: player.play()
@@ -201,8 +211,8 @@ class PlaybackMixin(YTMHostBase):
             # attempt, and _on_player_error applies recovery and the
             # failure policy. The consecutive-failure counter is reset
             # only once audio is actually advancing (_poll_position).
-            await self.player.play(stream_info.url, track, attempt=generation)
-        if generation != self._play_generation or not owns_request(self):
+            await self.player.play(stream_info.url, track, attempt=attempt)
+        if not owns_attempt(self, attempt):
             return
         if self.player.current_track is None:
             return
@@ -216,8 +226,8 @@ class PlaybackMixin(YTMHostBase):
             # events): the resume point read from session.json is no longer
             # a fallback for _save_session_state.
             self._loaded_resume = None
-            self._schedule_local_history_log(track, video_id, generation)
-            self._schedule_ytm_history_report(track, video_id, generation)
+            self._schedule_local_history_log(track, video_id, attempt)
+            self._schedule_ytm_history_report(track, video_id, attempt)
 
         # Apply pending resume position if this play matches the resumed track.
         # Only clear on a match — if the user plays a different track first,
@@ -233,16 +243,16 @@ class PlaybackMixin(YTMHostBase):
                 else:
                     # A seek the player dropped (stream still opening) did
                     # not move the start position.
-                    if resumed and generation == self._play_generation and owns_request(self):
+                    if resumed and owns_attempt(self, attempt):
                         self._track_start_position = resume_position
-                if generation != self._play_generation or not owns_request(self):
+                if not owns_attempt(self, attempt):
                     return
             self._pending_resume_video_id = None
             self._pending_resume_position = 0.0
 
         # Metadata fan-out: re-check the generation between each block —
         # every await below is a window for a newer play_track to land.
-        if generation != self._play_generation or not owns_request(self):
+        if not owns_attempt(self, attempt):
             return
 
         # Update Discord Rich Presence.
@@ -255,7 +265,7 @@ class PlaybackMixin(YTMHostBase):
                 thumbnail_url=track.get("thumbnail_url") or "",
             )
 
-        if generation != self._play_generation or not owns_request(self):
+        if not owns_attempt(self, attempt):
             return
 
         # Send Last.fm "Now Playing".
@@ -267,7 +277,7 @@ class PlaybackMixin(YTMHostBase):
                 duration=stream_info.duration,
             )
 
-        if generation != self._play_generation or not owns_request(self):
+        if not owns_attempt(self, attempt):
             return
 
         # Update MPRIS metadata.
@@ -280,11 +290,11 @@ class PlaybackMixin(YTMHostBase):
                 art_url=track.get("thumbnail_url") or "",
                 length_us=duration_us,
             )
-            if generation != self._play_generation or not owns_request(self):
+            if not owns_attempt(self, attempt):
                 return
             await self.mpris.update_playback_status("Playing")
 
-        if generation != self._play_generation or not owns_request(self):
+        if not owns_attempt(self, attempt):
             return
 
         # Update macOS Now Playing metadata.
@@ -296,7 +306,7 @@ class PlaybackMixin(YTMHostBase):
                 album=track.get("album") or "",
                 length_us=duration_us,
             )
-            if generation != self._play_generation or not owns_request(self):
+            if not owns_attempt(self, attempt):
                 return
             await self.mac_media.update_playback_status("Playing")
 
@@ -316,8 +326,7 @@ class PlaybackMixin(YTMHostBase):
         """
         if clear_debounce:
             # Clear debounce so the user can immediately retry the track.
-            self._last_play_video_id = ""
-            self._last_play_time = 0.0
+            self._ownership.reset_debounce()
         self._consecutive_failures += 1
         if self.queue.repeat_mode == "one":
             self.notify("Playback stopped after failure. Press Play to retry.", severity="error")
@@ -329,16 +338,10 @@ class PlaybackMixin(YTMHostBase):
                 # before it does supersedes it, and the check has to happen
                 # inside the worker — the generation at scheduling time
                 # says nothing about what arrived in between.
-                scheduled_for = self._play_generation
-                scheduled_request = request_number(self)
-                scheduled_queue = self.queue.generation
+                scheduled = self._ownership.snapshot(self.queue.generation)
 
                 async def _advance() -> None:
-                    if (
-                        scheduled_for != self._play_generation
-                        or scheduled_request != request_number(self)
-                        or scheduled_queue != self.queue.generation
-                    ):
+                    if not scheduled.still_current(self.queue.generation):
                         logger.debug("Deferred queue advance superseded; not playing")
                         return
                     await self.play_track(next_track)
@@ -380,19 +383,13 @@ class PlaybackMixin(YTMHostBase):
         track = event.get("track")
         if not isinstance(attempt, int) or not isinstance(track, dict):
             return
-        if (
-            attempt != self._play_generation
-            or attempt <= self._handled_error_attempt
-            or getattr(self, "_active_stop_generation", 0)
-            != getattr(self, "_queue_stop_generation", 0)
-        ):
+        action = self._ownership.claim_error(attempt)
+        if action is None:
             logger.debug("Ignoring stream error for superseded or handled attempt %d", attempt)
             return
-        self._handled_error_attempt = attempt
         video_id = get_video_id(track)
         title = track.get("title", video_id)
-        if attempt == self._recovery_generation:
-            self._recovery_generation = None
+        if action is ErrorAction.GIVE_UP:
             logger.warning(
                 "Stream for %s failed again after a resolver reset (%s); skipping",
                 video_id,
@@ -418,8 +415,7 @@ class PlaybackMixin(YTMHostBase):
         )
         self.stream_resolver.clear_cache()
         # The retry lands inside play_track's same-track debounce window.
-        self._last_play_video_id = ""
-        self._last_play_time = 0.0
+        self._ownership.reset_debounce()
         await self.play_track(track, recovery_of=attempt)
 
     async def _toggle_play_pause(self) -> None:
@@ -429,7 +425,7 @@ class PlaybackMixin(YTMHostBase):
         elif self.player:
             await self.player.toggle_pause()
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _play_next(self, *, ended_track: dict | None = None) -> None:
         """Advance to the next track in the queue and play it."""
         track = self.queue.next_track()
@@ -466,13 +462,13 @@ class PlaybackMixin(YTMHostBase):
                 except Exception:
                     logger.exception("Playback status update failed at end of queue")
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _play_previous(self) -> None:
         """Go back to the previous track in the queue."""
         # If we're more than 3 seconds into a track, restart it instead.
         if self.player and self.player.position > 3.0:
             attempt = self.player.current_attempt
-            if isinstance(attempt, int) and attempt != self._play_generation:
+            if isinstance(attempt, int) and not self._ownership.is_current_attempt(attempt):
                 # Another selection was resolving; explicitly reclaim this
                 # audible track instead of leaving its events superseded.
                 await self.play_track(self.player.current_track)
@@ -484,7 +480,7 @@ class PlaybackMixin(YTMHostBase):
         if track:
             await self.play_track(track)
 
-    @playback_request
+    @playback_request(_radio_policy)
     async def _fetch_and_play_radio(
         self,
         seed_track: dict | list[dict],
@@ -563,17 +559,9 @@ class PlaybackMixin(YTMHostBase):
         if not isinstance(event, dict):
             return
         attempt = event.get("attempt")
-        request = request_number(self)
-        queue_generation = self.queue.generation
-        if (
-            not isinstance(attempt, int)
-            or attempt != self._play_generation
-            or attempt <= getattr(self, "_handled_end_attempt", -1)
-            or getattr(self, "_active_stop_generation", 0)
-            != getattr(self, "_queue_stop_generation", 0)
-        ):
+        if not isinstance(attempt, int) or not self._ownership.claim_end(attempt):
             return
-        self._handled_end_attempt = attempt
+        ended = self._ownership.snapshot(self.queue.generation)
         logger.debug("Track ended (event=%s), advancing to next", event)
         try:
             ended_track = event.get("track") if isinstance(event, dict) else None
@@ -593,13 +581,9 @@ class PlaybackMixin(YTMHostBase):
             # callback runs.
             if ended_track:
                 await self._log_listen_for(ended_track)
-            if (
-                attempt != self._play_generation
-                or request != request_number(self)
-                or queue_generation != self.queue.generation
-            ):
+            if not ended.still_current(self.queue.generation):
                 return
-            with request_scope(self, request):
+            with ended.request_scope():
                 await self._play_next(ended_track=ended_track)
         except asyncio.CancelledError:
             logger.debug("_on_track_end task was cancelled")
@@ -625,12 +609,12 @@ class PlaybackMixin(YTMHostBase):
         # so failure state is reset here and nowhere earlier.
         if (
             pos > 0
-            and (self._consecutive_failures or self._recovery_generation is not None)
+            and (self._consecutive_failures or self._ownership.retry_pending)
             and self.player.is_playing
-            and self.player.current_attempt == self._play_generation
+            and self._ownership.is_current_attempt(self.player.current_attempt)
         ):
             self._consecutive_failures = 0
-            self._recovery_generation = None
+            self._ownership.audio_advanced()
 
         if self.mpris and self.player.is_playing:
             try:
@@ -741,8 +725,7 @@ class PlaybackMixin(YTMHostBase):
             return
         # A refill started for an earlier queue or before a Stop has its result
         # dropped, so it must not hold this one back; run_worker cancels it.
-        owner = (self.queue.generation, getattr(self, "_queue_stop_generation", 0))
-        if getattr(self, "_refill_owner", None) == owner and any(
+        if self._ownership.refill_claimed(self.queue.generation) and any(
             worker.group == "queue_extend" and worker.is_running for worker in self.workers
         ):
             return
@@ -758,14 +741,14 @@ class PlaybackMixin(YTMHostBase):
         if not seeds:
             return
 
-        self._refill_owner = owner
+        self._ownership.claim_refill(self.queue.generation)
         self.run_worker(
             self._fetch_and_play_radio(seeds, append=True),
             group="queue_extend",
             exclusive=True,
         )
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _start_discovery_mix(self) -> None:
         """Fetch a random discovery mix, replace the queue, and start playing."""
         if not self.ytmusic:
@@ -1018,7 +1001,7 @@ class PlaybackMixin(YTMHostBase):
             return
         # Reflect it live only if this play is still current (generation, not
         # current_track, which a duplicate end-file can transiently clear).
-        if claim.generation == self._play_generation:
+        if self._ownership.is_current_attempt(claim.generation):
             self._optimistic_local_history_add(claim.track)
 
     def _optimistic_local_history_add(self, track: dict) -> None:
@@ -1099,7 +1082,7 @@ class PlaybackMixin(YTMHostBase):
         case keep polling. This means pause does not count, but reporting still
         works without window focus.
         """
-        if generation != self._play_generation:
+        if not self._ownership.is_current_attempt(generation):
             return
         if self._ytm_reported_generation == generation:
             return

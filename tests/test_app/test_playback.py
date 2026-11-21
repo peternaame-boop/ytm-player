@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ytm_player.app._mpris import MPRISMixin
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._playback import _MAX_CONSECUTIVE_FAILURES, PlaybackMixin
 
 
@@ -47,16 +48,12 @@ def _fresh_playback_host():
     p.set_timer = MagicMock()
     # query_one raises — caught by play_track's try/except around UI updates
     p.query_one = MagicMock(side_effect=Exception("no widget in test"))
-    p._last_play_video_id = None
-    p._last_play_time = 0.0
+    p._ownership = PlaybackOwnership()
     p._consecutive_failures = 0
     p._track_start_position = 0.0
     p._advancing = False
     p._pending_resume_video_id = None
     p._pending_resume_position = 0.0
-    p._play_generation = 0
-    p._recovery_generation = None
-    p._handled_error_attempt = 0
     p._local_history_claim = None
     p._play_lock = asyncio.Lock()
     return p
@@ -124,7 +121,7 @@ class TestResumeInvalidationHook:
         host._loaded_resume = dict(self._RESUME)
 
         async def _resolve_and_supersede(video_id):
-            host._play_generation += 1  # a newer play_track landed meanwhile
+            host._ownership.commit_attempt(retry=False)  # a newer play_track landed meanwhile
             return _stream_info(video_id)
 
         host.stream_resolver.resolve = AsyncMock(side_effect=_resolve_and_supersede)
@@ -148,13 +145,13 @@ class TestPlayTrackDebounce:
         # No queue advance candidate.
         host.queue.next_track = MagicMock(return_value=None)
 
-        monkeypatch.setattr("ytm_player.app._playback.time.monotonic", lambda: 100.0)
+        monkeypatch.setattr("ytm_player.app._ownership.time.monotonic", lambda: 100.0)
 
         track = {"video_id": "abc", "title": "X"}
         await host.play_track(track)
 
         # First call set the stamp, then the failure handler should have cleared it.
-        assert host._last_play_video_id == ""
+        assert not host._ownership.is_duplicate_click("abc")
 
         # Second call within "1s" should NOT be debounced.
         from ytm_player.services.stream import StreamInfo
@@ -193,7 +190,7 @@ class TestPlayTrackDebounce:
         track = {"video_id": "abc", "title": "X", "artist": "Y"}
 
         # Freeze monotonic so both calls land in the same instant.
-        monkeypatch.setattr("ytm_player.app._playback.time.monotonic", lambda: 100.0)
+        monkeypatch.setattr("ytm_player.app._ownership.time.monotonic", lambda: 100.0)
         await host.play_track(track)
         await host.play_track(track)
 
@@ -215,7 +212,7 @@ class TestPlayTrackDebounce:
             )
 
         host.stream_resolver.resolve = AsyncMock(side_effect=resolve_side_effect)
-        monkeypatch.setattr("ytm_player.app._playback.time.monotonic", lambda: 100.0)
+        monkeypatch.setattr("ytm_player.app._ownership.time.monotonic", lambda: 100.0)
         await host.play_track({"video_id": "abc", "title": "A"})
         await host.play_track({"video_id": "xyz", "title": "B"})
         assert host.player.play.call_count == 2
@@ -231,6 +228,15 @@ class TestPlayTrackMissingVideoId:
         host.queue.next_track.assert_called_once()
         # Stream resolver was NOT invoked for the broken track.
         host.stream_resolver.resolve.assert_not_called()
+
+    async def test_missing_video_id_keeps_the_previous_click_guarded(self, monkeypatch):
+        """A malformed track must not erase the previous click's debounce."""
+        host = _fresh_playback_host()
+        host.queue.next_track = MagicMock(return_value=None)
+        monkeypatch.setattr("ytm_player.app._ownership.time.monotonic", lambda: 100.0)
+        host._ownership.record_play("abc")
+        await host.play_track({"video_id": "", "title": "AI track", "artist": ""})
+        assert host._ownership.is_duplicate_click("abc")
 
 
 class TestPlayTrackCacheHit:
@@ -933,7 +939,8 @@ class TestPlayerErrorRecovery:
         ]
         assert host.player.play.await_args.args[1] is _TRACK
         assert _attempts(host) == [1, 2]
-        assert host._recovery_generation == 2
+        assert host._ownership.retry_pending
+        assert host._ownership.is_current_attempt(2)
         host.notify.assert_not_called()
         assert host._consecutive_failures == 0
 
@@ -952,7 +959,7 @@ class TestPlayerErrorRecovery:
         assert host.notify.call_args.kwargs["severity"] == "error"
         host.stream_resolver.clear_cache.assert_not_called()
         assert _attempts(host) == [1, 2]  # the retry gets no retry of its own
-        assert host._recovery_generation is None
+        assert not host._ownership.retry_pending
 
     async def test_duplicate_errors_are_ignored(self):
         host = _recovery_host()
@@ -997,7 +1004,7 @@ class TestPlayerErrorRecovery:
     async def test_same_song_replay_ignores_the_old_error_and_gets_its_own_retry(self):
         host = _recovery_host()
         await host.play_track(_TRACK)
-        host._last_play_video_id = ""  # the user replays after the debounce window
+        host._ownership.reset_debounce()  # the user replays after the debounce window
         await host.play_track(_TRACK)
         assert _attempts(host) == [1, 2]
 
@@ -1008,7 +1015,8 @@ class TestPlayerErrorRecovery:
         await host._on_player_error(_stream_error(2, _TRACK))
         host.stream_resolver.clear_cache.assert_called_once()
         assert _attempts(host) == [1, 2, 3]
-        assert host._recovery_generation == 3
+        assert host._ownership.retry_pending
+        assert host._ownership.is_current_attempt(3)
 
     async def test_synchronous_load_failure_is_handled_once(self):
         """player.play() swallows a load failure and reports it as an ERROR
@@ -1051,7 +1059,7 @@ class TestPlayerErrorRecovery:
         await host.play_track(tracks[0])
 
         for i, track in enumerate(tracks):
-            attempt = host._play_generation
+            attempt = host.player.play.await_args.kwargs["attempt"]
             await host._on_player_error(_stream_error(attempt, track))
             # A play that never produced audio must not reset the counter.
             assert host._consecutive_failures == i
@@ -1087,7 +1095,7 @@ class TestPlayerErrorRecovery:
         await self._run_deferred(host, deferred)
 
         assert [c.args[1] for c in host.player.play.await_args_list] == [_TRACK, _TRACK, _OTHER]
-        assert host._play_generation == 3
+        assert host._ownership.is_current_attempt(3)
 
     async def test_deferred_advance_after_stop_does_not_resume_playback(self):
         host = _recovery_host()
@@ -1098,7 +1106,7 @@ class TestPlayerErrorRecovery:
         await self._run_deferred(host, deferred)
 
         assert _attempts(host) == [1, 2]
-        assert host._play_generation == 3
+        assert host._ownership.is_current_attempt(3)
 
     async def test_deferred_advance_after_a_newer_play_is_dropped(self):
         host = _recovery_host()
@@ -1109,19 +1117,21 @@ class TestPlayerErrorRecovery:
         await self._run_deferred(host, deferred)
 
         assert [c.args[1] for c in host.player.play.await_args_list] == [_TRACK, _TRACK, chosen]
-        assert host._play_generation == 3
+        assert host._ownership.is_current_attempt(3)
 
     def test_audio_progress_resets_failure_state(self):
         host = _recovery_host()
         host._consecutive_failures = 3
-        host._recovery_generation = 4
+        host._ownership.commit_attempt(retry=False)
+        attempt = host._ownership.commit_attempt(retry=True)
         host.player.is_playing = True
         host.player.position = 12.5
-        host.player.current_attempt = host._play_generation
+        host.player.current_attempt = attempt
 
         host._poll_position()
 
-        assert (host._consecutive_failures, host._recovery_generation) == (0, None)
+        assert host._consecutive_failures == 0
+        assert not host._ownership.retry_pending
 
     def test_loaded_but_not_advancing_does_not_reset_failure_state(self):
         host = _recovery_host()

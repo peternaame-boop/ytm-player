@@ -21,6 +21,7 @@ from textual.events import Key
 from textual.worker import WorkerCancelled
 
 from ytm_player.app._keys import KeyHandlingMixin
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._playback import PlaybackMixin
 from ytm_player.config.keymap import KeyMap
 from ytm_player.services.player import Player, PlayerEvent
@@ -316,16 +317,12 @@ class _PlaybackApp(PlaybackMixin, KeyHandlingMixin, App[None]):
         self.mpris = None
         self.mac_media = None
         self.ytmusic = None
-        self._last_play_video_id = ""
-        self._last_play_time = 0.0
+        self._ownership = PlaybackOwnership()
         self._consecutive_failures = 0
         self._track_start_position = 0.0
         self._pending_resume_video_id = None
         self._pending_resume_position = 0.0
         self._loaded_resume = None
-        self._play_generation = 0
-        self._recovery_generation = None
-        self._handled_error_attempt = 0
         self._local_history_claim = None
         self._play_lock = asyncio.Lock()
 

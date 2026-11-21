@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._playback import (
     _YTM_HISTORY_POLL_SECONDS,
     PlaybackMixin,
@@ -31,7 +32,9 @@ def _host(
     host.settings.playback.sync_history_to_ytmusic = enabled
     host.settings.playback.history_min_listen_seconds = DEFAULT_HISTORY_MIN_LISTEN_SECONDS
     host.ytmusic = MagicMock() if ytmusic == "default" else ytmusic
-    host._play_generation = play_generation
+    host._ownership = PlaybackOwnership()
+    for _ in range(play_generation):
+        host._ownership.commit_attempt(retry=False)
     host._ytm_reported_generation = reported_generation
     host._ytm_history = None
     host._ytm_history_pending = []
@@ -459,7 +462,7 @@ async def test_local_insert_survives_mid_write_reclaim() -> None:
 
     async def _log_play(*_a, **_k):
         host._local_history_claim = claim_b  # B claims mid-write
-        host._play_generation = 2
+        host._ownership.commit_attempt(retry=False)
         return 123
 
     host.history.log_play = AsyncMock(side_effect=_log_play)

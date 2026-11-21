@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from textual.app import App
 
+    from ytm_player.app._ownership import PlaybackOwnership
     from ytm_player.app._playback import _LocalHistoryClaim
     from ytm_player.config.keymap import KeyMap
     from ytm_player.config.settings import Settings
@@ -107,16 +108,7 @@ if TYPE_CHECKING:
         # ── Playback state tracking ────────────────────────────────────
         _track_start_position: float
         _consecutive_failures: int
-        _last_play_video_id: str
-        _last_play_time: float
-        _play_generation: int
-        _play_request: int
-        _active_stop_generation: int
-        _queue_stop_generation: int
-        _refill_owner: tuple[int, int] | None
-        _handled_end_attempt: int
-        _recovery_generation: int | None
-        _handled_error_attempt: int
+        _ownership: PlaybackOwnership
         _ytm_reported_generation: int
         _local_history_claim: _LocalHistoryClaim | None
         _ytm_history: list[dict] | None
@@ -154,7 +146,9 @@ if TYPE_CHECKING:
         # flags a missing attribute — YAGNI.
 
         # Defined in PlaybackMixin (_playback.py)
-        async def play_track(self, track: dict | None) -> None: ...
+        async def play_track(
+            self, track: dict | None, *, recovery_of: int | None = None
+        ) -> None: ...
         async def _download_track(self, track: dict) -> None: ...
         async def _toggle_play_pause(self) -> None: ...
         async def _play_next(self, *, ended_track: dict | None = None) -> None: ...

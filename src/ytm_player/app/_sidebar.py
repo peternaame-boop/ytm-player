@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from ytm_player.app._base import YTMHostBase
-from ytm_player.app._ownership import owns_request, playback_request
+from ytm_player.app._ownership import Policy, owns_request, playback_request
 from ytm_player.ui.header_bar import HeaderBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.sidebars.lyrics_sidebar import LyricsSidebar
@@ -278,7 +278,7 @@ class SidebarMixin(YTMHostBase):
         if playlist_id:
             await self.navigate_to("library", playlist_id=playlist_id)
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def on_playlist_sidebar_playlist_double_clicked(
         self, message: PlaylistSidebar.PlaylistDoubleClicked
     ) -> None:

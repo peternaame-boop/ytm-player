@@ -6,12 +6,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.services.queue import QueueManager
 
 
 def _make_host(saved_pref: bool | None) -> MagicMock:
     host = MagicMock()
+    host._ownership = PlaybackOwnership()
     host.ytmusic = MagicMock()
     host.ytmusic.get_playlist = AsyncMock(
         return_value={

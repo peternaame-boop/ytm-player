@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from tests.test_app.test_playback import _accept_playback, _fresh_playback_host, _stream_info
-from ytm_player.app._ownership import invalidate_requests
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._playback import PlaybackMixin
 from ytm_player.services.queue import QueueManager
 from ytm_player.services.stream import StreamResolver
@@ -61,9 +61,7 @@ def _host(workers: _Workers) -> PlaybackMixin:
     h.stream_resolver = MagicMock()
     h.stream_resolver.prefetch = AsyncMock()
     h.ytmusic = MagicMock()
-    h._play_request = 0
-    h._queue_stop_generation = 0
-    h._refill_owner = None
+    h._ownership = PlaybackOwnership()
     return h
 
 
@@ -132,7 +130,7 @@ class TestStaleRefill:
         h._refill_queue()
         await asyncio.sleep(0)
 
-        invalidate_requests(h)  # Stop: the pending refill's result will be dropped
+        h._ownership.stop()  # Stop: the pending refill's result will be dropped
         h._refill_queue()  # replay of the same queue
         release.set()
         await workers.settle()
