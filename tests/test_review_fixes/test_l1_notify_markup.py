@@ -19,6 +19,7 @@ from textual.app import App
 from textual.pilot import Pilot
 from textual.widgets._toast import Toast
 
+from ytm_player.app._ownership import PlaybackOwnership
 from ytm_player.app._playback import PlaybackMixin
 from ytm_player.services.queue import QueueManager
 
@@ -55,15 +56,11 @@ class _PlaybackApp(PlaybackMixin, App[None]):
         self.mpris = None
         self.mac_media = None
         self.ytmusic = None
-        self._last_play_video_id = ""
-        self._last_play_time = 0.0
+        self._ownership = PlaybackOwnership()
         self._consecutive_failures = 0
         self._track_start_position = 0.0
         self._pending_resume_video_id = None
         self._pending_resume_position = 0.0
-        self._play_generation = 0
-        self._recovery_generation = None
-        self._handled_error_attempt = 0
         self._local_history_claim = None
         self._play_lock = asyncio.Lock()
 
@@ -98,10 +95,11 @@ async def _stream_unavailable(app: _PlaybackApp, text: str) -> str:
 
 
 async def _stream_failed_twice(app: _PlaybackApp, text: str) -> str:
-    app._play_generation = 3
-    app._recovery_generation = 3
+    app._ownership.commit_attempt(retry=False)
+    app._ownership.commit_attempt(retry=False)
+    attempt = app._ownership.commit_attempt(retry=True)
     await app._on_player_error(
-        {"attempt": 3, "track": {"video_id": "vid", "title": text}, "error": "boom"}
+        {"attempt": attempt, "track": {"video_id": "vid", "title": text}, "error": "boom"}
     )
     return f'Couldn\'t play "{text}" — stream failed twice.'
 

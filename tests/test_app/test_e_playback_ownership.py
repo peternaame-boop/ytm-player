@@ -69,11 +69,11 @@ async def test_stop_wins_against_inflight_native_load(monkeypatch):
 
 async def test_eof_after_stop_does_not_advance():
     h = host()
-    h._play_generation = 1
+    attempt = h._ownership.commit_attempt(retry=False)
     h.player.stop = AsyncMock()
     h._play_next = AsyncMock()
     await MPRISMixin._mpris_stop(h)
-    await h._on_track_end({"reason": 0, "track": track("A"), "attempt": 1})
+    await h._on_track_end({"reason": 0, "track": track("A"), "attempt": attempt})
     h._play_next.assert_not_awaited()
 
 
@@ -81,7 +81,7 @@ async def test_eof_during_skip_does_not_skip_successor():
     h = host()
     h.queue.add_multiple([track(v) for v in "ABC"])
     h.queue.jump_to(0)
-    h._play_generation = 1
+    attempt = h._ownership.commit_attempt(retry=False)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def resolve(vid):
@@ -92,7 +92,9 @@ async def test_eof_during_skip_does_not_skip_successor():
     h.stream_resolver.resolve = AsyncMock(side_effect=resolve)
     skipping = asyncio.create_task(h._play_next())
     await entered.wait()
-    ending = asyncio.create_task(h._on_track_end({"reason": 0, "track": track("A"), "attempt": 1}))
+    ending = asyncio.create_task(
+        h._on_track_end({"reason": 0, "track": track("A"), "attempt": attempt})
+    )
     await asyncio.sleep(0)
     release.set()
     await asyncio.wait_for(asyncio.gather(skipping, ending), 3)
@@ -118,7 +120,7 @@ async def test_old_radio_cannot_mutate_replacement_queue(append):
     h.queue.clear()
     h.queue.add(track("B"))
     h.queue.jump_to(0)
-    h._play_generation += 1
+    h._ownership.commit_attempt(retry=False)
     release.set()
     await task
     assert [t["video_id"] for t in h.queue.tracks] == ["B"]
@@ -172,7 +174,6 @@ async def test_popup_play_outside_queue_replaces_queue():
     q.add_multiple([track("A"), track("B")])
     q.jump_to(0)
     h = _host(q)
-    h._play_request = 0
     h._play_popup_track = MethodType(TrackActionsMixin._play_popup_track, h)
     h.play_track = AsyncMock()
     h._replace_queue_and_play = AsyncMock()
@@ -189,11 +190,11 @@ async def test_remove_audible_entry_does_not_skip_its_successor_at_eof():
     h = host()
     h.queue.add_multiple([track(v) for v in "ABC"])
     h.queue.jump_to(0)
-    h._play_generation = 1
+    attempt = h._ownership.commit_attempt(retry=False)
     h.play_track = AsyncMock()
     entry = h.queue.entries[0][0]
     TrackActionsMixin._remove_from_queue(h, track("A"), entry, from_queue=True)
-    await h._on_track_end({"reason": 0, "track": track("A"), "attempt": 1})
+    await h._on_track_end({"reason": 0, "track": track("A"), "attempt": attempt})
     assert h.play_track.await_args.args[0]["video_id"] == "B"
 
 
@@ -211,9 +212,9 @@ async def test_last_failed_recovery_reports_no_next_track():
     h = host()
     h.queue.add(track("A"))
     h.queue.jump_to(0)
-    h._play_generation = 2
-    h._recovery_generation = 2
-    await h._on_player_error({"reason": 4, "error": -1, "track": track("A"), "attempt": 2})
+    h._ownership.commit_attempt(retry=False)
+    retry = h._ownership.commit_attempt(retry=True)
+    await h._on_player_error({"reason": 4, "error": -1, "track": track("A"), "attempt": retry})
     assert any("end of queue" in c.args[0].lower() for c in h.notify.call_args_list)
 
 
@@ -222,13 +223,13 @@ async def test_repeat_one_does_not_restart_exhausted_recovery():
     h.queue.add_multiple([track("A"), track("B")])
     h.queue.jump_to(0)
     h.queue.set_repeat(RepeatMode.ONE)
-    h._play_generation = 2
-    h._recovery_generation = 2
+    h._ownership.commit_attempt(retry=False)
+    retry = h._ownership.commit_attempt(retry=True)
     h.play_track = AsyncMock()
     tasks = []
     h.call_later.side_effect = lambda callback: callback()
     h.run_worker.side_effect = lambda coro, **kwargs: tasks.append(asyncio.create_task(coro))
-    await h._on_player_error({"reason": 4, "error": -1, "track": track("A"), "attempt": 2})
+    await h._on_player_error({"reason": 4, "error": -1, "track": track("A"), "attempt": retry})
     await asyncio.gather(*tasks)
     assert not any(c.args[0]["video_id"] == "A" for c in h.play_track.await_args_list)
 
@@ -237,9 +238,9 @@ async def test_control_current_eof_advances_once():
     h = host()
     h.queue.add_multiple([track("A"), track("B")])
     h.queue.jump_to(0)
-    h._play_generation = 1
+    attempt = h._ownership.commit_attempt(retry=False)
     h.play_track = AsyncMock()
-    await h._on_track_end({"reason": 0, "track": track("A"), "attempt": 1})
+    await h._on_track_end({"reason": 0, "track": track("A"), "attempt": attempt})
     h.play_track.assert_awaited_once_with(h.queue.current_track)
     assert h.queue.current_track["video_id"] == "B"
 
@@ -287,7 +288,7 @@ async def _start_a(h):
     h.queue.jump_to(0)
     await h.play_track(track("A"))
     h.player.current_track = track("A")
-    return h._play_generation
+    return h.player.play.await_args.kwargs["attempt"]
 
 
 @pytest.mark.parametrize("event_kind", ["eof", "error"])
@@ -426,7 +427,7 @@ async def test_new_eof_is_not_blocked_by_old_finalizer():
     h = host()
     h.queue.add_multiple([track(v) for v in "ABC"])
     h.queue.jump_to(0)
-    h._play_generation = 1
+    attempt = h._ownership.commit_attempt(retry=False)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def log(item):
@@ -436,12 +437,12 @@ async def test_new_eof_is_not_blocked_by_old_finalizer():
 
     h._log_listen_for = log
     h.play_track = AsyncMock()
-    old = asyncio.create_task(h._on_track_end({"track": track("A"), "attempt": 1}))
+    old = asyncio.create_task(h._on_track_end({"track": track("A"), "attempt": attempt}))
     try:
         await asyncio.wait_for(entered.wait(), 3)
-        h._play_generation = 2
+        successor = h._ownership.commit_attempt(retry=False)
         h.queue.jump_to(1)
-        await h._on_track_end({"track": track("B"), "attempt": 2})
+        await h._on_track_end({"track": track("B"), "attempt": successor})
         release.set()
         await asyncio.wait_for(old, 3)
         h.play_track.assert_awaited_once_with(h.queue.current_track)
@@ -544,7 +545,9 @@ async def test_previous_seek_keeps_current_eof_owned():
     await h._play_previous()
     h.player.seek_start.assert_awaited_once()
     h.play_track = AsyncMock()
-    await h._on_track_end({"track": track("A"), "attempt": h._play_generation})
+    await h._on_track_end(
+        {"track": track("A"), "attempt": h.player.play.await_args.kwargs["attempt"]}
+    )
     h.play_track.assert_awaited_once_with(h.queue.current_track)
     assert h.queue.current_track["video_id"] == "B"
 
@@ -554,7 +557,7 @@ async def test_old_eof_cannot_advance_replacement_queue(during_finalize):
     h = host()
     h.queue.add(track("A"))
     await h.play_track(track("A"))
-    attempt = h._play_generation
+    attempt = h.player.play.await_args.kwargs["attempt"]
 
     async def replace(*args):
         h.queue.clear()
@@ -574,14 +577,16 @@ async def test_old_eof_cannot_advance_replacement_queue(during_finalize):
 
 def test_old_audio_progress_cannot_reset_new_attempt_retry_budget():
     h = host()
-    h._play_generation = 2
-    h._recovery_generation = 2
+    attempt = h._ownership.commit_attempt(retry=False)
+    retry = h._ownership.commit_attempt(retry=True)
     h._consecutive_failures = 3
-    h.player.current_attempt = 1
+    h.player.current_attempt = attempt
     h.player.is_playing = True
     h.player.position = 20
     h._poll_position()
-    assert (h._recovery_generation, h._consecutive_failures) == (2, 3)
+    assert h._ownership.is_current_attempt(retry)
+    assert h._ownership.retry_pending
+    assert h._consecutive_failures == 3
 
 
 @pytest.mark.parametrize("seek_raises", [False, True])

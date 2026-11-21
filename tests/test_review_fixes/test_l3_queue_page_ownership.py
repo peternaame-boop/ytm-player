@@ -20,7 +20,7 @@ from textual.containers import Container
 
 from tests.test_app.test_playback import _fresh_playback_host, _stream_info
 from ytm_player.app._navigation import NavigationMixin
-from ytm_player.app._ownership import owns_request, request_scope
+from ytm_player.app._ownership import owns_request, unowned_scope
 from ytm_player.app._playback import PlaybackMixin
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.services.queue import QueueManager
@@ -53,7 +53,6 @@ class _Host(TrackActionsMixin, PlaybackMixin, NavigationMixin, App[None]):
         self._log_current_listen = AsyncMock()
         self.shuffle_prefs = {}
         self.ytmusic = MagicMock()
-        self._play_request = 0
         self._current_page = ""
         self._current_page_kwargs = {}
         self._nav_stack = []
@@ -170,14 +169,14 @@ async def test_navigation_gives_the_caller_its_request_back(monkeypatch, page_fa
                 raise RuntimeError("page failed to build")
 
             monkeypatch.setattr(app, "_create_page", _broken)
-        app._play_request = 1
-        with request_scope(app, 1):
+        with app._ownership.snapshot(app.queue.generation).request_scope():
             try:
                 await app.navigate_to("queue")
             except RuntimeError:
                 assert page_fails
             await pilot.pause()
             assert owns_request(app)
-            # Still bound to request 1: a newer request supersedes the caller.
-            app._play_request = 2
+            # Scheduling an independent request supersedes the restored caller.
+            with unowned_scope():
+                app._play_next().close()
             assert not owns_request(app)

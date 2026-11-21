@@ -7,7 +7,13 @@ from collections.abc import Hashable
 from typing import Any
 
 from ytm_player.app._base import YTMHostBase
-from ytm_player.app._ownership import adopt_queue, owns_request, playback_request
+from ytm_player.app._ownership import (
+    PlaybackOwnership,
+    Policy,
+    adopt_queue,
+    owns_request,
+    playback_request,
+)
 from ytm_player.ui.playback_bar import PlaybackBar
 from ytm_player.ui.popups.actions import ActionsPopup
 from ytm_player.ui.popups.playlist_picker import PlaylistPicker
@@ -35,6 +41,16 @@ def _album_browse_id(source: dict) -> str:
     album = source.get("album")
     nested = album.get("id") if isinstance(album, dict) else None
     return source.get("album_id") or nested or source.get("browseId") or ""
+
+
+_PLAY_ACTIONS = ("play_all", "shuffle_play", "start_radio", "play_top_songs")
+
+
+def _entity_action_policy(
+    ownership: PlaybackOwnership, action_id: str | None = None, *_args: Any, **_kwargs: Any
+) -> Policy:
+    """Non-play entity actions neither replace nor supersede playback."""
+    return Policy.FOREGROUND if action_id in _PLAY_ACTIONS else Policy.BYPASS
 
 
 class TrackActionsMixin(YTMHostBase):
@@ -348,7 +364,7 @@ class TrackActionsMixin(YTMHostBase):
         except Exception:
             pass
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _play_popup_track(
         self, track: dict, entry_id: int | None, *, from_queue: bool
     ) -> None:
@@ -363,7 +379,7 @@ class TrackActionsMixin(YTMHostBase):
             return
         await self._replace_queue_and_play([track])
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _replace_queue_and_play(
         self,
         tracks: list[dict],
@@ -610,7 +626,7 @@ class TrackActionsMixin(YTMHostBase):
 
     # ── Artist action methods (shared with SearchPage dispatch) ───────
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _start_artist_radio(self, browse_id: str) -> None:
         """Fetch artist data and start a radio from their radioId or top songs."""
         if not self.ytmusic:
@@ -652,7 +668,7 @@ class TrackActionsMixin(YTMHostBase):
             else:
                 self.notify("No songs to seed radio.", severity="warning", timeout=3)
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _play_artist_top_songs(self, browse_id: str) -> None:
         """Fetch artist top songs, queue them, and start playback."""
         if not self.ytmusic:
@@ -692,7 +708,7 @@ class TrackActionsMixin(YTMHostBase):
             return
         self.notify(f"Playing top songs from {artist_name}", timeout=4, markup=False)
 
-    @playback_request
+    @playback_request(Policy.BACKGROUND)
     async def _fetch_remaining_artist_songs(
         self, browse_id: str, initial_tracks: list[dict[str, Any]]
     ) -> None:
@@ -763,7 +779,7 @@ class TrackActionsMixin(YTMHostBase):
                 f"Couldn't add — {mutation_failure_suffix(result)}", severity="error", timeout=3
             )
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _play_album(self, album_id: str, album_name: str, *, shuffle: bool = False) -> None:
         """Fetch album tracks, replace queue, and start playback."""
         if not self.ytmusic:
@@ -801,7 +817,7 @@ class TrackActionsMixin(YTMHostBase):
             return
         self._play_next_multiple(tracks, album_name)
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _play_entity_and_navigate(
         self, action_id: str, item: dict, item_type: str, *, sidebar: bool = False
     ) -> None:
@@ -817,7 +833,7 @@ class TrackActionsMixin(YTMHostBase):
                 self._active_library_playlist_id = item.get("playlistId") or item.get("browseId")
             await self.navigate_to("queue")
 
-    @playback_request
+    @playback_request(_entity_action_policy)
     async def _dispatch_entity_action(self, action_id: str, item: dict, item_type: str) -> bool:
         """Dispatch an entity action to the correct method. Returns True if handled."""
         entity_id = item.get("browseId") or item.get("album_id") or item.get("playlistId") or ""
@@ -925,7 +941,7 @@ class TrackActionsMixin(YTMHostBase):
 
     _PLAYLIST_FIRST_BATCH = 300
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _play_playlist(
         self,
         playlist_id: str,
@@ -1004,7 +1020,7 @@ class TrackActionsMixin(YTMHostBase):
             logger.debug("Failed to add playlist to play next", exc_info=True)
             self.notify("Failed to play next", severity="error", timeout=2)
 
-    @playback_request
+    @playback_request(Policy.FOREGROUND)
     async def _start_playlist_radio(self, item: dict) -> None:
         """Start radio seeded from a playlist."""
         playlist_id = item.get("playlistId") or item.get("browseId")
@@ -1041,7 +1057,7 @@ class TrackActionsMixin(YTMHostBase):
         else:
             self.notify("No radio tracks found", severity="warning", timeout=3)
 
-    @playback_request
+    @playback_request(Policy.BACKGROUND)
     async def _fetch_remaining_for_queue(
         self, playlist_id: str, already_have: int, *, order: str | None = None
     ) -> None:

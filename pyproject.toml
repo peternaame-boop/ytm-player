@@ -117,6 +117,7 @@ only-include = [
     "CHANGELOG.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
+    "GLOSSARY.md",
 ]
 
 [tool.hatch.build.targets.wheel]
