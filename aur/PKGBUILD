@@ -19,7 +19,7 @@ depends=(
     'python-secretstorage>=3.3'
     'python-textual>=7.0'
     'python-textual<9.0'
-    'python-ytmusicapi'
+    'python-ytmusicapi>=1.12.1'
     'yt-dlp'
 )
 makedepends=('git' 'python-build' 'python-installer' 'python-hatchling')
