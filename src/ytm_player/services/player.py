@@ -263,12 +263,10 @@ class Player:
             terminal=False,
             input_default_bindings=False,
             input_vo_keyboard=False,
-            # Interleaved float avoids CoreAudio channel-layout rejection (-50)
-            # on planar floatp Opus/AAC output, preventing fallback to avfoundation.
-            audio_format="float",
-            # Fetch HTTPS streams in 2 MiB bounded Range chunks over persistent
-            # connections so YouTube does not throttle un-ranged continuous GETs.
-            stream_lavf_o="request_size=2097152,multiple_requests=1",
+            # Fetch HTTPS streams in bounded 10 MiB Range chunks (yt-dlp's own
+            # http_chunk_size for YouTube) over persistent connections, so
+            # YouTube does not throttle open-ended GETs.
+            stream_lavf_o="request_size=10485760,multiple_requests=1",
             log_handler=_on_mpv_log,
             loglevel="warn",
         )
@@ -279,6 +277,14 @@ class Player:
         # signals that app launch finished.  Demote it now that mpv is up —
         # doing this earlier is useless, since libmpv re-promotes it.
         self._apply_dock_policy()
+
+        # mpv 0.42+ can fetch HTTP through its own curl backend, which ignores
+        # stream-lavf-o.  The option does not exist on older mpv, so it cannot
+        # be a constructor argument.
+        try:
+            instance["curl-max-request-size"] = 10485760
+        except AttributeError:
+            logger.debug("curl-max-request-size not available on this mpv")
 
         # Enable gapless playback if configured.
         if settings.playback.gapless:
