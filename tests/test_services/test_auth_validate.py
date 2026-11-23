@@ -8,6 +8,8 @@ Covers the exact failure modes reported by users:
 """
 
 import json
+import os
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -152,6 +154,76 @@ class TestValidate:
 
         with patch.object(auth, "create_ytmusic_client", return_value=mock_ytm):
             assert auth.validate() is False
+
+
+# ── is_authenticated() on a damaged auth file ─────────────────────────────
+
+
+class TestIsAuthenticated:
+    """A damaged auth.json reads as "not signed in", so startup and `ytm setup`
+    can point the user at the repair instead of crashing."""
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            b"",
+            b'{"cookie": ',
+            b"\xff\xfe{}",
+            b"null",
+            b"[]",
+            b'"x"',
+            b"42",
+            b"[" * 1200 + b"]" * 1200,
+            b"{}",
+            b'{"cookie": 1}',
+            b'{"cookie": ""}',
+            b'{"cookie": "   "}',
+        ],
+        ids=[
+            "empty",
+            "truncated",
+            "invalid-utf8",
+            "null",
+            "list",
+            "string",
+            "number",
+            "deep-nesting",
+            "no-cookie",
+            "non-string-cookie",
+            "empty-cookie",
+            "blank-cookie",
+        ],
+    )
+    def test_damaged_file_is_not_authenticated_and_left_untouched(self, tmp_path, content):
+        auth_file = tmp_path / "auth.json"
+        auth_file.write_bytes(content)
+
+        assert AuthManager(auth_file=auth_file).is_authenticated() is False
+        assert auth_file.read_bytes() == content
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="POSIX permissions; root ignores them",
+    )
+    def test_inaccessible_file_is_not_authenticated(self, tmp_path):
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        auth_file = tmp_path / "auth.json"
+        auth_file.symlink_to(locked / "auth.json")
+        locked.chmod(0)
+        try:
+            assert AuthManager(auth_file=auth_file).is_authenticated() is False
+        finally:
+            locked.chmod(0o700)
+
+    def test_missing_file_is_not_authenticated(self, tmp_path):
+        assert AuthManager(auth_file=tmp_path / "auth.json").is_authenticated() is False
+
+    def test_cookie_string_is_authenticated(self, tmp_path):
+        auth_file = tmp_path / "auth.json"
+        _write_auth_file(auth_file, cookie="SAPISID=x")
+
+        assert AuthManager(auth_file=auth_file).is_authenticated() is True
 
 
 # ── CLI setup command tests ──────────────────────────────────────────────

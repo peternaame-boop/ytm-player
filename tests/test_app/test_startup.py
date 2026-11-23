@@ -3,7 +3,7 @@
 The service classes are patched at the module level; the host is a
 MagicMock whose awaited attributes are AsyncMocks. These pin the two
 degraded-start paths — YouTube Music unreachable, history.db unreadable —
-and the two exits that must stay exits.
+and the exits that must stay exits.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import requests
 
 from ytm_player.app._app import YTMPlayerApp
 from ytm_player.config import paths
+from ytm_player.services.auth import AuthManager
 
 
 def _host() -> MagicMock:
@@ -42,7 +43,9 @@ def _auth(validate: object = True) -> MagicMock:
     return auth
 
 
-async def _mount(host: MagicMock, auth: MagicMock, **overrides: object) -> SimpleNamespace:
+async def _mount(
+    host: MagicMock, auth: AuthManager | MagicMock, **overrides: object
+) -> SimpleNamespace:
     """Run the real ``on_mount`` against *host*; returns the patched service classes."""
     loop = asyncio.get_running_loop()
     previous = loop.get_exception_handler()
@@ -131,3 +134,27 @@ class TestHistoryInitFailure:
         assert any("Could not start player services" in n for n in _notices(host))
         assert _scheduled_exit(host)
         host._restore_session_state.assert_not_awaited()
+
+
+class TestDamagedAuthFile:
+    async def test_damaged_auth_file_points_at_setup_and_exits(self, tmp_path):
+        """A real AuthManager on an auth.json that is valid JSON but not an
+        object: startup must tell the user to run `ytm setup` and exit in
+        order, not crash in on_mount."""
+        auth_file = tmp_path / "auth.json"
+        auth_file.write_bytes(b"[]")
+        auth = AuthManager(config_dir=tmp_path, auth_file=auth_file)
+        host = _host()
+
+        with (
+            patch.object(auth, "validate") as validate,
+            patch.object(auth, "try_auto_refresh") as refresh,
+        ):
+            services = await _mount(host, auth)
+
+        assert any("Run `ytm setup`" in n for n in _notices(host))
+        assert _scheduled_exit(host)
+        validate.assert_not_called()
+        refresh.assert_not_called()
+        assert not services.player.called
+        assert auth_file.read_bytes() == b"[]"
