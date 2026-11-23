@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -828,3 +828,66 @@ class TestPrefetchLookahead:
         # q1 was removed during its cache check -> skipped; q2 prefetched;
         # q3 triggered queue.clear() during its cache check -> aborted cleanly.
         assert [c.args[0] for c in h.stream_resolver.prefetch.await_args_list] == ["q2"]
+
+    async def test_play_next_during_disk_check_is_prefetched_first(self):
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 2
+        _load(h, "q", 4)  # q0 playing -> upcoming [q1, q2]
+        inserted = False
+
+        async def play_next_during_check(video_id: str) -> bool:
+            nonlocal inserted
+            if video_id == "q1" and not inserted:
+                inserted = True
+                h.queue.add_next({"video_id": "X", "title": "X"})
+            await asyncio.sleep(0)
+            return False
+
+        h.cache = SimpleNamespace(has=play_next_during_check)
+
+        h._prefetch_next_track()
+        await workers.settle()
+
+        assert [c.args[0] for c in h.stream_resolver.prefetch.await_args_list] == ["X", "q1"]
+
+    async def test_stop_before_the_prefetch_child_starts_skips_extraction(self):
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 2
+        _load(h, "q", 4)
+        real_create_task = asyncio.create_task
+
+        def stop_then_create(coro, **kwargs):
+            # Stop lands after the worker's last check, before the child runs.
+            h._ownership.stop()
+            return real_create_task(coro, **kwargs)
+
+        with patch("ytm_player.app._playback.asyncio.create_task", stop_then_create):
+            h._prefetch_next_track()
+            await workers.settle()
+
+        h.stream_resolver.prefetch.assert_not_called()
+
+    async def test_foreground_resolve_during_disk_check_delays_extraction(self):
+        workers = _Workers()
+        h = _host(workers)
+        h.settings.cache.prefetch_next = 1
+        _load(h, "q", 3)
+
+        async def resolve_starts_during_check(video_id: str) -> bool:
+            h._begin_foreground_resolve(1)
+            await asyncio.sleep(0)
+            return False
+
+        h.cache = SimpleNamespace(has=resolve_starts_during_check)
+
+        h._prefetch_next_track()
+        for _ in range(20):
+            await asyncio.sleep(0)
+        h.stream_resolver.prefetch.assert_not_called()
+
+        h.cache = SimpleNamespace(has=AsyncMock(return_value=False))
+        h._end_foreground_resolve(1)
+        await workers.settle()
+        assert [c.args[0] for c in h.stream_resolver.prefetch.await_args_list] == ["q1"]

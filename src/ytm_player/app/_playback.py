@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import Any
 
@@ -780,18 +780,31 @@ class PlaybackMixin(YTMHostBase):
             logger.debug("Cache check skipped for %s: %s", video_id, exc)
             return False
 
-    async def _run_shielded_prefetch(self, video_id: str) -> None:
-        """Run one ``stream_resolver.prefetch`` step shielded from worker cancellation."""
+    async def _run_shielded_prefetch(self, video_id: str, still_wanted: Callable[[], bool]) -> bool:
+        """Run one ``stream_resolver.prefetch`` step shielded from worker cancellation.
+
+        *still_wanted* is rechecked when the child task starts, so a Stop, a
+        foreground resolve or a Play Next landing in between skips the
+        extraction. Returns True when the resolver was called.
+        """
         resolver = self.stream_resolver
         if not resolver:
-            return
-        task: asyncio.Task[Any] = asyncio.create_task(resolver.prefetch(video_id))
+            return False
+
+        async def child() -> bool:
+            if not still_wanted():
+                return False
+            await resolver.prefetch(video_id)
+            return True
+
+        task: asyncio.Task[Any] = asyncio.create_task(child())
         task.add_done_callback(_consume_task_exception)
         active = _ActivePrefetch(video_id, resolver.cache_generation, task)
         self._active_prefetch = active
-        await asyncio.shield(task)
+        prefetched = await asyncio.shield(task)
         if getattr(self, "_active_prefetch", None) == active:
             self._active_prefetch = None
+        return prefetched
 
     async def _prefetch_tracks(
         self,
@@ -808,12 +821,7 @@ class PlaybackMixin(YTMHostBase):
                 snapshot, self.queue.generation, self._prefetch_count(), exclusive
             )
 
-        async def upcoming_ids() -> list[str] | None:
-            if current_window() <= 0:
-                return None
-            idle = self._get_fg_resolve_idle()
-            while not idle.is_set():
-                await idle.wait()
+        def window_ids() -> list[str] | None:
             window = current_window()
             if window <= 0:
                 return None
@@ -823,14 +831,26 @@ class PlaybackMixin(YTMHostBase):
                 if isinstance(t, dict) and (vid := get_video_id(t))
             ]
 
+        async def upcoming_ids() -> list[str] | None:
+            if current_window() <= 0:
+                return None
+            idle = self._get_fg_resolve_idle()
+            while not idle.is_set():
+                await idle.wait()
+            return window_ids()
+
+        def first_eligible(ids: list[str]) -> str | None:
+            return next((vid for vid in ids if vid not in attempted), None)
+
         async with self._get_prefetch_lock():
             attempted: set[str] = set()
             active = getattr(self, "_active_prefetch", None)
             if isinstance(active, _ActivePrefetch):
                 if not active.task.done():
-                    await asyncio.shield(active.task)
+                    prefetched = await asyncio.shield(active.task)
                     if (
-                        self.stream_resolver is not None
+                        prefetched
+                        and self.stream_resolver is not None
                         and self.stream_resolver.cache_generation == active.cache_gen
                     ):
                         attempted.add(active.video_id)
@@ -838,19 +858,21 @@ class PlaybackMixin(YTMHostBase):
                     self._active_prefetch = None
 
             while (upcoming := await upcoming_ids()) is not None:
-                next_id = next((vid for vid in upcoming if vid not in attempted), None)
+                next_id = first_eligible(upcoming)
                 if next_id is None:
                     return
                 if await self._is_cached_on_disk(next_id):
                     attempted.add(next_id)
                     continue
-                current_upcoming = await upcoming_ids()
-                if current_upcoming is None:
-                    return
-                if next_id not in current_upcoming:
-                    continue
-                attempted.add(next_id)
-                await self._run_shielded_prefetch(next_id)
+
+                def still_next(video_id: str = next_id) -> bool:
+                    if not self._get_fg_resolve_idle().is_set():
+                        return False  # yield to play_track; the loop waits, then rechecks
+                    ids = window_ids()
+                    return ids is not None and first_eligible(ids) == video_id
+
+                if await self._run_shielded_prefetch(next_id, still_next):
+                    attempted.add(next_id)
 
     def _prefetch_next_track(self, *, exclusive: bool = True) -> None:
         """Prefetch upcoming stream URLs in the background.
