@@ -66,6 +66,9 @@ class _LocalHistoryClaim:
     # A finalize consumed this claim: stops the report chain and blocks a
     # second finalize from double-logging.
     finalized: bool = False
+    # Last positive position the poll saw during this play. mpv reports no
+    # position once a track ends on its own, so natural EOF finalizes with it.
+    last_position: float = 0.0
 
 
 def _consume_task_exception(task: asyncio.Task[Any]) -> None:
@@ -610,18 +613,26 @@ class PlaybackMixin(YTMHostBase):
             # running (Player clears current_track BEFORE dispatching, so it
             # can only be non-None again if play() ran since). The whole
             # event is then stale: finalizing could consume the new play's
-            # claim (same-video replay) or log with its position — while a
-            # natural-EOF finalize writes nothing anyway (mpv reads position
-            # 0.0 once idle) — and advancing would skip straight over the
-            # track that is already playing.
+            # claim (same-video replay) or log with its position — and
+            # advancing would skip straight over the track that is already
+            # playing.
             if self.player and self.player.current_track is not None:
                 logger.debug("Ignoring stale track-end; a newer play is already current")
                 return
             # Log listen time using the ended track passed in the event,
             # since player.current_track is already None by the time this
-            # callback runs.
-            if ended_track:
-                await self._log_listen_for(ended_track)
+            # callback runs. mpv has no position any more, so the endpoint is
+            # the last one the poll sampled for this exact play. A claim from
+            # another attempt (EOF before this play armed its own) belongs to
+            # that play: leave it alone and write nothing.
+            claim = self._local_history_claim
+            if (
+                ended_track
+                and claim is not None
+                and claim.generation == attempt
+                and claim.video_id == get_video_id(ended_track)
+            ):
+                await self._log_listen_for(ended_track, claim.last_position)
             if not ended.still_current(self.queue.generation):
                 return
             with ended.request_scope():
@@ -639,6 +650,14 @@ class PlaybackMixin(YTMHostBase):
         pos = 0.0
         try:
             pos = self.player.position
+            claim = self._local_history_claim
+            if (
+                pos > 0
+                and claim is not None
+                and not claim.finalized
+                and claim.generation == self.player.current_attempt
+            ):
+                claim.last_position = pos
             dur = self.player.duration
             bar = self.query_one("#playback-bar", PlaybackBar)
             bar.update_position(pos, dur)
@@ -1037,7 +1056,7 @@ class PlaybackMixin(YTMHostBase):
             return
         await self._log_listen_for(self.player.current_track)
 
-    async def _log_listen_for(self, track: dict) -> None:
+    async def _log_listen_for(self, track: dict, end_position: float | None = None) -> None:
         """Log listen duration for an explicit track dict.
 
         Used by ``_on_track_end`` where ``player.current_track`` has
@@ -1045,10 +1064,14 @@ class PlaybackMixin(YTMHostBase):
         """
         if not self.history or not self.player:
             return
-        await self._log_local_listen(track)
+        await self._log_local_listen(track, end_position)
 
-    async def _log_local_listen(self, track: dict) -> None:
-        """Insert or finalize the local SQLite history row for this play."""
+    async def _log_local_listen(self, track: dict, end_position: float | None = None) -> None:
+        """Insert or finalize the local SQLite history row for this play.
+
+        *end_position* replaces the live position at natural EOF, where mpv
+        no longer reports one; skip and replace read the live position.
+        """
         if not self.history or not self.player:
             return
 
@@ -1067,10 +1090,10 @@ class PlaybackMixin(YTMHostBase):
             # claim object, so a consumed claim can't swallow a later play.
             owned.finalized = True
 
-        listened = int(self.player.position - self._track_start_position)
+        position = self.player.position if end_position is None else end_position
+        listened = int(position - self._track_start_position)
         if listened <= 0:
-            # Nothing to write (mpv reads position 0.0 once idle, so natural
-            # EOF lands here) — but the claim above is already consumed: a
+            # Nothing to write — but the claim above is already consumed: a
             # replay of the same video must get its own row, not merge into
             # this one.
             return

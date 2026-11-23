@@ -10,7 +10,7 @@ import pytest
 from tests.test_app.test_playback import _fresh_playback_host, _stream_info
 from tests.test_app.test_queue_refresh_and_identity import _confirm, _host
 from ytm_player.app._mpris import MPRISMixin
-from ytm_player.app._playback import PlaybackMixin
+from ytm_player.app._playback import PlaybackMixin, _LocalHistoryClaim
 from ytm_player.app._track_actions import TrackActionsMixin
 from ytm_player.services.player import Player
 from ytm_player.services.queue import QueueManager, RepeatMode
@@ -528,12 +528,13 @@ async def test_new_eof_is_not_blocked_by_old_finalizer():
     attempt = h._ownership.commit_attempt(retry=False)
     entered, release = asyncio.Event(), asyncio.Event()
 
-    async def log(item):
+    async def log(item, end_position):
         if item["video_id"] == "A":
             entered.set()
             await release.wait()
 
     h._log_listen_for = log
+    h._local_history_claim = _LocalHistoryClaim("A", track("A"), attempt)
     h.play_track = AsyncMock()
     old = asyncio.create_task(h._on_track_end({"track": track("A"), "attempt": attempt}))
     try:
@@ -665,6 +666,7 @@ async def test_old_eof_cannot_advance_replacement_queue(during_finalize):
 
     if during_finalize:
         h._log_listen_for = AsyncMock(side_effect=replace)
+        h._local_history_claim = _LocalHistoryClaim("A", track("A"), attempt)
     else:
         await replace()
     h.player.play.reset_mock()

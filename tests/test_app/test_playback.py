@@ -17,7 +17,11 @@ import pytest
 
 from ytm_player.app._mpris import MPRISMixin
 from ytm_player.app._ownership import PlaybackOwnership
-from ytm_player.app._playback import _MAX_CONSECUTIVE_FAILURES, PlaybackMixin
+from ytm_player.app._playback import (
+    _MAX_CONSECUTIVE_FAILURES,
+    PlaybackMixin,
+    _LocalHistoryClaim,
+)
 
 
 def _fresh_playback_host():
@@ -806,11 +810,201 @@ class TestTrackEndFinalize:
         host._log_listen_for = AsyncMock()
         host._play_next = AsyncMock()
         host.player.current_track = None
+        host._local_history_claim = _LocalHistoryClaim(
+            video_id="old", track={"video_id": "old"}, generation=0, last_position=61.5
+        )
 
         await host._on_track_end({"track": {"video_id": "old"}, "attempt": 0})
 
-        host._log_listen_for.assert_awaited_once_with({"video_id": "old"})
+        host._log_listen_for.assert_awaited_once_with({"video_id": "old"}, 61.5)
         host._play_next.assert_awaited_once()
+
+
+class TestNaturalEofListenTime:
+    """1.2: mpv reports no position once a track ends on its own, so the
+    natural-EOF finalize uses the last position the poll saw for that play."""
+
+    def _host(self, history=None, threshold: int = 5):
+        host = _fresh_playback_host()
+        host.history = history
+        host.settings.playback.history_min_listen_seconds = threshold
+        host._play_next = AsyncMock()
+        host.player.is_playing = True
+        host.player.duration = 120.0
+        self.attempt = host._ownership.commit_attempt(retry=False)
+        host.player.current_attempt = self.attempt
+        return host
+
+    def _claim(self, host, video_id="A", attempt=None):
+        claim = _LocalHistoryClaim(
+            video_id=video_id,
+            track={"video_id": video_id, "title": video_id, "artist": "X"},
+            generation=self.attempt if attempt is None else attempt,
+        )
+        host._local_history_claim = claim
+        return claim
+
+    def _poll_at(self, host, position: float) -> None:
+        host.player.position = position
+        host._poll_position()
+
+    async def _end(self, host, video_id="A"):
+        host.player.current_track = None
+        host.player.current_attempt = None
+        host.player.position = 0.0
+        host.player.duration = 0.0
+        await host._on_track_end(
+            {"track": {"video_id": video_id, "title": video_id}, "attempt": self.attempt}
+        )
+
+    async def _history(self, tmp_path):
+        from ytm_player.services.history import HistoryManager
+
+        history = HistoryManager(db_path=tmp_path / "history.db")
+        await history.init()
+        return history
+
+    def test_poll_samples_position_into_current_claim(self):
+        host = self._host()
+        claim = self._claim(host)
+
+        self._poll_at(host, 47.8)  # query_one raises in this host
+
+        assert claim.last_position == 47.8
+
+    def test_poll_keeps_last_positive_sample(self):
+        host = self._host()
+        claim = self._claim(host)
+
+        self._poll_at(host, 47.8)
+        self._poll_at(host, 0.0)
+
+        assert claim.last_position == 47.8
+
+    def test_poll_ignores_claim_of_another_attempt(self):
+        host = self._host()
+        claim = self._claim(host, attempt=self.attempt - 1)
+
+        self._poll_at(host, 47.8)
+
+        assert claim.last_position == 0.0
+
+    def test_poll_ignores_finalized_claim(self):
+        host = self._host()
+        claim = self._claim(host)
+        claim.finalized = True
+
+        self._poll_at(host, 47.8)
+
+        assert claim.last_position == 0.0
+
+    async def test_natural_eof_records_last_position(self, tmp_path):
+        history = await self._history(tmp_path)
+        try:
+            host = self._host(history)
+            claim = self._claim(host)
+            claim.insert_started = True
+            claim.row_id = await history.log_play(claim.track, 6, "tui", min_listen_seconds=5)
+            self._poll_at(host, 47.8)
+
+            await self._end(host)
+            await self._end(host)  # duplicate end-file
+
+            plays = await history.get_play_history()
+            stats = await history.get_stats()
+            assert [p["listened_seconds"] for p in plays] == [47]
+            assert stats["total_plays"] == 1
+            assert stats["total_listen_time"] == 47
+            host._play_next.assert_awaited_once()
+        finally:
+            await history.close()
+
+    async def test_natural_eof_after_resume_counts_from_resume_point(self, tmp_path):
+        history = await self._history(tmp_path)
+        try:
+            host = self._host(history)
+            host._track_start_position = 90.0
+            claim = self._claim(host)
+            claim.insert_started = True
+            claim.row_id = await history.log_play(claim.track, 6, "tui", min_listen_seconds=5)
+            self._poll_at(host, 120.4)
+
+            await self._end(host)
+
+            plays = await history.get_play_history()
+            assert [p["listened_seconds"] for p in plays] == [30]
+        finally:
+            await history.close()
+
+    async def test_natural_eof_before_threshold_timer_inserts_once(self, tmp_path):
+        history = await self._history(tmp_path)
+        try:
+            host = self._host(history, threshold=5)
+            self._claim(host)
+            self._poll_at(host, 47.8)
+
+            await self._end(host)
+
+            plays = await history.get_play_history()
+            assert [p["listened_seconds"] for p in plays] == [47]
+        finally:
+            await history.close()
+
+    async def test_natural_eof_at_threshold_is_not_a_play(self, tmp_path):
+        history = await self._history(tmp_path)
+        try:
+            host = self._host(history, threshold=5)
+            self._claim(host)
+            self._poll_at(host, 5.9)
+
+            await self._end(host)
+
+            assert await history.get_play_history() == []
+        finally:
+            await history.close()
+
+    async def test_natural_eof_while_insert_in_flight_hands_off(self):
+        host = self._host(MagicMock())
+        claim = self._claim(host)
+        claim.insert_started = True
+        self._poll_at(host, 47.8)
+
+        await self._end(host)
+
+        assert claim.pending_seconds == 47
+        assert claim.finalized is True
+
+    async def test_eof_before_new_claim_is_armed_writes_nothing(self):
+        """Same video, but the claim belongs to the previous attempt: its
+        sample must not be credited to this play."""
+        host = self._host(MagicMock())
+        host.history.log_play = AsyncMock()
+        host.history.update_play_listened_seconds = AsyncMock()
+        claim = self._claim(host, attempt=self.attempt - 1)
+        claim.last_position = 100.0
+        claim.row_id = 7
+        claim.insert_started = True
+
+        await self._end(host)
+
+        host.history.log_play.assert_not_awaited()
+        host.history.update_play_listened_seconds.assert_not_awaited()
+        assert claim.finalized is False
+        host._play_next.assert_awaited_once()
+
+    async def test_skip_still_uses_live_position(self):
+        host = self._host(MagicMock())
+        host.history.update_play_listened_seconds = AsyncMock()
+        claim = self._claim(host)
+        claim.row_id = 7
+        claim.insert_started = True
+        self._poll_at(host, 100.0)
+        host.player.position = 18.0
+        host.player.current_track = {"video_id": "A"}
+
+        await host._log_current_listen()
+
+        host.history.update_play_listened_seconds.assert_awaited_once_with(7, 18)
 
 
 class TestQueueExhausted:

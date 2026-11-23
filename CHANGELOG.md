@@ -22,6 +22,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Playlist actions work on the Library page at launch**: when Library opened on the last played playlist by itself, the track actions menu had no Remove from Playlist, renaming or deleting that playlist left the view stale, and tracks added to it did not appear. All of these now act on the playlist on screen.
 - **A failing stream no longer cancels the playlist you just picked**: when the playing track's stream failed while a newly chosen playlist, album or radio was still loading, the retry or skip of the failed track discarded the new choice. The new choice now plays once it loads.
 - **Shuffle plays every track you add after the last one**: with shuffle on, if the playing track was the last in the queue and you removed it, then added tracks, an album, a playlist or radio tracks, playback could jump past some of the new tracks or replay earlier ones. Everything added now plays, and earlier tracks are not replayed.
+- **Listening time counts songs played to the end**: a track that played to its end was recorded in local history with only the few seconds it took to count as a play, so `ytm stats` and listen-time totals were far too low. History now records how far the track actually played.
 
 ---
 
