@@ -23,6 +23,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **A failing stream no longer cancels the playlist you just picked**: when the playing track's stream failed while a newly chosen playlist, album or radio was still loading, the retry or skip of the failed track discarded the new choice. The new choice now plays once it loads.
 - **Shuffle plays every track you add after the last one**: with shuffle on, if the playing track was the last in the queue and you removed it, then added tracks, an album, a playlist or radio tracks, playback could jump past some of the new tracks or replay earlier ones. Everything added now plays, and earlier tracks are not replayed.
 - **Listening time counts songs played to the end**: a track that played to its end was recorded in local history with only the few seconds it took to count as a play, so `ytm stats` and listen-time totals were far too low. History now records how far the track actually played.
+- **A damaged sign-in file no longer crashes ytm-player**: if `auth.json` held something other than a set of headers (such as `[]`) or was not valid UTF-8 text, both launch and `ytm setup` crashed, so setup could not repair it. Both now treat the file as signed out: launch says to run `ytm setup`, and setup replaces the file.
 
 ---
 

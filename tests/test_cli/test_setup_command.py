@@ -1,15 +1,18 @@
-"""`ytm setup` tells the user when a ytm instance is running."""
+"""`ytm setup`: the running-instance notice, --slots, and repairing a damaged auth.json."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from unittest.mock import MagicMock
 
 import pytest
+import ytmusicapi
 from click.testing import CliRunner
 
 from ytm_player.cli import main
 from ytm_player.config.settings import Settings
-from ytm_player.services.auth import DEFAULT_ACCOUNT_PROBE_SLOTS
+from ytm_player.services.auth import DEFAULT_ACCOUNT_PROBE_SLOTS, AuthManager, _ProbedAccount
 
 
 def _fake_manager(monkeypatch) -> MagicMock:
@@ -72,3 +75,47 @@ def test_setup_accepts_boundary_slots(monkeypatch, valid_slot):
 
     assert result.exit_code == 0, result.output
     manager.setup_interactive.assert_called_once_with(manual=False, browser=None, slots=valid_slot)
+
+
+@pytest.mark.parametrize(
+    "damaged",
+    [
+        b"[]",
+        b"\xff\xfe{}",
+        b"[" * 1200 + b"]" * 1200,
+        b'{"x-goog-authuser": 1e999}',
+    ],
+    ids=["list", "invalid-utf8", "deep-nesting", "huge-slot"],
+)
+def test_manual_setup_replaces_a_damaged_auth_file(monkeypatch, tmp_path, damaged):
+    """`ytm setup --manual` is the repair for a damaged auth.json: it must not
+    crash on the old file, ask to re-authenticate, or keep the old bytes. No
+    account.json exists, so the legacy read of the old file runs too."""
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    manager = AuthManager(
+        config_dir=cfg,
+        auth_file=cfg / "auth.json",
+        cookies_file=None,
+        stream_cookies_file=cfg / "stream_cookies.txt",
+        account_file=cfg / "account.json",
+    )
+    manager.auth_file.write_bytes(damaged)
+    pasted = {"cookie": "SAPISID=new; __Secure-3PAPISID=new", "x-goog-authuser": "0"}
+    account = _ProbedAccount(slot=0, name="Synthetic", handle="", channel_id="UC" + "n" * 22)
+    monkeypatch.setattr(ytmusicapi, "setup", lambda **kw: json.dumps(pasted))
+    monkeypatch.setattr(manager, "_probe_payload", lambda payload, slot: account)
+    monkeypatch.setattr(manager, "validate", lambda: True)
+    monkeypatch.setattr("ytm_player.cli.AuthManager", lambda **kwargs: manager)
+    monkeypatch.setattr("ytm_player.cli.get_settings", lambda: Settings())
+    monkeypatch.setattr("ytm_player.cli.get_running_pid", lambda: None)
+    monkeypatch.setattr("ytm_player.cli.ensure_dirs", lambda: None)  # keep the user's dirs
+
+    result = CliRunner().invoke(main, ["setup", "--manual"], input="cookie: whatever\n\n")
+
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert "re-authenticate" not in result.output
+    new_bytes = manager.auth_file.read_bytes()
+    assert json.loads(new_bytes)["cookie"] == pasted["cookie"]
+    record = json.loads((cfg / "account.json").read_text(encoding="utf-8"))
+    assert record["auth_sha256"] == hashlib.sha256(new_bytes).hexdigest()

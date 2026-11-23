@@ -920,14 +920,23 @@ class AuthManager:
 
     def is_authenticated(self) -> bool:
         """Check whether a valid auth file exists on disk."""
-        if not self._auth_file.exists():
-            return False
+        # ValueError covers malformed JSON and invalid UTF-8; RecursionError
+        # deeply nested JSON. A damaged or unreadable file reads as "not
+        # signed in", so startup and `ytm setup` lead to the repair instead
+        # of crashing.
         try:
             with open(self._auth_file, encoding="utf-8") as f:
                 data = json.load(f)
-            return bool(data.get("cookie"))
-        except (json.JSONDecodeError, OSError):
+        except FileNotFoundError:
             return False
+        except (OSError, ValueError, RecursionError):
+            logger.warning("Could not read %s; treating it as signed out", self._auth_file)
+            return False
+        cookie = data.get("cookie") if isinstance(data, dict) else None
+        if not isinstance(cookie, str) or not cookie.strip():
+            logger.warning("%s holds no usable cookie; treating it as signed out", self._auth_file)
+            return False
+        return True
 
     def create_ytmusic_client(self, user: str | None = None) -> YTMusic:
         """Create a YTMusic client from the stored auth file."""
@@ -1663,7 +1672,14 @@ class AuthManager:
             if auth_bytes is not None:
                 try:
                     slot = str(int(json.loads(auth_bytes).get("x-goog-authuser", 0)))
-                except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+                except (
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    OverflowError,
+                    RecursionError,
+                    json.JSONDecodeError,
+                ):
                     pass
             record = {
                 "schema_version": _ACCOUNT_SCHEMA_VERSION,
