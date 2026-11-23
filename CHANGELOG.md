@@ -14,6 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 **Fixes**
 
+- **Streams no longer throttled**: mpv now fetches YouTube audio in bounded 10 MiB ranged requests over persistent connections, the way yt-dlp does, instead of one open-ended download that YouTube throttles. Thanks to @glywil for the fix ([#221](https://github.com/peternaame-boop/ytm-player/pull/221)).
+- **macOS audio stays on CoreAudio**: on macOS 27, mpv older than 0.42 failed to open CoreAudio with error `-50` for planar audio and fell back to avfoundation. ytm-player now asks mpv for interleaved float audio, which avoids it ([mpv#18384](https://github.com/mpv-player/mpv/issues/18384)). Thanks to @glywil for the fix ([#221](https://github.com/peternaame-boop/ytm-player/pull/221), [#223](https://github.com/peternaame-boop/ytm-player/pull/223)).
+- **Stop cancels a pending retry**: when a track failed and its retry was still pending, pressing Stop left the retry set. Stop now clears it ([#225](https://github.com/peternaame-boop/ytm-player/issues/225), [#226](https://github.com/peternaame-boop/ytm-player/pull/226)).
 - **Lyrics load again**: YouTube Music added a Comments tab that ytmusicapi 1.12.0 could not parse, so lyrics failed for every track. ytm-player now requires ytmusicapi 1.12.1 or newer, which handles it ([#227](https://github.com/peternaame-boop/ytm-player/issues/227)).
 
 ---
