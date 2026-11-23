@@ -480,6 +480,125 @@ class TestRemovedAudibleBoundary:
         q.add(tail)
         assert q.next_track() is tail
 
+    @pytest.mark.parametrize("old_count", [1, 2])
+    @pytest.mark.parametrize("radio", [False, True])
+    def test_shuffled_bulk_append_after_removed_last_plays_whole_batch(
+        self, queue_manager, monkeypatch, old_count, radio
+    ):
+        q = queue_manager
+        q.add_multiple([{"video_id": f"old{i}"} for i in range(old_count)])
+        q.toggle_shuffle()
+        q.jump_to(old_count - 1)
+        q.remove(old_count - 1)
+        c, d = {"video_id": "C"}, {"video_id": "D"}
+        monkeypatch.setattr(random, "shuffle", list.reverse)
+        monkeypatch.setattr(random, "randint", lambda _low, high: high)
+        if radio:
+            q.set_radio_tracks([c, d])
+        else:
+            q.add_multiple([c, d])
+        assert list(q.tracks[-2:]) == [d, c]
+        assert q.current() is None
+        assert q.remaining_tracks == 2
+        assert q.peek_upcoming(2) == [d, c]
+        assert q.next_track() is d
+        assert q.next_track() is c
+        assert q.next_track() is None
+
+    def test_bulk_append_after_shuffle_toggle_on_removed_last_skips_old(
+        self, queue_manager, monkeypatch
+    ):
+        q = queue_manager
+        old = [{"video_id": "A"}, {"video_id": "B"}, {"video_id": "C"}]
+        q.add_multiple(old)
+        q.jump_to(2)
+        q.remove(2)
+        q.toggle_shuffle()
+        d, e = {"video_id": "D"}, {"video_id": "E"}
+        monkeypatch.setattr(random, "shuffle", list.reverse)
+        monkeypatch.setattr(random, "randint", lambda low, _high: low)
+        q.add_multiple([d, e])
+        assert {t["video_id"] for t in q.tracks[:2]} == {"A", "B"}
+        assert q.next_track() is d
+        assert q.next_track() is e
+        assert q.next_track() is None
+
+    def test_unshuffled_bulk_append_after_removed_last_plays_in_order(self, queue_manager):
+        q = queue_manager
+        q.add_multiple([{"video_id": "A"}, {"video_id": "B"}])
+        q.jump_to(1)
+        q.remove(1)
+        c, d = {"video_id": "C"}, {"video_id": "D"}
+        q.add_multiple([c, d])
+        assert q.next_track() is c
+        assert q.next_track() is d
+        assert q.next_track() is None
+
+    def test_shuffled_bulk_append_keeps_surviving_successor(self, queue_manager):
+        q = queue_manager
+        q.add_multiple([{"video_id": str(i)} for i in range(4)])
+        q.toggle_shuffle()
+        q.jump_to(1)
+        successor_id = q.entries[2][0]
+        q.remove(1)
+        q.add_multiple([{"video_id": "X"}, {"video_id": "Y"}])
+        q.next_track()
+        assert q.entries[q.current_index][0] == successor_id
+
+    @staticmethod
+    def _removed_last_then_shuffle(q, monkeypatch, shuffle_first):
+        """Queue A B C, remove the playing C, shuffle on, randomness pinned low."""
+        q.add_multiple([{"video_id": v} for v in "ABC"])
+        monkeypatch.setattr(random, "shuffle", lambda items: None)
+        monkeypatch.setattr(random, "randint", lambda low, _high: low)
+        if shuffle_first:
+            q.toggle_shuffle()
+        q.jump_to(2)
+        q.remove(2)
+        if not shuffle_first:
+            q.toggle_shuffle()
+
+    @staticmethod
+    def _assert_plays(q, names):
+        expected = [{"video_id": v} for v in names]
+        assert q.remaining_tracks == len(expected)
+        assert q.peek_upcoming(20) == expected
+        assert [q.next_track() for _ in expected] == expected
+        assert q.next_track() is None
+
+    @pytest.mark.parametrize("radio", [False, True])
+    def test_second_batch_after_removed_last_lands_after_successor(
+        self, queue_manager, monkeypatch, radio
+    ):
+        q = queue_manager
+        self._removed_last_then_shuffle(q, monkeypatch, shuffle_first=True)
+        q.add_multiple([{"video_id": v} for v in "DE"])
+        second = [{"video_id": v} for v in "FG"]
+        if radio:
+            q.set_radio_tracks(second)
+        else:
+            q.add_multiple(second)
+        self._assert_plays(q, "EGFD")
+
+    @pytest.mark.parametrize("position", [None, 0])
+    def test_single_add_after_shuffle_toggle_on_removed_last_skips_old(
+        self, queue_manager, monkeypatch, position
+    ):
+        q = queue_manager
+        self._removed_last_then_shuffle(q, monkeypatch, shuffle_first=False)
+        q.add({"video_id": "D"}, position)
+        self._assert_plays(q, "D")
+
+    @pytest.mark.parametrize("position", [None, 0])
+    def test_single_add_after_batch_lands_after_successor(
+        self, queue_manager, monkeypatch, position
+    ):
+        q = queue_manager
+        self._removed_last_then_shuffle(q, monkeypatch, shuffle_first=False)
+        q.add_multiple([{"video_id": v} for v in "DE"])
+        q.add({"video_id": "F"}, position)
+        self._assert_plays(q, "EFD")
+
     def test_reorder_keeps_the_surviving_successor_identity(self, queue_manager):
         q = queue_manager
         q.add_multiple([{"video_id": str(i)} for i in range(5)])

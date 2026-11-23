@@ -217,6 +217,11 @@ class QueueManager:
 
     def _add_unlocked(self, track: dict, position: int | None = None) -> None:
         """Add a track without acquiring the lock (caller must hold it)."""
+        if self._shuffle and self._removed_current:
+            # Resolve the saved occurrence before inserting or shifting real indices.
+            insert_at = self._removed_next_position()
+        else:
+            insert_at = self._shuffle_position + 1
         (entry_id,) = self._new_entry_ids(1)
         if self._removed_current and self._removed_next_id is None:
             self._removed_next_id = entry_id
@@ -235,7 +240,6 @@ class QueueManager:
 
         if self._shuffle:
             # Insert the new track at a random future position in shuffle order.
-            insert_at = self._shuffle_position + 1 if self._shuffle_position >= 0 else 0
             # Shift existing shuffle indices that are >= new_idx.
             self._shuffle_order = [(i + 1 if i >= new_idx else i) for i in self._shuffle_order]
             future_pos = (
@@ -316,8 +320,9 @@ class QueueManager:
         start_idx = len(self._tracks)
         self._tracks.extend(tracks)
         self._entry_ids.extend(self._new_entry_ids(len(tracks)))
-        if tracks and self._removed_current and self._removed_next_id is None:
-            self._removed_next_id = self._entry_ids[start_idx]
+        # The removed audible track was last: the batch becomes a new tail
+        # and its first entry in final play order plays next.
+        needs_successor = bool(tracks) and self._removed_current and self._removed_next_id is None
         new_indices = list(range(start_idx, start_idx + len(tracks)))
 
         if self._shuffle:
@@ -327,11 +332,20 @@ class QueueManager:
                 self._rebuild_shuffle(keep_current=False)
             else:
                 # Insert new indices at random future positions.
-                insert_after = self._shuffle_position + 1 if self._shuffle_position >= 0 else 0
+                if needs_successor:
+                    insert_after = start_idx
+                elif self._removed_current:
+                    insert_after = self._removed_next_position() + 1
+                else:
+                    insert_after = self._shuffle_position + 1 if self._shuffle_position >= 0 else 0
                 random.shuffle(new_indices)
                 for new_idx in new_indices:
                     pos = random.randint(insert_after, len(self._shuffle_order))
                     self._shuffle_order.insert(pos, new_idx)
+
+        if needs_successor:
+            first = self._shuffle_order[start_idx] if self._shuffle else start_idx
+            self._removed_next_id = self._entry_ids[first]
 
     def add_multiple(self, tracks: list[dict]) -> None:
         """Append multiple tracks to the end of the queue."""
