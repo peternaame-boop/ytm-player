@@ -115,8 +115,8 @@ async def test_delete_purges_even_when_playlist_not_open():
 
 
 async def test_delete_clears_last_played_fallback_before_navigating():
-    """The plain LibraryPage mounted by the navigate-away falls back to
-    app._active_library_playlist_id in on_mount — the dead id must be
+    """The plain Library visit of the navigate-away falls back to
+    app._active_library_playlist_id in navigate_to — the dead id must be
     cleared BEFORE navigate_to or the deleted playlist auto-reloads."""
     host = FakeSidebarHost()
     host._active_library_playlist_id = "VLPL123"

@@ -193,6 +193,12 @@ class NavigationMixin(YTMHostBase):
         if not kwargs and page_name in self._page_state_cache:
             kwargs = dict(self._page_state_cache[page_name])
 
+        # A Library visit without a playlist opens the last played one. Put
+        # it in kwargs so _current_page_kwargs names the playlist on screen.
+        if page_name == "library" and not kwargs.get("playlist_id"):
+            if self._active_library_playlist_id:
+                kwargs = {**kwargs, "playlist_id": self._active_library_playlist_id}
+
         container = self.query_one("#main-content", Container)
 
         # remove_children and mount are async; must await them.
@@ -242,7 +248,7 @@ class NavigationMixin(YTMHostBase):
         Without this, a bare footer-nav to Library (empty kwargs → cached
         state applied) would reopen the deleted playlist.
         """
-        # LibraryPage.on_mount falls back to this id when mounted bare.
+        # navigate_to falls back to this id on a bare Library visit.
         if self._active_library_playlist_id in dead_ids:
             self._active_library_playlist_id = None
         lib_state = self._page_state_cache.get("library")

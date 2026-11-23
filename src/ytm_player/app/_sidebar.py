@@ -523,8 +523,8 @@ class SidebarMixin(YTMHostBase):
                 ps.query_one("#ps-playlists", LibraryPanel).remove_item(raw_id)
                 dead_ids = {playlist_id, raw_id, f"VL{raw_id}"}
                 # Clear the last-played fallback BEFORE navigating — the plain
-                # LibraryPage mounted below would otherwise auto-load the dead
-                # id from app._active_library_playlist_id in on_mount.
+                # Library visit below would otherwise reopen the dead id, which
+                # navigate_to takes from app._active_library_playlist_id.
                 if self._active_library_playlist_id in dead_ids:
                     self._active_library_playlist_id = None
                 # Let page switches already running finish first (#145), so
