@@ -20,6 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Lyrics load again**: YouTube Music added a Comments tab that ytmusicapi 1.12.0 could not parse, so lyrics failed for every track. ytm-player now requires ytmusicapi 1.12.1 or newer, which handles it ([#227](https://github.com/peternaame-boop/ytm-player/issues/227)).
 - **Fewer tracks skipped with HTTP 403**: some YouTube streams return 403 when mpv connects over a different IP family (IPv4 or IPv6) than the one recorded in the stream URL, which happens on networks where the two leave from different addresses, as with many VPNs. With FFmpeg 6.1 or newer, ytm-player now fetches each stream over the family recorded in its URL ([#229](https://github.com/peternaame-boop/ytm-player/pull/229)).
 - **Playlist actions work on the Library page at launch**: when Library opened on the last played playlist by itself, the track actions menu had no Remove from Playlist, renaming or deleting that playlist left the view stale, and tracks added to it did not appear. All of these now act on the playlist on screen.
+- **A failing stream no longer cancels the playlist you just picked**: when the playing track's stream failed while a newly chosen playlist, album or radio was still loading, the retry or skip of the failed track discarded the new choice. The new choice now plays once it loads.
 
 ---
 

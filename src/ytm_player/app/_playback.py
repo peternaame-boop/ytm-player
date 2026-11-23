@@ -380,7 +380,9 @@ class PlaybackMixin(YTMHostBase):
                     if not scheduled.still_current(self.queue.generation):
                         logger.debug("Deferred queue advance superseded; not playing")
                         return
-                    await self.play_track(next_track)
+                    # Nested in the current request, so a newer one still loading keeps its place.
+                    with scheduled.request_scope():
+                        await self.play_track(next_track)
 
                 self.call_later(lambda: self.run_worker(_advance()))
             else:
@@ -452,7 +454,10 @@ class PlaybackMixin(YTMHostBase):
         self.stream_resolver.clear_cache()
         # The retry lands inside play_track's same-track debounce window.
         self._ownership.reset_debounce()
-        await self.play_track(track, recovery_of=attempt)
+        # Nested in the current request, so a newer one still loading keeps its place.
+        failed = self._ownership.snapshot(self.queue.generation)
+        with failed.request_scope():
+            await self.play_track(track, recovery_of=attempt)
 
     async def _toggle_play_pause(self) -> None:
         """Toggle play/pause, starting playback from queue if player is idle."""

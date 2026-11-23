@@ -324,6 +324,104 @@ async def test_unsuccessful_request_keeps_audible_attempt_owned(operation, event
         h.play_track.assert_awaited_once_with(track("A"), recovery_of=attempt)
 
 
+def _gated_playlist(h):
+    """Start playlist PL; its fetch waits on the returned gate."""
+    gate = asyncio.Event()
+
+    async def get_playlist(*args, **kwargs):
+        await gate.wait()
+        return {"tracks": [{"videoId": "P1", "title": "P1"}], "trackCount": 1}
+
+    h.ytmusic.get_playlist = AsyncMock(side_effect=get_playlist)
+    return gate, asyncio.create_task(h._play_playlist("PL", "Playlist"))
+
+
+def _recording_player(h):
+    """Each load becomes the player's current track, as a successful mpv load does."""
+
+    async def play(url, item, **kwargs):
+        h.player.current_track = item
+
+    h.player.play = AsyncMock(side_effect=play)
+
+
+def _played(h):
+    return [c.args[1]["video_id"] for c in h.player.play.await_args_list]
+
+
+def _error(h, attempt):
+    h.player.current_track = None  # Native ERROR clears this before dispatch.
+    return h._on_player_error({"reason": 4, "error": -1, "track": track("A"), "attempt": attempt})
+
+
+async def test_stream_retry_does_not_drop_a_playlist_still_loading():
+    h = collection_host()
+    _recording_player(h)
+    attempt = await _start_a(h)
+    gate, loading = _gated_playlist(h)
+    await asyncio.sleep(0)  # The playlist request has reserved and awaits its fetch.
+    await _error(h, attempt)
+    gate.set()
+    await asyncio.wait_for(loading, 3)
+    h.stream_resolver.clear_cache.assert_called_once()
+    assert _played(h) == ["A", "A", "P1"]
+    assert [t["video_id"] for t in h.queue.tracks] == ["P1"]
+    assert h.player.current_track["video_id"] == "P1"
+
+
+async def test_stream_retry_resolving_cannot_replace_a_playlist_that_started():
+    h = collection_host()
+    _recording_player(h)
+    attempt = await _start_a(h)
+    retry_entered, retry_gate = asyncio.Event(), asyncio.Event()
+
+    async def resolve(video_id):
+        if video_id == "A":
+            retry_entered.set()
+            await retry_gate.wait()
+        return _stream_info(video_id)
+
+    h.stream_resolver.resolve = AsyncMock(side_effect=resolve)
+    gate, loading = _gated_playlist(h)
+    await asyncio.sleep(0)
+    retrying = asyncio.create_task(_error(h, attempt))
+    await asyncio.wait_for(retry_entered.wait(), 3)
+    gate.set()
+    await asyncio.wait_for(loading, 3)  # The playlist plays while A's retry is held.
+    retry_gate.set()
+    await asyncio.wait_for(retrying, 3)
+    assert _played(h) == ["A", "P1"]
+    assert h.player.current_track["video_id"] == "P1"
+    assert [t["video_id"] for t in h.queue.tracks] == ["P1"]
+
+
+@pytest.mark.parametrize("advance_first", [True, False])
+async def test_failed_retry_advance_does_not_drop_a_playlist_still_loading(advance_first):
+    h = collection_host()
+    _recording_player(h)
+    first = await _start_a(h)
+    await _error(h, first)
+    retry = h.player.play.await_args.kwargs["attempt"]
+    gate, loading = _gated_playlist(h)
+    await asyncio.sleep(0)
+    await _error(h, retry)
+    h.call_later.assert_called_once()
+
+    async def run_deferred():
+        h.call_later.call_args.args[0]()  # What Textual does later: start the worker.
+        await h.run_worker.call_args.args[0]
+
+    if advance_first:
+        await run_deferred()
+    gate.set()
+    await asyncio.wait_for(loading, 3)
+    if not advance_first:
+        await run_deferred()
+    assert _played(h) == (["A", "A", "B", "P1"] if advance_first else ["A", "A", "P1"])
+    assert h.player.current_track["video_id"] == "P1"
+    assert [t["video_id"] for t in h.queue.tracks] == ["P1"]
+
+
 @pytest.mark.parametrize("after_clear", ["empty", "add", "autoplay", "error"])
 async def test_queue_clear_preserves_audible_attempt_completion(after_clear):
     h = collection_host()
