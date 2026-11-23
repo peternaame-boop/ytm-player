@@ -918,3 +918,84 @@ class TestDockPolicyDispatch:
 
         assert calls["n"] == 2  # recovered and replayed
         assert seen == [threading.main_thread()]
+
+
+class TestStreamAddressFamily:
+    """Streams signed for one IP are fetched over that IP's address family.
+
+    googlevideo URLs carry the client IP in ``ip=`` and answer 403 when the
+    request arrives from the other family (dual-stack VPN with separate exits).
+    """
+
+    V4_URL = "https://rr1.googlevideo.com/videoplayback?expire=1&ip=192.0.2.1&id=x"
+    V6_URL = "https://rr1.googlevideo.com/videoplayback?ip=2001%3Adb8%3A%3A5&id=x"
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            (V4_URL, "0.0.0.0"),
+            (V6_URL, "::"),
+            ("https://rr1.googlevideo.com/videoplayback?id=x", None),
+            ("https://rr1.googlevideo.com/videoplayback?ip=not-an-ip", None),
+            ("/home/user/.cache/ytm-player/audio/abc.opus", None),
+            ("/tmp/song?ip=::1", None),
+            ("ftp://localhost/song?ip=::1", None),
+            ("https://[bad/videoplayback?ip=192.0.2.1", None),
+            ("url", None),
+        ],
+    )
+    def test_bind_address_follows_ip_param(self, url, expected):
+        from ytm_player.services.player import _bind_address
+
+        assert _bind_address(url) == expected
+
+    async def test_signed_url_loads_with_family_bind(self, player):
+        player._mpv.options = ["curl-enabled", "stream-lavf-o"]
+        await player.play(self.V6_URL, {"video_id": "abc"})
+
+        player._mpv.command.assert_called_once_with(
+            "loadfile",
+            url=self.V6_URL,
+            flags="replace",
+            options=(
+                "curl-enabled=no,"
+                "stream-lavf-o=[request_size=10485760,multiple_requests=1,local_addr=::]"
+            ),
+        )
+        assert player._current_entry_id == 10
+
+    async def test_curl_option_omitted_when_mpv_lacks_it(self, player):
+        player._mpv.options = ["stream-lavf-o"]
+        await player.play(self.V4_URL, {"video_id": "abc"})
+
+        assert player._mpv.command.call_args.kwargs["options"] == (
+            "stream-lavf-o=[request_size=10485760,multiple_requests=1,local_addr=0.0.0.0]"
+        )
+
+    @pytest.mark.parametrize(
+        "url", ["/tmp/abc.opus", "/tmp/song?ip=::1", "https://[bad/videoplayback?ip=192.0.2.1"]
+    )
+    async def test_unbindable_url_loads_unchanged(self, player, url):
+        await player.play(url, {"video_id": "abc"})
+
+        player._mpv.command.assert_called_once_with("loadfile", url)
+
+    async def test_recovery_load_keeps_family_bind(self, player):
+        from ytm_player.services.player import mpv as _mpv
+
+        player._mpv.command = MagicMock(side_effect=_mpv.ShutdownError("simulated crash"))
+        new_mpv = MagicMock()
+        new_mpv.options = ["stream-lavf-o"]
+        new_mpv.command = MagicMock(return_value={"playlist_entry_id": 11})
+        player._init_mpv = MagicMock(return_value=new_mpv)
+        player._loop = None
+
+        await player.play(self.V4_URL, {"video_id": "abc"})
+
+        new_mpv.command.assert_called_once_with(
+            "loadfile",
+            url=self.V4_URL,
+            flags="replace",
+            options="stream-lavf-o=[request_size=10485760,multiple_requests=1,local_addr=0.0.0.0]",
+        )
+        assert player._current_entry_id == 11
