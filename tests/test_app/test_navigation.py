@@ -10,9 +10,11 @@ The two bugs we're guarding against:
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 from ytm_player.app._navigation import PAGE_NAMES, NavigationMixin
+from ytm_player.app._track_actions import TrackActionsMixin
 
 
 def _nav_with_page_states(states: dict[str, dict]) -> NavigationMixin:
@@ -206,8 +208,8 @@ class TestPurgePlaylistNavState:
         assert "playlist_id" not in nav._create_page.call_args.kwargs
 
     async def test_clears_last_played_fallback(self):
-        """LibraryPage.on_mount falls back to app._active_library_playlist_id
-        when mounted without a playlist_id — a dead id here would auto-reload
+        """navigate_to falls back to app._active_library_playlist_id on a
+        Library visit without a playlist_id — a dead id here would auto-reload
         the deleted playlist."""
         nav = _fresh_nav_host()
         nav._active_library_playlist_id = "VLPL9"
@@ -274,6 +276,44 @@ class TestPurgePlaylistNavState:
         await nav.navigate_to("library", playlist_id=None)  # delete path: navigate first
         nav._purge_playlist_nav_state({"VLPL9", "PL9"})  # then purge
         assert "library" not in nav._page_state_cache
+
+
+class TestRememberedLibraryPlaylist:
+    """A plain Library visit opens the last played playlist. The page's
+    context (Remove from Playlist, edit and delete refreshes, picker
+    updates) is read from _current_page_kwargs, so the id must land there."""
+
+    async def test_bare_library_visit_records_the_remembered_playlist(self):
+        nav = _fresh_nav_host()
+        nav._active_library_playlist_id = "PL-A"
+
+        await nav.navigate_to("library")
+
+        assert cast(MagicMock, nav._create_page).call_args.kwargs.get("playlist_id") == "PL-A"
+        assert nav._current_page_kwargs.get("playlist_id") == "PL-A"
+
+    async def test_remove_targets_the_opened_playlist_not_the_remembered_one(self):
+        nav = _fresh_nav_host()
+        nav._active_library_playlist_id = "PL-A"
+
+        await nav.navigate_to("library", playlist_id="PL-B")
+
+        host = MagicMock()
+        host._current_page_kwargs = nav._current_page_kwargs
+        host.ytmusic.remove_playlist_items = AsyncMock(return_value="success")
+        track = {"video_id": "song", "setVideoId": "ROW"}
+        await TrackActionsMixin._remove_track_from_playlist.__get__(host)(track)
+
+        host.ytmusic.remove_playlist_items.assert_awaited_once_with(
+            "PL-B", [{"videoId": "song", "setVideoId": "ROW"}]
+        )
+
+    async def test_library_without_a_remembered_playlist_has_no_context(self):
+        nav = _fresh_nav_host()
+
+        await nav.navigate_to("library", playlist_id=None)
+
+        assert not nav._current_page_kwargs.get("playlist_id")
 
 
 class TestPageNames:

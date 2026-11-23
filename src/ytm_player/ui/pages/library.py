@@ -151,15 +151,10 @@ class LibraryPage(TrackFilterHost, Widget):
         self.query_one("#library-tracks").display = False
         self.query_one("#content-header").display = False
 
-        # Auto-load if a playlist_id was provided.
+        # Auto-load if a playlist_id was provided. navigate_to fills in the
+        # last played playlist when none was asked for.
         if self._active_playlist_id:
             self.reload(self._active_playlist_id)
-        elif not self._active_playlist_id:
-            # Try the currently-playing playlist from the app.
-            target_id = getattr(self.app, "_active_library_playlist_id", None)
-            if target_id:
-                self._active_playlist_id = target_id
-                self.reload(target_id)
 
     def get_nav_state(self) -> dict[str, Any]:
         """Return state to preserve when navigating away."""
