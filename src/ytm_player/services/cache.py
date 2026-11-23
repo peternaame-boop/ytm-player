@@ -157,10 +157,9 @@ class CacheManager:
             row = await cursor.fetchone()
         if row is None:
             return False
-        if not Path(row["file_path"]).exists():
-            await self.remove(video_id)
-            return False
-        return True
+        # No pruning here: a download can land between this check and a
+        # remove by id, which would delete the fresh file. get() prunes.
+        return Path(row["file_path"]).exists()
 
     async def remove(self, video_id: str) -> None:
         """Remove a single cached file and its index entry."""

@@ -1,7 +1,7 @@
 """Tests for ytm_player.services.cache.CacheManager."""
 
 import sqlite3
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -67,12 +67,31 @@ class TestHas:
         assert await cache_manager.has(VID_A) is False
         await cache_manager.close()
 
-    async def test_has_prunes_stale_entry_when_file_deleted_externally(self, cache_manager):
+    async def test_has_returns_false_when_file_deleted_externally(self, cache_manager):
         await cache_manager.init()
         path = await cache_manager.put(VID_A, b"data", "opus")
         path.unlink()
         assert await cache_manager.has(VID_A) is False
         assert await cache_manager.get(VID_A) is None
+        await cache_manager.close()
+
+    async def test_has_does_not_delete_a_file_written_during_its_check(self, cache_manager):
+        await cache_manager.init()
+        path = await cache_manager.put(VID_A, b"old", "opus")
+        path.unlink()
+        real_exists = type(path).exists
+
+        def missing_then_downloaded(p):
+            if p == path:
+                # The check sees no file, then a download lands at that path.
+                path.write_bytes(b"fresh")
+                return False
+            return real_exists(p)
+
+        with patch.object(type(path), "exists", missing_then_downloaded):
+            assert await cache_manager.has(VID_A) is False
+        assert path.read_bytes() == b"fresh"
+        assert await cache_manager.get(VID_A) == path
         await cache_manager.close()
 
     async def test_has_does_not_update_lru_or_hit_count(self, tmp_path):
