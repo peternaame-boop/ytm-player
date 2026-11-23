@@ -18,6 +18,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **macOS audio stays on CoreAudio**: on macOS 27, mpv older than 0.42 failed to open CoreAudio with error `-50` for planar audio and fell back to avfoundation. ytm-player now asks mpv for interleaved float audio, which avoids it ([mpv#18384](https://github.com/mpv-player/mpv/issues/18384)). Thanks to @glywil for the fix ([#221](https://github.com/peternaame-boop/ytm-player/pull/221), [#223](https://github.com/peternaame-boop/ytm-player/pull/223)).
 - **Stop cancels a pending retry**: when a track failed and its retry was still pending, pressing Stop left the retry set. Stop now clears it ([#225](https://github.com/peternaame-boop/ytm-player/issues/225), [#226](https://github.com/peternaame-boop/ytm-player/pull/226)).
 - **Lyrics load again**: YouTube Music added a Comments tab that ytmusicapi 1.12.0 could not parse, so lyrics failed for every track. ytm-player now requires ytmusicapi 1.12.1 or newer, which handles it ([#227](https://github.com/peternaame-boop/ytm-player/issues/227)).
+- **Fewer tracks skipped with HTTP 403**: some YouTube streams return 403 when mpv connects over a different IP family (IPv4 or IPv6) than the one recorded in the stream URL, which happens on networks where the two leave from different addresses, as with many VPNs. With FFmpeg 6.1 or newer, ytm-player now fetches each stream over the family recorded in its URL ([#229](https://github.com/peternaame-boop/ytm-player/pull/229)).
 
 ---
 

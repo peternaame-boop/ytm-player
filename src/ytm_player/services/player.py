@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import ipaddress
 import locale
 import logging
 import os
@@ -13,6 +14,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from ytm_player.services.macos_app import hide_dock_icon
 from ytm_player.utils.compat import StrEnum, auto
@@ -134,6 +136,33 @@ except OSError as _exc:
     mpv = _SimpleNamespace(MPV=_stub_mpv, ShutdownError=_MpvUnavailableError)  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+# Must match the stream_lavf_o set in Player._init_mpv: a file-local
+# stream-lavf-o replaces the global one rather than adding to it.
+_LAVF_CHUNKING = "request_size=10485760,multiple_requests=1"
+
+
+def _bind_address(url: str) -> str | None:
+    """Return the local address that keeps a signed stream on its IP family.
+
+    googlevideo URLs carry the client IP they were issued for in ``ip=`` and
+    answer 403 when the request comes from the other address family, which
+    happens on dual-stack networks whose IPv4 and IPv6 exits differ.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https"):
+        return None
+    values = parse_qs(parts.query).get("ip")
+    if not values:
+        return None
+    try:
+        version = ipaddress.ip_address(values[0]).version
+    except ValueError:
+        return None
+    return "0.0.0.0" if version == 4 else "::"
 
 
 class PlayerEvent(StrEnum):
@@ -269,7 +298,7 @@ class Player:
             # Fetch HTTPS streams in bounded 10 MiB Range chunks (yt-dlp's own
             # http_chunk_size for YouTube) over persistent connections, so
             # YouTube does not throttle open-ended GETs.
-            stream_lavf_o="request_size=10485760,multiple_requests=1",
+            stream_lavf_o=_LAVF_CHUNKING,
             log_handler=_on_mpv_log,
             loglevel="warn",
         )
@@ -619,11 +648,11 @@ class Player:
     def _play_sync(self, url: str) -> int:
         """Load and retain mpv's ID (python-mpv's play helper discards it)."""
         try:
-            result = self._mpv.command("loadfile", url)
+            result = self._loadfile(url)
         except mpv.ShutdownError:
             logger.warning("mpv crashed, attempting recovery...")
             if self._try_recover():
-                result = self._mpv.command("loadfile", url)
+                result = self._loadfile(url)
             else:
                 raise RuntimeError("mpv recovery failed")
         entry_id = result.get("playlist_entry_id") if isinstance(result, dict) else None
@@ -635,6 +664,20 @@ class Player:
             raise RuntimeError("mpv did not identify the loaded playlist entry")
         self._mpv.pause = False
         return entry_id
+
+    def _loadfile(self, url: str) -> Any:
+        bind = _bind_address(url)
+        if bind is None:
+            return self._mpv.command("loadfile", url)
+        # Pin the connection to the URL's IP family for this file only.
+        # FFmpeg's TCP local_addr does the binding (FFmpeg 6.1+; older FFmpeg
+        # ignores it), and mpv 0.42+'s curl backend, which would bypass it,
+        # is turned off for this file. Named arguments keep working across
+        # mpv's positional loadfile change in 0.38.
+        options = f"stream-lavf-o=[{_LAVF_CHUNKING},local_addr={bind}]"
+        if "curl-enabled" in self._mpv.options:
+            options = "curl-enabled=no," + options
+        return self._mpv.command("loadfile", url=url, flags="replace", options=options)
 
     async def pause(self) -> None:
         try:
