@@ -6,9 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report a bug. Please run `ytm doctor`
-        and paste the output below — it includes everything I need to
-        triage (version, Python, mpv, OS, recent log, recent crash).
+        On ytm-player 2.3.0 or newer, you can share the public report below.
+        On older versions, leave diagnostics blank. Keep raw logs, crash files,
+        and detailed local diagnostics private.
 
   - type: textarea
     id: description
@@ -34,14 +34,14 @@ body:
   - type: textarea
     id: doctor
     attributes:
-      label: ytm doctor output
-      description: Run `ytm doctor` in your terminal and paste the full output here.
+      label: ytm report output
+      description: On 2.3.0 or newer, run `ytm report` and paste its output here. On older versions, leave this field blank.
       render: shell
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: extra
     attributes:
       label: Anything else?
-      description: Screenshots, terminal output, related issues.
+      description: Related issues or other context. Remove private details from screenshots.

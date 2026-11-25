@@ -252,7 +252,7 @@ class TestSetupCLI:
         else:
             mock_auth.validate.return_value = validate_side_effect
 
-        monkeypatch.setattr("ytm_player.cli.AuthManager", lambda **kwargs: mock_auth)
+        monkeypatch.setattr("ytm_player.services.auth.AuthManager", lambda **kwargs: mock_auth)
         mock_settings = MagicMock()
         mock_settings.yt_dlp.cookies_file = None
         mock_settings.logging.level = "WARNING"
@@ -307,7 +307,7 @@ class TestSetupCLI:
         mock_auth.is_authenticated.return_value = False
         mock_auth.setup_interactive.return_value = False
 
-        monkeypatch.setattr("ytm_player.cli.AuthManager", lambda **kwargs: mock_auth)
+        monkeypatch.setattr("ytm_player.services.auth.AuthManager", lambda **kwargs: mock_auth)
         mock_settings = MagicMock()
         mock_settings.yt_dlp.cookies_file = None
         mock_settings.logging.level = "WARNING"
@@ -327,7 +327,7 @@ class TestSetupCLI:
         mock_auth = MagicMock(spec=AuthManager)
         mock_auth.is_authenticated.return_value = True
 
-        monkeypatch.setattr("ytm_player.cli.AuthManager", lambda **kwargs: mock_auth)
+        monkeypatch.setattr("ytm_player.services.auth.AuthManager", lambda **kwargs: mock_auth)
         mock_settings = MagicMock()
         mock_settings.yt_dlp.cookies_file = None
         mock_settings.logging.level = "WARNING"

@@ -57,7 +57,7 @@ src/ytm_player/
 │                       #   (right-click context menu, filter, sort, play indicator)
 │   ├── popups/         # Actions menu, playlist picker, Spotify import, country picker (charts region — 68 entries with Global default)
 │   └── widgets/        # TrackTable, PlaybackProgress, AlbumArt
-└── utils/              # Terminal detection, formatting, BiDi text, transliteration, diagnostics (doctor), logging, 3.10 compat
+└── utils/              # Terminal detection, formatting, BiDi text, transliteration, diagnostics (report, doctor), logging, 3.10 compat
 ```
 
 ## Stack

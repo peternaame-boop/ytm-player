@@ -569,14 +569,15 @@ class TestPrefetchLookahead:
         h.settings.cache.prefetch_next = 3
         _accept_playback(h)
 
-        log_entered = asyncio.Event()
-        log_release = asyncio.Event()
+        lookup_entered = asyncio.Event()
+        lookup_release = asyncio.Event()
 
-        async def slow_log() -> None:
-            log_entered.set()
-            await log_release.wait()
+        async def slow_cache_lookup(video_id):
+            lookup_entered.set()
+            await lookup_release.wait()
+            return None
 
-        h._log_current_listen = slow_log
+        h.cache = SimpleNamespace(get=slow_cache_lookup, has=AsyncMock(return_value=False))
         extractions: list[str] = []
         resolver = StreamResolver()
 
@@ -589,14 +590,14 @@ class TestPrefetchLookahead:
 
         jumped = h.queue.jump_to(3)
         play_task = asyncio.create_task(h.play_track(jumped))
-        await log_entered.wait()
+        await lookup_entered.wait()
 
         # Schedule a prefetch batch while play_track(q3) is still pre-resolving.
         h._prefetch_next_track(exclusive=False)
         await asyncio.sleep(0.02)
         assert extractions == []
 
-        log_release.set()
+        lookup_release.set()
         await play_task
         await workers.settle()
 
@@ -869,25 +870,35 @@ class TestPrefetchLookahead:
 
         h.stream_resolver.prefetch.assert_not_called()
 
-    async def test_foreground_resolve_during_disk_check_delays_extraction(self):
+    async def test_foreground_resolve_before_prefetch_child_runs_delays_extraction(self):
         workers = _Workers()
         h = _host(workers)
         h.settings.cache.prefetch_next = 1
         _load(h, "q", 3)
 
-        async def resolve_starts_during_check(video_id: str) -> bool:
+        loop = asyncio.get_running_loop()
+        events = []
+
+        def finish_foreground():
+            h._end_foreground_resolve(1)
+            events.append("foreground finished")
+
+        def start_foreground():
             h._begin_foreground_resolve(1)
-            await asyncio.sleep(0)
+            events.append("foreground started")
+            loop.call_soon(finish_foreground)
+
+        async def disk_miss(_video_id: str) -> bool:
+            if not events:
+                events.append("disk miss")
+                # The worker schedules its child before yielding. FIFO puts
+                # start_foreground ahead of that child and finish_foreground behind it.
+                loop.call_soon(start_foreground)
             return False
 
-        h.cache = SimpleNamespace(has=resolve_starts_during_check)
-
+        h.cache = SimpleNamespace(has=disk_miss)
+        h.stream_resolver.prefetch = AsyncMock(side_effect=events.append)
         h._prefetch_next_track()
-        for _ in range(20):
-            await asyncio.sleep(0)
-        h.stream_resolver.prefetch.assert_not_called()
-
-        h.cache = SimpleNamespace(has=AsyncMock(return_value=False))
-        h._end_foreground_resolve(1)
         await workers.settle()
-        assert [c.args[0] for c in h.stream_resolver.prefetch.await_args_list] == ["q1"]
+
+        assert events == ["disk miss", "foreground started", "foreground finished", "q1"]

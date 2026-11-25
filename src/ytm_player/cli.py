@@ -19,10 +19,9 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 import click
-import requests.exceptions
 
 from ytm_player import __version__
 from ytm_player.config.paths import (
@@ -36,18 +35,27 @@ from ytm_player.config.paths import (
     PID_FILE,
     ensure_dirs,
 )
-from ytm_player.config.settings import get_settings
 from ytm_player.ipc import get_running_pid, ipc_request, is_tui_running, try_claim_pid
-from ytm_player.services.auth import (
-    DEFAULT_ACCOUNT_PROBE_SLOTS,
-    MAX_ACCOUNT_PROBE_SLOTS,
-    AuthManager,
-)
+from ytm_player.services.auth_limits import DEFAULT_ACCOUNT_PROBE_SLOTS, MAX_ACCOUNT_PROBE_SLOTS
 from ytm_player.utils.logging import install_excepthooks, setup_logging
+
+if TYPE_CHECKING:
+    from ytm_player.config.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def get_settings() -> Settings:
+    """The settings, loaded on first use.
+
+    config/settings.py imports tomli on Python 3.10; `ytm report` and
+    `ytm doctor` must start without running third-party code.
+    """
+    from ytm_player.config.settings import get_settings as load
+
+    return load()
 
 
 def _json_output(data: Any, *, compact: bool = False) -> None:
@@ -105,6 +113,8 @@ def _query_history(query: str, limit: int, error_label: str) -> list[dict]:
 
 def _require_auth() -> Path:
     """Return the auth file path, or exit if not authenticated."""
+    from ytm_player.services.auth import AuthManager
+
     yt_dlp = get_settings().yt_dlp
     auth = AuthManager(cookies_file=yt_dlp.cookies_file, cookie_browser=yt_dlp.cookie_browser)
     if not auth.is_authenticated():
@@ -139,6 +149,16 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
     Launch without arguments to start the interactive TUI.
     Use subcommands for headless / scripting control.
     """
+    if ctx.invoked_subcommand in ("report", "doctor"):
+        # Diagnostics are read-only and silent: nothing below may run for
+        # them. ensure_dirs() creates directories, get_settings() replaces a
+        # corrupt config.toml, and --debug logging writes to stderr. Modules
+        # imported from here on must not leave .pyc files behind either.
+        previous = sys.dont_write_bytecode
+        ctx.call_on_close(lambda: setattr(sys, "dont_write_bytecode", previous))
+        sys.dont_write_bytecode = True
+        return
+
     if ctx.invoked_subcommand is None:
         # Single-instance guard, before ANY startup side effects (settings
         # load can rewrite a corrupt config.toml; logging setup rotates
@@ -235,6 +255,10 @@ def main(ctx: click.Context, compact_json: bool, debug: bool) -> None:
 )
 def setup(manual: bool, browser: str | None, slots: int = DEFAULT_ACCOUNT_PROBE_SLOTS) -> None:
     """Interactive authentication wizard for YouTube Music."""
+    import requests.exceptions
+
+    from ytm_player.services.auth import AuthManager
+
     yt_dlp = get_settings().yt_dlp
     auth = AuthManager(cookies_file=yt_dlp.cookies_file, cookie_browser=yt_dlp.cookie_browser)
 
@@ -383,6 +407,8 @@ def unlike() -> None:
 @click.option("--json", "compact_json", is_flag=True, help="Compact JSON output.")
 def search(query: tuple[str, ...], filter_type: str | None, limit: int, compact_json: bool) -> None:
     """Search YouTube Music and print results as JSON."""
+    from ytm_player.services.auth import AuthManager
+
     _require_auth()
     search_query = " ".join(query)
 
@@ -647,12 +673,64 @@ def cache_clear() -> None:
 # ---------------------------------------------------------------------------
 
 
-@main.command()
-def doctor() -> None:
-    """Print diagnostics suitable for pasting into a GitHub issue."""
-    from ytm_player.utils.doctor import gather_diagnostics
+# Only the completed report uses the saved pipe. Import hooks, native writes,
+# logging handlers and shutdown callbacks all see the discarded streams.
+_PUBLIC_REPORT_SOURCE = """
+import os, sys
+with os.fdopen(os.dup(1), "wb") as output:
+    os.dup2(2, 1)
+    sys.path[:] = sys.argv[1:]
+    import logging
+    logging.disable(logging.CRITICAL)
+    from ytm_player.utils.report import build_report
+    output.write(b"\\nYTM-REPORT\\n" + build_report().encode("utf-8"))
+"""
 
-    click.echo(gather_diagnostics())
+
+def _public_report() -> str:
+    path = [p for p in sys.path if isinstance(p, str)]
+    try:
+        child = subprocess.run(
+            [sys.executable, "-B", "-c", _PUBLIC_REPORT_SOURCE, *path],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=180,
+        )
+        _, marker, body = child.stdout.rpartition(b"\nYTM-REPORT\n")
+        if marker:
+            return body.decode("utf-8")
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        pass
+    raise click.ClickException("Could not collect the public report.")
+
+
+@main.command()
+def report() -> None:
+    """Print a report that is safe to paste into a public GitHub issue."""
+    click.echo(_public_report())
+
+
+@main.command()
+@click.option(
+    "--local",
+    is_flag=True,
+    help="Detailed diagnostics with log and crash text. Review before sharing.",
+)
+def doctor(local: bool) -> None:
+    """Print the public report (same as `ytm report`), or --local detail."""
+    if not local:
+        click.echo(_public_report())
+        return
+
+    from ytm_player.utils.doctor import gather_diagnostics
+    from ytm_player.utils.report import silenced
+
+    with silenced():
+        diagnostics = gather_diagnostics()
+    encoding = sys.stdout.encoding or "utf-8"
+    click.echo(diagnostics.encode(encoding, "backslashreplace").decode(encoding))
 
 
 # ---------------------------------------------------------------------------

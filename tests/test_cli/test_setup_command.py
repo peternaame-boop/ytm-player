@@ -20,7 +20,7 @@ def _fake_manager(monkeypatch) -> MagicMock:
     manager.is_authenticated.return_value = False
     manager.setup_interactive.return_value = True
     manager.validate.return_value = True
-    monkeypatch.setattr("ytm_player.cli.AuthManager", lambda **kwargs: manager)
+    monkeypatch.setattr("ytm_player.services.auth.AuthManager", lambda **kwargs: manager)
     monkeypatch.setattr("ytm_player.cli.get_settings", lambda: Settings())
     return manager
 
@@ -106,7 +106,7 @@ def test_manual_setup_replaces_a_damaged_auth_file(monkeypatch, tmp_path, damage
     monkeypatch.setattr(ytmusicapi, "setup", lambda **kw: json.dumps(pasted))
     monkeypatch.setattr(manager, "_probe_payload", lambda payload, slot: account)
     monkeypatch.setattr(manager, "validate", lambda: True)
-    monkeypatch.setattr("ytm_player.cli.AuthManager", lambda **kwargs: manager)
+    monkeypatch.setattr("ytm_player.services.auth.AuthManager", lambda **kwargs: manager)
     monkeypatch.setattr("ytm_player.cli.get_settings", lambda: Settings())
     monkeypatch.setattr("ytm_player.cli.get_running_pid", lambda: None)
     monkeypatch.setattr("ytm_player.cli.ensure_dirs", lambda: None)  # keep the user's dirs

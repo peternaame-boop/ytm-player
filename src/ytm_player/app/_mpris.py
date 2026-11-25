@@ -42,7 +42,12 @@ class MPRISMixin(YTMHostBase):
         # restart playback.
         self._ownership.stop()
         if self.player:
-            await self.player.stop()
+            previous = self._finish_current_listen(at_native_end=True)
+            try:
+                await self.player.stop()
+            finally:
+                if previous is not None:
+                    await previous
 
     async def _mpris_next(self) -> None:
         await self._play_next()

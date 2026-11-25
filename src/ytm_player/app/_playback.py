@@ -6,7 +6,8 @@ import asyncio
 import inspect
 import logging
 import sqlite3
-from collections.abc import Callable, Generator
+from collections.abc import Awaitable, Callable, Generator
+from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,9 +67,6 @@ class _LocalHistoryClaim:
     # A finalize consumed this claim: stops the report chain and blocks a
     # second finalize from double-logging.
     finalized: bool = False
-    # Last positive position the poll saw during this play. mpv reports no
-    # position once a track ends on its own, so natural EOF finalizes with it.
-    last_position: float = 0.0
 
 
 def _consume_task_exception(task: asyncio.Task[Any]) -> None:
@@ -165,12 +163,6 @@ class PlaybackMixin(YTMHostBase):
 
         self._begin_foreground_resolve(attempt)
         try:
-            # Log listen time for the previous track.
-            await self._log_current_listen()
-
-            if not owns_attempt(self, attempt):
-                return
-
             # Update UI immediately -- show track info before stream resolves.
             try:
                 bar = self.query_one("#playback-bar", PlaybackBar)
@@ -204,6 +196,9 @@ class PlaybackMixin(YTMHostBase):
                         thumbnail_url=track.get("thumbnail_url"),
                     )
                     logger.info("Cache hit for %s — playing from %s", video_id, cached_path)
+
+            if not owns_attempt(self, attempt):
+                return
 
             # Resolve via yt-dlp if no cache hit.
             if stream_info is None:
@@ -250,24 +245,23 @@ class PlaybackMixin(YTMHostBase):
             # attempt, and _on_player_error applies recovery and the
             # failure policy. The consecutive-failure counter is reset
             # only once audio is actually advancing (_poll_position).
-            await self.player.play(stream_info.url, track, attempt=attempt)
+            # Keep the previous load’s completion future. Its audio can still
+            # advance while the new native command waits for an executor thread.
+            previous = self._finish_current_listen(at_native_end=True)
+            try:
+                await self.player.play(stream_info.url, track, attempt=attempt)
+                if not owns_attempt(self, attempt) or self.player.current_track is None:
+                    return
+                self._track_start_position = 0.0
+                self._loaded_resume = None
+                self._schedule_local_history_log(track, video_id, attempt)
+                self._schedule_ytm_history_report(track, video_id, attempt)
+            finally:
+                if previous is not None:
+                    await previous
+
         if not owns_attempt(self, attempt):
             return
-        if self.player.current_track is None:
-            return
-        self._track_start_position = 0.0
-
-        # Only arm history reporting when the load actually started: play()
-        # swallows load failures (clears current_track and reports an ERROR
-        # event), so reaching here doesn't mean playback is on.
-        if self.player.current_track is not None:
-            # Load accepted (stream errors still arrive later as ERROR
-            # events): the resume point read from session.json is no longer
-            # a fallback for _save_session_state.
-            self._loaded_resume = None
-            self._schedule_local_history_log(track, video_id, attempt)
-            self._schedule_ytm_history_report(track, video_id, attempt)
-
         # Apply pending resume position if this play matches the resumed track.
         # Only clear on a match — if the user plays a different track first,
         # leave pending state intact so they can come back to the resumed
@@ -603,8 +597,9 @@ class PlaybackMixin(YTMHostBase):
         if not isinstance(event, dict):
             return
         attempt = event.get("attempt")
-        if not isinstance(attempt, int) or not self._ownership.claim_end(attempt):
+        if not isinstance(attempt, int):
             return
+        advance = self._ownership.claim_end(attempt)
         ended = self._ownership.snapshot(self.queue.generation)
         logger.debug("Track ended (event=%s), advancing to next", event)
         try:
@@ -619,21 +614,18 @@ class PlaybackMixin(YTMHostBase):
             if self.player and self.player.current_track is not None:
                 logger.debug("Ignoring stale track-end; a newer play is already current")
                 return
-            # Log listen time using the ended track passed in the event,
-            # since player.current_track is already None by the time this
-            # callback runs. mpv has no position any more, so the endpoint is
-            # the last one the poll sampled for this exact play. A claim from
-            # another attempt (EOF before this play armed its own) belongs to
-            # that play: leave it alone and write nothing.
+            # EOF before a new play armed its claim must leave the previous
+            # claim alone, including when both attempts played the same video.
             claim = self._local_history_claim
             if (
                 ended_track
                 and claim is not None
                 and claim.generation == attempt
+                and (advance or (self.player and self.player.listened_attempt == attempt))
                 and claim.video_id == get_video_id(ended_track)
             ):
-                await self._log_listen_for(ended_track, claim.last_position)
-            if not ended.still_current(self.queue.generation):
+                await self._log_listen_for(ended_track)
+            if not advance or not ended.still_current(self.queue.generation):
                 return
             with ended.request_scope():
                 await self._play_next(ended_track=ended_track)
@@ -650,14 +642,6 @@ class PlaybackMixin(YTMHostBase):
         pos = 0.0
         try:
             pos = self.player.position
-            claim = self._local_history_claim
-            if (
-                pos > 0
-                and claim is not None
-                and not claim.finalized
-                and claim.generation == self.player.current_attempt
-            ):
-                claim.last_position = pos
             dur = self.player.duration
             bar = self.query_one("#playback-bar", PlaybackBar)
             bar.update_position(pos, dur)
@@ -1052,29 +1036,33 @@ class PlaybackMixin(YTMHostBase):
 
     async def _log_current_listen(self) -> None:
         """Log the listen duration for the currently playing track."""
-        if not self.player or not self.player.current_track:
-            return
-        await self._log_listen_for(self.player.current_track)
+        pending = self._finish_current_listen()
+        if pending is not None:
+            await pending
 
-    async def _log_listen_for(self, track: dict, end_position: float | None = None) -> None:
-        """Log listen duration for an explicit track dict.
+    def _finish_current_listen(self, *, at_native_end: bool = False) -> Awaitable[None] | None:
+        if not self.player or not self.history:
+            return None
+        track = self.player.current_track
+        if track is None:
+            # EOF can clear current_track before its callback gets CPU time.
+            claim = self._local_history_claim
+            if claim is None or claim.generation != self.player.listened_attempt:
+                return None
+            track = claim.track
+        return self._finish_local_listen(track, at_native_end=at_native_end)
 
-        Used by ``_on_track_end`` where ``player.current_track`` has
-        already been cleared by the time the callback executes.
-        """
+    async def _log_listen_for(self, track: dict) -> None:
+        pending = self._finish_local_listen(track)
+        if pending is not None:
+            await pending
+
+    def _finish_local_listen(
+        self, track: dict, *, at_native_end: bool = False
+    ) -> Awaitable[None] | None:
+        """Consume the claim now and return its database write, if needed."""
         if not self.history or not self.player:
-            return
-        await self._log_local_listen(track, end_position)
-
-    async def _log_local_listen(self, track: dict, end_position: float | None = None) -> None:
-        """Insert or finalize the local SQLite history row for this play.
-
-        *end_position* replaces the live position at natural EOF, where mpv
-        no longer reports one; skip and replace read the live position.
-        """
-        if not self.history or not self.player:
-            return
-
+            return None
         video_id = get_video_id(track)
         claim = self._local_history_claim
         # Only a claim for THIS video belongs to the play being finalized; on
@@ -1084,18 +1072,25 @@ class PlaybackMixin(YTMHostBase):
             if owned.finalized:
                 # Already finalized (duplicate end-file or a concurrent
                 # supersede) — a second write would duplicate the row.
-                return
+                return None
             # Consume before any await: stops the report timer chain and
             # blocks a concurrent finalize. Same-video replays get a fresh
             # claim object, so a consumed claim can't swallow a later play.
             owned.finalized = True
 
-        position = self.player.position if end_position is None else end_position
-        listened = int(position - self._track_start_position)
+        elapsed = self.player.listen_end if at_native_end else self.player.listened_seconds
+        return self._write_final_listen(track, owned, elapsed)
+
+    async def _write_final_listen(
+        self, track: dict, owned: _LocalHistoryClaim | None, elapsed: float | Future[float]
+    ) -> None:
+        if not self.history:
+            return
+        if isinstance(elapsed, Future):
+            listened = int(await asyncio.shield(asyncio.wrap_future(elapsed)))
+        else:
+            listened = int(elapsed)
         if listened <= 0:
-            # Nothing to write — but the claim above is already consumed: a
-            # replay of the same video must get its own row, not merge into
-            # this one.
             return
         try:
             if owned is not None and owned.row_id is not None:
@@ -1154,7 +1149,7 @@ class PlaybackMixin(YTMHostBase):
             return
         if not self.history or not self.player:
             return
-        listened = int(self.player.position - self._track_start_position)
+        listened = int(self.player.listened_seconds)
         if listened <= self._history_min_listen_seconds():
             # End the chain once the player is idle for two consecutive
             # polls: stream errors, stop and end-of-queue never bump the

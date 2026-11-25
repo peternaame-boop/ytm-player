@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # `pip install dbus-fast` or a resolver that ignores markers — degrades
 # gracefully instead of crashing the whole app at startup (#106). Linux import
 # failures still surface via the except.
+_DBUS_ERROR_CLASS: str | None = None
 if sys.platform == "linux":
     # Inside the gate: importing asyncio under a faked win32 sys.platform
     # (platform-guard test) pulls asyncio's Windows branch, which needs the
@@ -42,8 +43,9 @@ if sys.platform == "linux":
         )
 
         _DBUS_AVAILABLE = True
-    except (ImportError, ValueError):
+    except (ImportError, ValueError) as _exc:
         _DBUS_AVAILABLE = False
+        _DBUS_ERROR_CLASS = type(_exc).__name__
 else:
     _DBUS_AVAILABLE = False
 
@@ -288,7 +290,7 @@ try:
         def set_volume(self, volume: float) -> None:
             self._volume = max(0.0, min(1.0, volume))
 
-except (ImportError, ValueError, TypeError):
+except (ImportError, ValueError, TypeError) as _exc:
     # TypeError: a broken dbus-fast build can blow up while the interface
     # classes are being defined — e.g. dbus-fast compiled with Cython 3.2.6,
     # where copying __annotate__ onto a cyfunction (PEP 749, Python 3.14)
@@ -299,6 +301,7 @@ except (ImportError, ValueError, TypeError):
         # degrading silently. (The not-installed / off-Linux path stays
         # quiet: it raises the ImportError above before reaching here.)
         _DBUS_AVAILABLE = False
+        _DBUS_ERROR_CLASS = type(_exc).__name__
         logger.exception("MPRIS D-Bus interfaces unavailable (incompatible dbus-fast build)")
 
 
@@ -306,6 +309,9 @@ except (ImportError, ValueError, TypeError):
 # modules (app startup hint, `ytm doctor`) check this to tell the user when
 # dbus-fast (a Linux core dependency) is missing instead of silently degrading.
 DBUS_AVAILABLE = _DBUS_AVAILABLE
+# Class name of the exception that made an installed dbus-fast unusable, for
+# `ytm report`.
+DBUS_ERROR_CLASS = _DBUS_ERROR_CLASS
 
 
 class MPRISService:

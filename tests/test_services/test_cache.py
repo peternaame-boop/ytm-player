@@ -1,6 +1,7 @@
 """Tests for ytm_player.services.cache.CacheManager."""
 
 import sqlite3
+from contextlib import closing
 from unittest.mock import Mock, patch
 
 import pytest
@@ -53,6 +54,45 @@ class TestPutAndGet:
         result = await cache_manager.get("nonexistent1")
         assert result is None
         await cache_manager.close()
+
+    async def test_get_prunes_missing_file_from_usage(self, cache_manager):
+        await cache_manager.init()
+        try:
+            path = cache_manager._cache_dir / f"{VID_A}.opus"
+            await cache_manager._index(VID_A, path, 3, "opus")
+            assert await cache_manager.get(VID_A) is None
+            assert (await cache_manager.get_status())["file_count"] == 0
+        finally:
+            await cache_manager.close()
+
+    async def test_get_preserves_download_indexed_after_file_check(self, cache_manager):
+        await cache_manager.init()
+        try:
+            path = cache_manager._cache_dir / f"{VID_A}.opus"
+            await cache_manager._index(VID_A, path, 3, "opus")
+            real_exists = type(path).exists
+
+            def finish_download_after_miss(candidate):
+                if candidate != path or real_exists(path):
+                    return real_exists(candidate)
+                # The download finishes after get observes a miss at the same path.
+                path.write_bytes(b"fresh")
+                with closing(sqlite3.connect(cache_manager._db_path)) as writer:
+                    writer.execute(
+                        "INSERT OR REPLACE INTO cache_index (video_id, file_path, file_size, format) "
+                        "VALUES (?, ?, ?, ?)",
+                        (VID_A, str(path), 5, "opus"),
+                    )
+                    writer.commit()
+                return False
+
+            with patch.object(type(path), "exists", finish_download_after_miss):
+                assert await cache_manager.get(VID_A) is None
+            assert path.read_bytes() == b"fresh"
+            assert await cache_manager.get(VID_A) == path
+            assert (await cache_manager.get_status())["total_size"] == 5
+        finally:
+            await cache_manager.close()
 
 
 class TestHas:

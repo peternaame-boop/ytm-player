@@ -2,7 +2,7 @@
 
 ## Playback fails with "HTTP error 403 Forbidden"
 
-Every track fails and `~/.config/ytm-player/logs/ytm.log` shows
+Some or all tracks fail and `~/.config/ytm-player/logs/ytm.log` shows
 `mpv[ffmpeg]: https: HTTP error 403 Forbidden`.
 
 YouTube stopped serving streams to yt-dlp's former default client on
@@ -24,6 +24,21 @@ the whole process lifetime. After changing networks or disconnecting a VPN
 (stream URLs are bound to the IP that requested them) no restart is needed:
 a stream that fails to open drops the cached URLs and the yt-dlp instance and
 the track is retried once; restart only if that retry fails too.
+
+If 403s happen mainly on a VPN or a network with both IPv4 and IPv6, check
+the version of FFmpeg that mpv uses (`mpv --version`). A stream URL can be
+tied to an IPv4 address while mpv connects over IPv6, or vice versa.
+With ytm-player 2.3.0 or newer and FFmpeg 6.1 or newer, playback uses the
+address family recorded in the stream URL.
+
+## Lyrics disappeared after an update
+
+Press `g L` to open the lyrics sidebar if it is hidden. If lyrics disappeared
+across multiple tracks, upgrade ytm-player to 2.3.0 or newer and restart it.
+The release requires ytmusicapi 1.12.1 or newer. Version 1.12.0 could
+fail to read YouTube Music responses that included the Comments tab.
+For an individual track, lyrics availability still depends on YouTube Music
+and the LRCLIB fallback.
 
 ## "mpv not found" or playback doesn't start
 
@@ -83,9 +98,10 @@ Linux. If it isn't working, check these in order:
    ```bash
    dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames
    ```
-2. **Run `ytm doctor`.** The `MPRIS / media keys` line reports whether `dbus-fast`
-   is present and the bus name ytm registers under.
-3. **If `ytm doctor` reports `dbus-fast` missing,** your install is incomplete
+2. **Run `ytm report`.** The `mpris:` line reports whether MPRIS can run:
+   `available`, `unavailable (dbus-fast missing)` or
+   `unavailable (dbus-fast incompatible: ...)`.
+3. **If `ytm report` says `dbus-fast missing`,** your install is incomplete
    (it's a core dependency on Linux, so this is unusual — typically a partial or
    stale install). Reinstall:
    ```bash
@@ -128,7 +144,11 @@ ytm --debug
 When reporting a bug, please run:
 
 ```bash
-ytm doctor
+ytm report
 ```
 
-and paste the output into your GitHub issue. It includes nine sections: version + platform info, config/log/crash paths, running-process status, MPRIS / media-keys status, recent ERROR/WARNING log lines, recent mpv warnings, the most recent faulthandler trace, the most recent crash file, and the active-hooks summary. Auth-sensitive substrings (Authorization / Cookie / Bearer / token / SAPISID) are scrubbed automatically before output.
+and paste the output into your GitHub issue. The report is built to be posted publicly. Every line is assembled by ytm-player itself: the versions of ytm-player, Python and its main dependencies, the state of mpv, libmpv and MPRIS, whether the config and log files exist, and, for recent errors, the level, and for those and the latest crash the exception type and the ytm-player functions involved. No text is copied from your logs, crash files, config or file paths. `ytm doctor` with no options prints the same report.
+
+For your own troubleshooting, `ytm doctor --local` prints the detailed version: file paths, the running process, recent ERROR/WARNING log lines with their tracebacks, recent mpv warnings, the most recent faulthandler trace, the most recent crash file, and the active-hooks summary. It quotes your logs and crash files. Recognised auth headers, tokens and URLs are redacted, but that is best-effort, so review the output before sharing any of it and do not paste it whole into a public issue.
+
+None of these commands creates, changes or deletes ytm-player's own files (config, session, logs, crash files, cache).

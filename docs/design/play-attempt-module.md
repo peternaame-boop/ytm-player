@@ -80,7 +80,7 @@ The module owns `_last_play_video_id` / `_last_play_time` and all their resets.
 
 ## Behaviour and tests
 
-- Zero behaviour change. Start from the green baseline: the ownership, playback, player and queue test files (295 passed on 2026-11-21).
+- Stop now clears a pending retry. Preserve the other playback behaviours covered by the baseline suite: the ownership, playback, player and queue test files (295 passed on 2026-11-21).
 - Every behavioural assertion survives. Test setup that assigns private fields (e.g. `h._play_generation = 2; h._recovery_generation = 2`) is rewritten in the same change to drive the module; no compatibility fields kept only for tests.
 - The tests that schedule through the real UI wrappers stay as integration cases. They cover the gap between scheduling a request and its worker starting.
 - New direct tests on the module, one per row of the invalidation table, with no mixin host.

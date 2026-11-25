@@ -213,6 +213,37 @@ class TestGatherDiagnosticsV2:
         assert "mpv[file]: cannot open" in mpv_section
         assert "regular warning" not in mpv_section
 
+    def test_mpv_section_leaves_out_lines_below_warning(self, tmp_path: Path):
+        from ytm_player.utils.doctor import _recent_mpv_lines
+
+        log = tmp_path / "ytm.log"
+        log.write_text(
+            "2026-04-30 [DEBUG] ytm_player.services.player: mpv[cplayer]: opening stream\n"
+            "2026-04-30 [INFO] ytm_player.services.player: mpv[cplayer]: playing\n"
+            "2026-04-30 [WARNING] ytm_player.services.player: mpv[ao]: format mismatch\n"
+        )
+
+        assert _recent_mpv_lines(log) == (
+            "2026-04-30 [WARNING] ytm_player.services.player: mpv[ao]: format mismatch\n"
+        )
+
+    def test_mpv_section_takes_the_level_from_the_record_not_its_message(self, tmp_path: Path):
+        from ytm_player.utils.doctor import _recent_mpv_lines
+
+        log = tmp_path / "ytm.log"
+        warning = (
+            "2026-04-30 10:00:00 [WARNING] [MainThread] ytm_player.services.player: "
+            "mpv[ao]: format mismatch\n"
+        )
+        log.write_text(
+            "2026-04-30 10:00:00 [DEBUG] [MainThread] ytm_player.services.player: "
+            "mpv[cplayer]: saw [WARNING] mpv[ao]\n"
+            "2026-04-30 10:00:00 [WARNING] [MainThread] ytm_player.app._app: "
+            "retrying after mpv[ao] failed\n" + warning
+        )
+
+        assert _recent_mpv_lines(log) == warning
+
     def test_faulthandler_section_shows_last_block_when_present(self, monkeypatch, tmp_path: Path):
         from ytm_player.config import paths
         from ytm_player.utils.doctor import gather_diagnostics
@@ -300,10 +331,10 @@ class TestMprisStatus:
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only MPRIS path")
     def test_unavailable_reports_fix(self, monkeypatch):
         import ytm_player.services.mpris as mpris_mod
-        from ytm_player.utils.doctor import _mpris_status
+        from ytm_player.utils.doctor import _mpris_detail
 
         monkeypatch.setattr(mpris_mod, "DBUS_AVAILABLE", False)
-        status = _mpris_status()
+        status = _mpris_detail()
         assert "UNAVAILABLE" in status
         assert "dbus-fast" in status
         assert "reinstall" in status.lower()
@@ -311,10 +342,10 @@ class TestMprisStatus:
     @pytest.mark.skipif(sys.platform != "linux", reason="Linux-only MPRIS path")
     def test_available_reports_bus_name(self, monkeypatch):
         import ytm_player.services.mpris as mpris_mod
-        from ytm_player.utils.doctor import _mpris_status
+        from ytm_player.utils.doctor import _mpris_detail
 
         monkeypatch.setattr(mpris_mod, "DBUS_AVAILABLE", True)
-        status = _mpris_status()
+        status = _mpris_detail()
         assert "available" in status
         assert mpris_mod.BUS_NAME in status
 
@@ -403,3 +434,126 @@ class TestArgvIsYtm:
         from ytm_player.utils.doctor import _argv_is_ytm
 
         assert not _argv_is_ytm(["/usr/bin/firefox", "--new-window"])
+
+    def test_interpreter_options_before_the_module(self):
+        from ytm_player.utils.doctor import _argv_is_ytm
+
+        assert _argv_is_ytm(["python3", "-u", "-X", "dev", "-m", "ytm_player"])
+        assert _argv_is_ytm(["python3", "-u", "/opt/venv/bin/ytm"])
+        assert _argv_is_ytm(["python3", "--check-hash-based-pycs", "always", "-m", "ytm_player"])
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["echo", "-m", "ytm_player"],
+            ["python3", "helper.py", "-m", "ytm_player"],
+            ["python3", "helper.py", "ytm_player"],
+            ["python3", "helper.py", "ytm"],
+            ["python3", "-c", "pass", "ytm"],
+            ["vim", "ytm"],
+            [],
+        ],
+    )
+    def test_arguments_that_only_mention_ytm(self, argv):
+        from ytm_player.utils.doctor import _argv_is_ytm
+
+        assert not _argv_is_ytm(argv)
+
+    @pytest.mark.parametrize(
+        "rest",
+        [[], ["--debug"], ["--json"], ["--debug", "--json"], ["--"], ["--debug", "--"]],
+    )
+    def test_only_a_tui_launch_counts(self, rest):
+        from ytm_player.utils.doctor import _argv_is_ytm
+
+        assert _argv_is_ytm(["/usr/bin/ytm", *rest])
+        assert _argv_is_ytm(["python3", "/opt/venv/bin/ytm", *rest])
+        assert _argv_is_ytm(["python3.13", "/nix/store/test-ytm-player/bin/.ytm-wrapped", *rest])
+        assert _argv_is_ytm(["python3", "-m", "ytm_player", *rest])
+
+    @pytest.mark.parametrize(
+        "rest",
+        [
+            ["setup", "--manual"],
+            ["report"],
+            ["doctor", "--local"],
+            ["--debug", "play"],
+            ["--help"],
+            ["--version"],
+            ["--", "setup"],
+            ["--", "--debug"],
+        ],
+    )
+    def test_subcommands_and_exit_options_are_not_the_tui(self, rest):
+        from ytm_player.utils.doctor import _argv_is_ytm
+
+        assert not _argv_is_ytm(["/usr/bin/ytm", *rest])
+        assert not _argv_is_ytm(["python3", "/opt/venv/bin/ytm", *rest])
+        assert not _argv_is_ytm(
+            ["python3.13", "/nix/store/test-ytm-player/bin/.ytm-wrapped", *rest]
+        )
+        assert not _argv_is_ytm(["python3", "-m", "ytm_player", *rest])
+
+    def test_a_path_with_a_space_stays_one_argument(self):
+        from ytm_player.utils.doctor import _argv_is_ytm, _split_cmdline
+
+        raw = b"/home/alice smith/.venv/bin/python3\x00/home/alice smith/.venv/bin/ytm\x00"
+        argv = _split_cmdline(raw)
+        assert argv == ["/home/alice smith/.venv/bin/python3", "/home/alice smith/.venv/bin/ytm"]
+        assert _argv_is_ytm(argv)
+
+
+class TestCollectorsCannotBreakTheReport:
+    def _gather(self, monkeypatch, tmp_path, failing: str, error: Exception) -> str:
+        from ytm_player.config import paths
+        from ytm_player.utils import doctor
+
+        for name in ("CONFIG_FILE", "THEME_FILE", "SESSION_STATE_FILE", "LOG_FILE"):
+            monkeypatch.setattr(paths, name, tmp_path / name)
+        monkeypatch.setattr(paths, "CRASH_DIR", tmp_path / "crashes")
+        for name in ("_mpv_version", "_libmpv_status", "_running_status", "_mpris_status"):
+            monkeypatch.setattr(doctor, name, lambda: "synthetic collector")
+
+        def boom() -> str:
+            raise error
+
+        monkeypatch.setattr(doctor, failing, boom)
+        return doctor.gather_diagnostics()
+
+    @pytest.mark.parametrize(
+        ("failing", "label"),
+        [
+            ("_mpv_version", "mpv"),
+            ("_libmpv_status", "libmpv"),
+            ("_running_status", "process status"),
+            ("_mpris_status", "MPRIS"),
+        ],
+    )
+    def test_a_failing_collector_becomes_a_status_line(self, monkeypatch, tmp_path, failing, label):
+        report = self._gather(monkeypatch, tmp_path, failing, PermissionError("/private/path"))
+
+        assert f"{label}: error (PermissionError)\n" in report
+        assert "/private/path" not in report
+        assert "=== Active hooks ===" in report
+
+    def test_an_unknown_exception_class_is_not_named(self, monkeypatch, tmp_path):
+        class PrivateError(Exception):
+            pass
+
+        report = self._gather(monkeypatch, tmp_path, "_mpris_status", PrivateError("x"))
+
+        assert "MPRIS: error (other)\n" in report
+
+    def test_mpv_output_that_is_not_text(self, monkeypatch):
+        import subprocess
+
+        from ytm_player.utils import doctor
+
+        monkeypatch.setattr(doctor.shutil, "which", lambda _name: "/usr/bin/mpv")
+        monkeypatch.setattr(
+            doctor.subprocess,
+            "run",
+            lambda *a, **kw: subprocess.CompletedProcess(a, 0, b"mpv \xff\xfe v1\n", b""),
+        )
+
+        assert doctor._mpv_version() == "mpv: mpv \ufffd\ufffd v1"

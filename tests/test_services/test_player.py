@@ -35,6 +35,46 @@ def player(monkeypatch):
     Player._instance = None
 
 
+async def test_listening_clock_follows_active_audio_across_seeks_pause_and_eof(player, monkeypatch):
+    from ytm_player.app._ipc import IPCMixin
+
+    now = 10.0
+    monkeypatch.setattr("ytm_player.services.player.time", SimpleNamespace(monotonic=lambda: now))
+    native = player._mpv
+    idle = dict(call.args for call in native.observe_property.call_args_list)["core-idle"]
+    native.duration = 300
+    native.time_pos = 0
+    await player.play("track", {"video_id": "same"}, attempt=1)
+    now = 14.0  # opening the stream
+    assert player.listened_seconds == 0
+    idle("core-idle", False)
+    now = 20.0
+    assert await player.seek_absolute(280.0)
+    assert player.listened_seconds == 6
+    native.time_pos = 280
+    assert await IPCMixin._ipc_seek(SimpleNamespace(player=player), {"offset": "-200"}) == {
+        "ok": True
+    }
+    native.seek.assert_called_with(-200.0, reference="relative")
+    now = 23.0
+    idle("core-idle", True)  # pause or buffering
+    native.seek(230, "absolute")  # seek made directly on the native handle
+    now = 150.0
+    assert player.listened_seconds == 9
+    idle("core-idle", False)
+    now = 154.0
+    player._end_file_data(native, 0, 10, None)
+    now = 180.0  # app's EOF callback runs late
+    assert player.listened_seconds == 13
+
+    idle("core-idle", True)
+    await player.play("track", {"video_id": "same"}, attempt=2)
+    assert player.listened_seconds == 0
+    idle("core-idle", False)
+    now = 183.0
+    assert player.listened_seconds == 3
+
+
 class TestPlayCurrentTrackLocking:
     """C1: play()/stop() must clear _current_track under _skip_lock."""
 
