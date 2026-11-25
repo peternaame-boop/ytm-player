@@ -10,6 +10,7 @@ Three bug classes guarded against:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +31,7 @@ def _fresh_playback_host():
     p.player = MagicMock()
     p.player.play = AsyncMock()
     p.player.current_track = None
+    p.player.listened_seconds = 0.0
     p.player.position = 0.0
     p.stream_resolver = MagicMock()
     p.stream_resolver.resolve = AsyncMock(return_value=None)
@@ -711,22 +713,21 @@ class TestCrossTrackRace:
         host.queue.next_track.assert_not_called()
         host.notify.assert_not_called()
 
-    async def test_superseded_during_history_log_never_resolves(self):
+    async def test_superseded_during_cache_lookup_never_resolves(self):
         import asyncio
 
         host = _fresh_playback_host()
-        a_logging = asyncio.Event()
-        release_log = asyncio.Event()
+        lookup_started = asyncio.Event()
+        release_lookup = asyncio.Event()
         resolved: list[str] = []
-        log_calls = {"n": 0}
 
-        async def slow_log():
-            log_calls["n"] += 1
-            if log_calls["n"] == 1:  # A's call
-                a_logging.set()
-                await release_log.wait()
+        async def slow_lookup(video_id):
+            if video_id == "AAA":
+                lookup_started.set()
+                await release_lookup.wait()
 
-        host._log_current_listen = slow_log
+        host.cache = MagicMock()
+        host.cache.get = slow_lookup
 
         async def resolve(video_id):
             resolved.append(video_id)
@@ -738,12 +739,12 @@ class TestCrossTrackRace:
         host.stream_resolver.resolve = resolve
 
         task_a = asyncio.create_task(host.play_track(self._track("AAA", "A")))
-        await a_logging.wait()
+        await lookup_started.wait()
         await host.play_track(self._track("BBB", "B"))
-        release_log.set()
+        release_lookup.set()
         await task_a
 
-        assert resolved == ["BBB"], "superseded call kept going after history log"
+        assert resolved == ["BBB"], "superseded call kept going after cache lookup"
 
 
 class TestDiscordRecoveryFanout:
@@ -811,18 +812,17 @@ class TestTrackEndFinalize:
         host._play_next = AsyncMock()
         host.player.current_track = None
         host._local_history_claim = _LocalHistoryClaim(
-            video_id="old", track={"video_id": "old"}, generation=0, last_position=61.5
+            video_id="old", track={"video_id": "old"}, generation=0
         )
 
         await host._on_track_end({"track": {"video_id": "old"}, "attempt": 0})
 
-        host._log_listen_for.assert_awaited_once_with({"video_id": "old"}, 61.5)
+        host._log_listen_for.assert_awaited_once_with({"video_id": "old"})
         host._play_next.assert_awaited_once()
 
 
 class TestNaturalEofListenTime:
-    """1.2: mpv reports no position once a track ends on its own, so the
-    natural-EOF finalize uses the last position the poll saw for that play."""
+    """The ended load retains its actual playback time after its position clears."""
 
     def _host(self, history=None, threshold: int = 5):
         host = _fresh_playback_host()
@@ -844,10 +844,6 @@ class TestNaturalEofListenTime:
         host._local_history_claim = claim
         return claim
 
-    def _poll_at(self, host, position: float) -> None:
-        host.player.position = position
-        host._poll_position()
-
     async def _end(self, host, video_id="A"):
         host.player.current_track = None
         host.player.current_attempt = None
@@ -864,48 +860,64 @@ class TestNaturalEofListenTime:
         await history.init()
         return history
 
-    def test_poll_samples_position_into_current_claim(self):
-        host = self._host()
-        claim = self._claim(host)
+    @pytest.mark.parametrize("outcome", ["replace", "failed", "eof_during_resolve", "stop"])
+    async def test_history_counts_audio_until_replacement(self, tmp_path, outcome):
+        history = await self._history(tmp_path)
+        try:
+            host = self._host(history)
+            claim = self._claim(host)
+            host.player.current_track = claim.track
+            host.player.listened_attempt = claim.generation
+            host.player.listened_seconds = 6
+            host.player.listen_end = Future()
+            claim.row_id = await history.log_play(claim.track, 6, "tui")
+            host._handle_play_failure = MagicMock()
+            entered, release = asyncio.Event(), asyncio.Event()
 
-        self._poll_at(host, 47.8)  # query_one raises in this host
+            async def resolve(video_id):
+                entered.set()
+                await release.wait()
+                return None if outcome == "failed" else _stream_info(video_id)
 
-        assert claim.last_position == 47.8
+            async def load(url, track, attempt):
+                if not host.player.listen_end.done():
+                    host.player.listen_end.set_result(65)  # five more seconds in the native queue
+                host.player.current_track = track
+                host.player.listened_seconds = 0
+                host.player.listened_attempt = attempt
 
-    def test_poll_keeps_last_positive_sample(self):
-        host = self._host()
-        claim = self._claim(host)
+            host.player.play = AsyncMock(side_effect=load)
+            host.stream_resolver.resolve = resolve
+            replacement = asyncio.create_task(host.play_track({"video_id": "B"}))
+            await entered.wait()
+            host.player.listened_seconds = 60
+            if outcome == "eof_during_resolve":
+                host.player.listen_end.set_result(60)
+                await self._end(host)
+                host._play_next.assert_not_called()
+            if outcome == "stop":
+                host.player.stop = AsyncMock(
+                    side_effect=lambda: host.player.listen_end.set_result(65)
+                )
+                await MPRISMixin._mpris_stop(host)
+            release.set()
+            await replacement
+            if outcome == "failed":
+                assert not claim.finalized
+                await self._end(host)
+            expected = 60 if outcome in ("failed", "eof_during_resolve") else 65
+            assert (await history.get_stats())["total_listen_time"] == expected
+        finally:
+            await history.close()
 
-        self._poll_at(host, 47.8)
-        self._poll_at(host, 0.0)
-
-        assert claim.last_position == 47.8
-
-    def test_poll_ignores_claim_of_another_attempt(self):
-        host = self._host()
-        claim = self._claim(host, attempt=self.attempt - 1)
-
-        self._poll_at(host, 47.8)
-
-        assert claim.last_position == 0.0
-
-    def test_poll_ignores_finalized_claim(self):
-        host = self._host()
-        claim = self._claim(host)
-        claim.finalized = True
-
-        self._poll_at(host, 47.8)
-
-        assert claim.last_position == 0.0
-
-    async def test_natural_eof_records_last_position(self, tmp_path):
+    async def test_natural_eof_records_active_playback_time(self, tmp_path):
         history = await self._history(tmp_path)
         try:
             host = self._host(history)
             claim = self._claim(host)
             claim.insert_started = True
             claim.row_id = await history.log_play(claim.track, 6, "tui", min_listen_seconds=5)
-            self._poll_at(host, 47.8)
+            host.player.listened_seconds = 47.8
 
             await self._end(host)
             await self._end(host)  # duplicate end-file
@@ -927,7 +939,7 @@ class TestNaturalEofListenTime:
             claim = self._claim(host)
             claim.insert_started = True
             claim.row_id = await history.log_play(claim.track, 6, "tui", min_listen_seconds=5)
-            self._poll_at(host, 120.4)
+            host.player.listened_seconds = 30.4
 
             await self._end(host)
 
@@ -941,7 +953,7 @@ class TestNaturalEofListenTime:
         try:
             host = self._host(history, threshold=5)
             self._claim(host)
-            self._poll_at(host, 47.8)
+            host.player.listened_seconds = 47.8
 
             await self._end(host)
 
@@ -955,7 +967,7 @@ class TestNaturalEofListenTime:
         try:
             host = self._host(history, threshold=5)
             self._claim(host)
-            self._poll_at(host, 5.9)
+            host.player.listened_seconds = 5.9
 
             await self._end(host)
 
@@ -967,7 +979,7 @@ class TestNaturalEofListenTime:
         host = self._host(MagicMock())
         claim = self._claim(host)
         claim.insert_started = True
-        self._poll_at(host, 47.8)
+        host.player.listened_seconds = 47.8
 
         await self._end(host)
 
@@ -981,7 +993,7 @@ class TestNaturalEofListenTime:
         host.history.log_play = AsyncMock()
         host.history.update_play_listened_seconds = AsyncMock()
         claim = self._claim(host, attempt=self.attempt - 1)
-        claim.last_position = 100.0
+        host.player.listened_seconds = 100.0
         claim.row_id = 7
         claim.insert_started = True
 
@@ -992,19 +1004,19 @@ class TestNaturalEofListenTime:
         assert claim.finalized is False
         host._play_next.assert_awaited_once()
 
-    async def test_skip_still_uses_live_position(self):
+    async def test_skip_logs_active_playback_time_after_a_seek(self):
         host = self._host(MagicMock())
         host.history.update_play_listened_seconds = AsyncMock()
         claim = self._claim(host)
         claim.row_id = 7
         claim.insert_started = True
-        self._poll_at(host, 100.0)
+        host.player.listened_seconds = 100.0
         host.player.position = 18.0
         host.player.current_track = {"video_id": "A"}
 
         await host._log_current_listen()
 
-        host.history.update_play_listened_seconds.assert_awaited_once_with(7, 18)
+        host.history.update_play_listened_seconds.assert_awaited_once_with(7, 100)
 
 
 class TestQueueExhausted:

@@ -40,6 +40,12 @@ from ytm_player.config.paths import (
     STREAM_COOKIES_FILE,
     secure_chmod,
 )
+from ytm_player.services.auth_limits import (
+    DEFAULT_ACCOUNT_PROBE_SLOTS as DEFAULT_ACCOUNT_PROBE_SLOTS,
+)
+from ytm_player.services.auth_limits import (
+    MAX_ACCOUNT_PROBE_SLOTS as MAX_ACCOUNT_PROBE_SLOTS,
+)
 from ytm_player.services.yt_dlp_options import normalize_cookiefile
 
 logger = logging.getLogger(__name__)
@@ -63,11 +69,6 @@ _CUSTOM_CHROMIUM_BROWSERS: dict[str, tuple[str, str]] = {
     "helium": ("net.imput.helium", "Chromium"),
 }
 
-# Default number of Google multi-login account slots (x-goog-authuser 0..N-1)
-# to probe during interactive setup and silent renewal. Google multi-login
-# supports at least 10 accounts in browser sessions.
-DEFAULT_ACCOUNT_PROBE_SLOTS = 10
-MAX_ACCOUNT_PROBE_SLOTS = 30
 _yt_dlp_patched = False
 
 
@@ -622,7 +623,7 @@ def _parse_record(raw: bytes | None) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (ValueError, RecursionError):
         return None
     if not isinstance(data, dict) or data.get("schema_version") != _ACCOUNT_SCHEMA_VERSION:
         return None

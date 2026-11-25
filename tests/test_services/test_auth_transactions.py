@@ -587,8 +587,13 @@ class TestLegacyExit:
 
     @pytest.mark.parametrize(
         "content",
-        [b"{broken", json.dumps({"schema_version": 2, "channel_id": A_ID}).encode()],
-        ids=["malformed", "unknown_schema"],
+        [
+            b"{broken",
+            b"[" * 1500 + b"]" * 1500,
+            b"9" * 5000,
+            json.dumps({"schema_version": 2, "channel_id": A_ID}).encode(),
+        ],
+        ids=["malformed", "deep-nesting", "huge-number", "unknown_schema"],
     )
     def test_invalid_record_is_replaced_by_one_that_vouches_for_nothing(
         self, tmp_path, caplog, content

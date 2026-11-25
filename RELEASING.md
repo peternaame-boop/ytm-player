@@ -4,28 +4,27 @@ The release flow is **tag-driven**. Pushing a `vX.Y.Z` tag triggers PyPI publish
 
 ## Quick checklist
 
-1. **Bump version** — `src/ytm_player/__init__.py` → `__version__ = "X.Y.Z"` (this is the
-   single source of truth: the tag guard checks the tag against it and the AUR workflow takes
-   `pkgver` from that tag — do NOT hand-edit `pkgver=` in `aur/PKGBUILD`, CI overwrites it)
-2. **Fold CHANGELOG** — collapse all `### Unreleased` blocks into one `### vX.Y.Z (YYYY-MM-DD)` entry
-3. **Lint + test**:
+1. On the release branch, set `__version__` in `src/ytm_player/__init__.py` to
+   `X.Y.Z` and fold the unreleased notes into `### vX.Y.Z (YYYY-MM-DD)` in
+   `CHANGELOG.md`. The publish workflow checks the tag against this version.
+   The AUR workflow fills in `pkgver` from the release tag.
+2. Run Ruff format and lint checks, Pyright, and pytest. Build and smoke-test
+   the package and finish the release review.
+3. With approval, open the release PR against `master`. Wait for cross-platform
+   CI and merge approval. Record the merged PR's commit SHA from GitHub.
+4. After approval to publish, fetch the merge commit and tag that exact SHA.
+   Replace `vX.Y.Z` with the release tag and set `merge_sha` to the recorded SHA.
    ```bash
-   .venv/bin/ruff format src/ tests/
-   .venv/bin/ruff check src/ tests/
-   .venv/bin/pytest -x -q
+   git fetch origin master
+   git tag vX.Y.Z "${merge_sha:?Set merge_sha to the reviewed merge commit}"
+   git push origin refs/tags/vX.Y.Z
    ```
-4. **Commit + tag + push** — stage the release files explicitly and review the complete staged diff before committing:
-   ```bash
-   git add src/ytm_player/__init__.py CHANGELOG.md
-   git diff --cached
-   git commit -m "chore(release): vX.Y.Z"
-   git tag vX.Y.Z
-   git push origin master --tags
-   ```
-5. **Watch the workflows**:
-   ```bash
-   gh run watch --exit-status
-   ```
+5. Watch the Publish and AUR workflows. Verify the version on PyPI, GitHub
+   Releases, and AUR.
+6. Once the tag is public, update `PINNED_TAG` and its fallbacks in
+   `ytm-player-site` to that tag, including the Cloudflare Pages build setting
+   if configured. Rebuild the site and verify the live docs, changelog, search,
+   and bug-report wizard.
 
 ## What automation handles
 

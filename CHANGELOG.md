@@ -6,24 +6,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-### Unreleased
+### v2.3.0 (2026-11-25)
 
 **New features**
+
+- **`ytm report`, a diagnostic report that is safe to post**: bug reports asked for `ytm doctor` output, which quoted log lines, crash files and file paths, so private details could end up in a public issue. `ytm report` prints only what ytm-player builds itself: versions, the state of mpv, libmpv and MPRIS, and for recent errors and the latest crash the level, the exception type and the ytm-player functions involved. No text is copied from logs or files. `ytm doctor` with no options now prints the same report, and the detailed output it used to print is `ytm doctor --local`, meant for your own reading. All three only read: they no longer create the config directory or replace a damaged `config.toml`, and `libmpv` is no longer reported as OK when python-mpv is not installed.
 
 - **Prefetch multiple upcoming tracks**: `[cache] prefetch_next` now accepts a track count (`0`-`5`) in addition to `true` (`1`) and `false` (`0`), resolving upcoming queue entries sequentially in the background so quick skips have streams ready ahead of time, and disabling prefetching when set to `false` or `0`. Thanks to @wgordon17 for the feature ([#219](https://github.com/peternaame-boop/ytm-player/pull/219)).
 
 **Fixes**
 
-- **Streams no longer throttled**: mpv now fetches YouTube audio in bounded 10 MiB ranged requests over persistent connections, the way yt-dlp does, instead of one open-ended download that YouTube throttles. Thanks to @glywil for the fix ([#221](https://github.com/peternaame-boop/ytm-player/pull/221)).
-- **macOS audio stays on CoreAudio**: on macOS 27, mpv older than 0.42 failed to open CoreAudio with error `-50` for planar audio and fell back to avfoundation. ytm-player now asks mpv for interleaved float audio, which avoids it ([mpv#18384](https://github.com/mpv-player/mpv/issues/18384)). Thanks to @glywil for the fix ([#221](https://github.com/peternaame-boop/ytm-player/pull/221), [#223](https://github.com/peternaame-boop/ytm-player/pull/223)).
+- **Reduced stream throttling**. On supported builds, mpv requests YouTube audio in 10 MiB chunks over persistent connections. Streams pinned to an IP family use FFmpeg and need FFmpeg 8.1 or newer for chunking. Thanks to @glywil for the fix ([#221](https://github.com/peternaame-boop/ytm-player/pull/221)).
+- **Stereo playback on CoreAudio**. ytm-player requests interleaved float audio on all platforms. On macOS 27 with mpv older than 0.42, this lets stereo tracks with planar audio play through CoreAudio. Mono output can still fall back to AVFoundation ([mpv#18384](https://github.com/mpv-player/mpv/issues/18384)). Thanks to @glywil for the fix ([#221](https://github.com/peternaame-boop/ytm-player/pull/221), [#223](https://github.com/peternaame-boop/ytm-player/pull/223)).
 - **Stop cancels a pending retry**: when a track failed and its retry was still pending, pressing Stop left the retry set. Stop now clears it ([#225](https://github.com/peternaame-boop/ytm-player/issues/225), [#226](https://github.com/peternaame-boop/ytm-player/pull/226)).
-- **Lyrics load again**: YouTube Music added a Comments tab that ytmusicapi 1.12.0 could not parse, so lyrics failed for every track. ytm-player now requires ytmusicapi 1.12.1 or newer, which handles it ([#227](https://github.com/peternaame-boop/ytm-player/issues/227)).
+- **Lyrics load again when YouTube Music includes the Comments tab**. ytmusicapi 1.12.0 could not parse watch responses containing that tab. ytm-player now requires ytmusicapi 1.12.1 or newer, which handles it ([#227](https://github.com/peternaame-boop/ytm-player/issues/227)).
 - **Fewer tracks skipped with HTTP 403**: some YouTube streams return 403 when mpv connects over a different IP family (IPv4 or IPv6) than the one recorded in the stream URL, which happens on networks where the two leave from different addresses, as with many VPNs. With FFmpeg 6.1 or newer, ytm-player now fetches each stream over the family recorded in its URL ([#229](https://github.com/peternaame-boop/ytm-player/pull/229)).
 - **Playlist actions work on the Library page at launch**: when Library opened on the last played playlist by itself, the track actions menu had no Remove from Playlist, renaming or deleting that playlist left the view stale, and tracks added to it did not appear. All of these now act on the playlist on screen.
 - **A failing stream no longer cancels the playlist you just picked**: when the playing track's stream failed while a newly chosen playlist, album or radio was still loading, the retry or skip of the failed track discarded the new choice. The new choice now plays once it loads.
 - **Shuffle plays every track you add after the last one**: with shuffle on, if the playing track was the last in the queue and you removed it, then added tracks, an album, a playlist or radio tracks, playback could jump past some of the new tracks or replay earlier ones. Everything added now plays, and earlier tracks are not replayed.
-- **Listening time counts songs played to the end**: a track that played to its end was recorded in local history with only the few seconds it took to count as a play, so `ytm stats` and listen-time totals were far too low. History now records how far the track actually played.
-- **A damaged sign-in file no longer crashes ytm-player**: if `auth.json` held something other than a set of headers (such as `[]`) or was not valid UTF-8 text, both launch and `ytm setup` crashed, so setup could not repair it. Both now treat the file as signed out: launch says to run `ytm setup`, and setup replaces the file.
+- **Listening time in `ytm stats`**. Local history now counts the time a track spends playing through its end. Pauses and time skipped by seeking do not add to the total.
+- **Preserve completed downloads**. If playback checks for a missing cached track just as a download finishes, the new offline copy and its cache entry are kept.
+- **Recover from malformed sign-in data**. If `auth.json` contains invalid JSON, invalid UTF-8 or no usable cookie, startup treats the session as signed out. Running `ytm setup` can replace malformed credentials after a successful sign-in. Setup still needs permission to read the existing session files and write the replacement.
 
 ---
 

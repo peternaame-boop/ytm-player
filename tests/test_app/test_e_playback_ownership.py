@@ -528,7 +528,7 @@ async def test_new_eof_is_not_blocked_by_old_finalizer():
     attempt = h._ownership.commit_attempt(retry=False)
     entered, release = asyncio.Event(), asyncio.Event()
 
-    async def log(item, end_position):
+    async def log(item):
         if item["video_id"] == "A":
             entered.set()
             await release.wait()

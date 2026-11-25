@@ -42,11 +42,14 @@ def _host(
     host._local_history_claim = None
     host._track_start_position = 0.0
     host.history = MagicMock()
+    host.player.listened_seconds = position
     host.player.position = position
     host.player.current_track = {"video_id": video_id} if video_id else None
     host.set_timer = MagicMock()
     host.run_worker = MagicMock()
     host._history_min_listen_seconds = PlaybackMixin._history_min_listen_seconds.__get__(host)
+    host._finish_local_listen = PlaybackMixin._finish_local_listen.__get__(host)
+    host._write_final_listen = PlaybackMixin._write_final_listen.__get__(host)
     host._history_timer_delay = PlaybackMixin._history_timer_delay.__get__(host)
     # Bind the real poll callbacks so re-armed timer lambdas (which call
     # self._report_*) exercise the real chain instead of a MagicMock no-op.
@@ -91,7 +94,7 @@ def _report_local(host, claim) -> None:
 
 
 def _finalize(host, video_id="vid1"):
-    return PlaybackMixin._log_local_listen.__get__(host)({"video_id": video_id})
+    return PlaybackMixin._log_listen_for.__get__(host)({"video_id": video_id})
 
 
 def _insert(host, claim, listened=DEFAULT_HISTORY_MIN_LISTEN_SECONDS + 1):
@@ -258,8 +261,9 @@ def test_local_schedule_replaces_previous_claim() -> None:
     assert host._local_history_claim is not first
 
 
-def test_local_report_repolls_until_position_exceeds_threshold() -> None:
+def test_local_report_repolls_until_listening_exceeds_threshold() -> None:
     host = _host(position=DEFAULT_HISTORY_MIN_LISTEN_SECONDS)
+    host.player.position = 300.0  # Seeking ahead does not earn a history row.
     claim = _claim()
     host._local_history_claim = claim
     _report_local(host, claim)
@@ -268,8 +272,9 @@ def test_local_report_repolls_until_position_exceeds_threshold() -> None:
     assert host.set_timer.call_args.args[0] == _YTM_HISTORY_POLL_SECONDS
 
 
-def test_local_report_inserts_once_position_exceeds_threshold() -> None:
+def test_local_report_inserts_once_listening_exceeds_threshold() -> None:
     host = _host(position=DEFAULT_HISTORY_MIN_LISTEN_SECONDS + 1)
+    host.player.position = 0.0  # Seeking back does not erase time heard.
     claim = _claim()
     host._local_history_claim = claim
     _report_local(host, claim)

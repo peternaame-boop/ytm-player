@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -61,6 +62,7 @@ class CacheManager:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self._db_path)
         secure_chmod(self._db_path, SECURE_FILE_MODE)
+        await self._db.create_function("file_exists", 1, os.path.exists)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(_SCHEMA)
@@ -102,8 +104,18 @@ class CacheManager:
 
         path = Path(row["file_path"])
         if not path.exists():
-            # Stale index entry -- the file was removed externally.
-            await self.remove(video_id)
+            # A download can finish after the miss. Check the path again inside
+            # the DELETE, while SQLite serializes index writers. Never unlink on a miss.
+            try:
+                await self._db.execute(
+                    "DELETE FROM cache_index WHERE video_id = ? AND file_path = ? "
+                    "AND NOT file_exists(file_path)",
+                    (video_id, str(path)),
+                )
+                await self._db.commit()
+            except sqlite3.Error as exc:
+                logger.warning("Cache prune failed for %s: %s", video_id, exc)
+                raise CacheError(f"Failed to prune {video_id} from cache: {exc}") from exc
             return None
 
         await self._db.execute(

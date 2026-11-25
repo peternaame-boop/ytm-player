@@ -104,8 +104,15 @@ Conventions:
 - Reserve `logger.debug` for verbose tracing only enabled with `--debug`.
 - Unhandled crashes are captured by `install_excepthooks()` and written
   to `~/.config/ytm-player/crashes/`.
-- For diagnostics, run `ytm doctor` — outputs version, paths, recent
-  log, and most recent crash trace, suitable for pasting into issues.
+- For diagnostics, run `ytm report` (bare `ytm doctor` prints the same): an
+  allowlist report built in `utils/report.py`, safe to paste into a public
+  issue. `ytm doctor --local` (`utils/doctor.py`) prints the detailed version
+  with log and crash text, which is not for public posting. Both load
+  third-party code and look up dependency versions only in a
+  child interpreter (`report.run_probe`), so nothing it prints can reach the
+  output; do not import those in the parent on these paths. None of the three
+  creates, changes or deletes ytm-player's own files: `cli.py` `main()` returns
+  before `ensure_dirs()` / `get_settings()` for them.
 
 ## Error handling architecture
 
@@ -147,11 +154,7 @@ GitHub Environments `pypi` and `testpypi` exist in repo settings. No API tokens 
 
 ### Cutting a release
 
-1. Bump `__version__` in `src/ytm_player/__init__.py`.
-2. Add a `### vX.Y.Z (YYYY-MM-DD)` section to the top of `CHANGELOG.md` (the publish workflow extracts it for the GitHub Release body).
-3. Run `ruff format src/ tests/ && ruff check src/ tests/ && pytest`.
-4. Commit (`chore(release): vX.Y.Z`), tag (`git tag vX.Y.Z`), push both (`git push && git push --tags`).
-5. Watch the `Publish` workflow on GitHub Actions — it builds, smoke-tests, uploads to PyPI, and creates the release in roughly a minute.
+Follow [the release checklist](RELEASING.md#quick-checklist). Merge the reviewed release PR after CI and approval. With release approval, tag the merged PR commit and push that single tag. Refresh the website after the tag is public.
 
 ### Dry-run via TestPyPI (paranoid release)
 

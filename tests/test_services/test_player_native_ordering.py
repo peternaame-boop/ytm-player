@@ -166,3 +166,46 @@ async def test_older_mpv_reply_uses_the_owned_playlist_entry(native_player):
     await player.play("url", {"video_id": "A"}, attempt=7)
     assert player._current_entry_id == 42
     assert player._current_attempt == 7
+
+
+@pytest.mark.parametrize("action", ["replace", "stop", "replaced_stop", "eof"])
+async def test_listen_ends_at_native_handoff(native_player, monkeypatch, action):
+    player, native = native_player
+    now = 10.0
+    monkeypatch.setattr("ytm_player.services.player.time", SimpleNamespace(monotonic=lambda: now))
+    native.command.side_effect = [{"playlist_entry_id": 10}, {"playlist_entry_id": 11}]
+    same = {"video_id": "same"}
+    await player.play("A", same, attempt=1)
+    idle = dict(call.args for call in native.observe_property.call_args_list)["core-idle"]
+    idle("core-idle", False)
+    first = player.listen_end
+    now = 11.0
+    queued = []
+    with player._command_lock:
+        if action in ("stop", "replaced_stop"):
+            queued.append(asyncio.create_task(player.stop()))
+            await asyncio.sleep(0)
+        if action != "stop":
+            queued.append(asyncio.create_task(player.play("B", same, attempt=2)))
+            await asyncio.sleep(0)
+        assert player.current_track is None
+        assert not first.done()
+        # A keeps playing, including changes in pause state while the worker waits.
+        now = 12.0
+        idle("core-idle", True)
+        now = 20.0
+        idle("core-idle", False)
+        now = 23.0
+        if action == "eof":
+            player._end_file_data(native, 0, 10, None)
+            assert first.result(timeout=0) == 5
+            now = 40.0
+    await asyncio.wait_for(asyncio.gather(*queued), 3)
+    assert first.result(timeout=0) == 5
+    if action == "stop":
+        native.stop.assert_called_once()
+    else:
+        native.stop.assert_not_called()
+        assert player.listen_end is not first
+        assert player.listened_attempt == 2
+        assert player.listened_seconds == 0

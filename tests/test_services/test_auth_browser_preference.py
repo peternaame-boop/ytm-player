@@ -169,7 +169,7 @@ def test_cli_setup_passes_the_configured_browser(monkeypatch):
         manager.setup_interactive.return_value = True
         return manager
 
-    monkeypatch.setattr("ytm_player.cli.AuthManager", fake_manager)
+    monkeypatch.setattr("ytm_player.services.auth.AuthManager", fake_manager)
     monkeypatch.setattr("ytm_player.cli.get_settings", lambda: settings)
     monkeypatch.setattr("ytm_player.cli.get_running_pid", lambda: None)
 

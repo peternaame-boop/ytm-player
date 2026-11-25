@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -229,6 +230,12 @@ class Player:
         self._current_entry_id: int | None = None
         self._loading = False
         self._pending_end_events: list[tuple[Any, Any, Any, Any]] = []
+        self._listened_attempt: int | None = None
+        self._listen_end: Future[float] = Future()
+        self._listen_end.set_result(0.0)
+        self._core_idle = True
+        self._listened_seconds = 0.0
+        self._listening_since: float | None = None
         self._last_position_dispatch: float = 0.0
         # Strong references to dispatched async tasks so they aren't GC'd
         # before execution (the classic asyncio.create_task footgun).
@@ -329,6 +336,20 @@ class Player:
         instance.observe_property("time-pos", self._on_time_pos_change)
         instance.observe_property("pause", self._on_pause_change)
 
+        def on_core_idle(_name: str, idle: bool | None) -> None:
+            # core-idle includes pause, buffering and an uninitialised stream.
+            # mpv also changes it for seeks made outside the app.
+            with self._skip_lock:
+                if idle is None or instance is not getattr(self, "_mpv", None):
+                    return
+                self._core_idle = idle
+                if idle:
+                    self._freeze_listen_time()
+                elif not self._listen_end.done() and self._listening_since is None:
+                    self._listening_since = time.monotonic()
+
+        instance.observe_property("core-idle", on_core_idle)
+
         @instance.event_callback("end-file")
         def _on_end_file(event: Any) -> None:
             self._handle_end_file(instance, event)
@@ -346,6 +367,14 @@ class Player:
         with self._skip_lock:
             if instance is not self._mpv:
                 return
+            # End the physical load even if a queued command already retired
+            # its logical track, or the replacement loadfile is still in flight.
+            if (
+                isinstance(entry_id, int)
+                and entry_id == self._current_entry_id
+                and reason in (0, 2, 4)
+            ):
+                self._end_listen_time()
             if self._loading:
                 # loadfile's reply and its end-file can arrive in either order.
                 # Copy scalar fields; the native event's storage is temporary.
@@ -542,6 +571,39 @@ class Player:
     def current_attempt(self) -> int | None:
         return self._current_attempt
 
+    def _freeze_listen_time(self) -> None:
+        """Finish the active interval under _skip_lock."""
+        if self._listening_since is not None:
+            self._listened_seconds += time.monotonic() - self._listening_since
+            self._listening_since = None
+
+    def _end_listen_time(self) -> None:
+        """Seal this load's clock under _skip_lock at its native handoff."""
+        self._freeze_listen_time()
+        if not self._listen_end.done():
+            self._listen_end.set_result(self._listened_seconds)
+
+    @property
+    def listen_end(self) -> Future[float]:
+        """Final duration for this particular load, safe to retain across replacements."""
+        with self._skip_lock:
+            return self._listen_end
+
+    @property
+    def listened_attempt(self) -> int | None:
+        """The load whose clock is retained, even after EOF or Stop."""
+        with self._skip_lock:
+            return self._listened_attempt
+
+    @property
+    def listened_seconds(self) -> float:
+        """Time mpv spent actively playing the last load, retained through EOF."""
+        with self._skip_lock:
+            elapsed = self._listened_seconds
+            if self._listening_since is not None:
+                elapsed += time.monotonic() - self._listening_since
+            return elapsed
+
     @property
     def position(self) -> float:
         """Current playback position in seconds."""
@@ -584,7 +646,6 @@ class Player:
             command = self._command_generation
             self._current_track = None
             self._current_attempt = None
-            self._current_entry_id = None
         try:
             await asyncio.to_thread(self._load_owned, command, url, track_info, attempt)
         except asyncio.CancelledError:
@@ -595,7 +656,6 @@ class Player:
                 stopped = self._command_generation
                 self._current_track = None
                 self._current_attempt = None
-                self._current_entry_id = None
             # Cancellation cannot release a native worker's gate. A stop
             # follows that worker, unless a newer command supersedes it.
             task = asyncio.create_task(asyncio.to_thread(self._stop_owned, stopped))
@@ -610,6 +670,8 @@ class Player:
             with self._skip_lock:
                 if command != self._command_generation:
                     return
+                # A queued command has no effect on the file mpv is playing.
+                # Only the worker that wins the native gate owns this handoff.
                 self._loading = True
                 self._pending_end_events.clear()
             self._finish_load(command, url, track, attempt)
@@ -619,6 +681,8 @@ class Player:
             entry_id = self._play_sync(url)
         except Exception as exc:
             with self._skip_lock:
+                self._end_listen_time()
+                self._current_entry_id = None
                 self._loading = False
                 self._pending_end_events.clear()
                 if command != self._command_generation:
@@ -630,11 +694,17 @@ class Player:
             )
             return
         with self._skip_lock:
+            self._end_listen_time()
+            self._current_entry_id = None
             self._loading = False
             pending = self._pending_end_events
             self._pending_end_events = []
             if command != self._command_generation:
                 return
+            self._listen_end = Future()
+            self._listened_attempt = attempt
+            self._listened_seconds = 0.0
+            self._listening_since = None if self._core_idle else time.monotonic()
             self._current_track = track
             self._current_attempt = attempt
             self._current_entry_id = entry_id
@@ -703,8 +773,7 @@ class Player:
             command = self._command_generation
             self._current_track = None
             self._current_attempt = None
-            self._current_entry_id = None
-        await asyncio.to_thread(self._stop_owned, command)
+        await asyncio.shield(asyncio.to_thread(self._stop_owned, command))
 
     def _stop_owned(self, command: int) -> None:
         with self._command_lock:
@@ -715,6 +784,10 @@ class Player:
                 self._mpv.stop()
             except mpv.ShutdownError:
                 pass
+            finally:
+                with self._skip_lock:
+                    self._end_listen_time()
+                    self._current_entry_id = None
 
     def _clamp_seek_target(self, target: float) -> float:
         """Clamp a seek target to [0, duration] (duration 0.0 = unknown)."""
@@ -797,6 +870,7 @@ class Player:
             logger.info("Re-initializing mpv instance...")
             with self._skip_lock:
                 self._current_entry_id = None
+                self._core_idle = True
                 self._pending_end_events.clear()
             self._mpv = self._init_mpv()
 

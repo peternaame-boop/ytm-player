@@ -11,6 +11,7 @@ threading.excepthook so unhandled crashes leave a paper trail under
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import re
@@ -228,13 +229,17 @@ def get_recent_log_lines(log_file: Path, n: int = 50, *, min_level: str | None =
     instead, each with the lines logged under it, such as the traceback
     of a logger.exception call (#181), capped at the last
     _MAX_CONTINUATION_LINES. Unknown level → no filter applied."""
-    if not log_file.exists():
-        return ""
+    from ytm_player.utils.report import read_text
+
+    # Safe against a FIFO in the log's place: this runs in
+    # `ytm doctor --local`, which must always return.
     try:
-        with open(log_file, encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+        text = read_text(log_file)
     except OSError:
         return ""
+    if text is None:
+        return ""
+    lines = io.StringIO(text).readlines()
     if min_level is not None:
         order = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         try:
@@ -272,11 +277,14 @@ def get_recent_crash(crash_dir: Path) -> tuple[Path, str] | None:
     files = sorted(crash_dir.glob("ytm-crash-*.log"))
     if not files:
         return None
+    from ytm_player.utils.report import read_text
+
     latest = files[-1]
     try:
-        return latest, latest.read_text(encoding="utf-8", errors="replace")
+        content = read_text(latest)
     except OSError:
         return None
+    return None if content is None else (latest, content)
 
 
 def list_active_hooks() -> str:
